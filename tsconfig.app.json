@@ -1,0 +1,30 @@
+{
+  // Typecheck gate for the NEOTMS code, and the one `cdk deploy` runs.
+  //
+  // Separate from tsconfig.json for one reason: that file's `include` picks up the whole
+  // repository, which means `sample-backend-app/` (reference material, kept to show the house
+  // conventions) and `lambdas/common/` (base code lifted from the LPX project, which imports
+  // Cognito and KMS SDK packages NEOTMS does not install). Both fail to typecheck here, neither is
+  // NEOTMS's code, and neither should be able to block a deploy of NEOTMS's code.
+  //
+  // So this config scopes the check to what this project actually owns and ships.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // `module: "preserve"` rather than inheriting NodeNext.
+    //
+    // The Lambda bundle is emitted as ESM by esbuild (see NeotmsApi's bundling options), because
+    // openid-client and jose are ESM-only packages. Under NodeNext with no `"type": "module"` in
+    // package.json, TypeScript decides these .ts files are CommonJS and then rejects every import
+    // of an ESM-only package with TS1479 - a module-system complaint about code that is never
+    // actually run as CommonJS.
+    //
+    // `preserve` tells TypeScript to typecheck the imports as written and leave the module format
+    // to the bundler, which is exactly the arrangement in use: esbuild for the Lambda, tsx for the
+    // CDK app. It also keeps the `.js` specifiers the house style uses valid.
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": ["infra/**/*.ts", "lambdas/neotms/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "cdk.out", "sample-backend-app", "lambdas/common"]
+}

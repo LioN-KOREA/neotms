@@ -2,23 +2,39 @@
   "name": "neotms",
   "version": "0.1.0",
   "scripts": {
-    "build": "tsc",
-    "watch": "tsc -w",
+    "build": "tsc -p tsconfig.app.json",
+    "watch": "tsc -p tsconfig.app.json -w",
     "test": "jest",
-    "cdk": "cdk"
+    "cdk": "cdk",
+    "dev": "npm --prefix frontend run dev",
+    "lint:site": "npm --prefix frontend run lint",
+    "build:site": "npm --prefix frontend install && npm --prefix frontend run build",
+    "deploy": "npm run build:site && cdk deploy"
   },
   "devDependencies": {
     "@swc/core": "^1.15.0",
     "@swc/jest": "^0.2.39",
+    "@types/aws-lambda": "^8.10.164",
     "@types/jest": "^30",
     "@types/node": "^24.10.1",
+    "aws-cdk": "^2.1146.1",
+    "esbuild": "^0.28.2",
     "jest": "^30",
-    "aws-cdk": "2.1135.1",
     "tsx": "^4.23.0",
     "typescript": "~7.0.2"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1157.0",
+    "@aws-sdk/client-rds-data": "^3.1157.0",
+    "@aws-sdk/client-s3": "^3.1157.0",
+    "@aws-sdk/client-secrets-manager": "^3.1157.0",
+    "@aws-sdk/s3-request-presigner": "^3.1157.0",
     "aws-cdk-lib": "^2.263.0",
-    "constructs": "^10.5.0"
+    "constructs": "^10.5.0",
+    "exceljs": "^4.4.0",
+    "jose": "^6.2.13",
+    "openid-client": "^6.8.8",
+    "rou3": "^0.7.12",
+    "valibot": "^1.5.0"
   }
 }

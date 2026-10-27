@@ -1,0 +1,106 @@
+/*
+ * 라이온코리아 TMS 시스템 — global tokens and resets.
+ *
+ * The palette is the one the account-management console uses, so the two systems read as one
+ * family to the same staff: #2c3e50 sidebar, #4472C4 primary, #f8f9fa page ground.
+ *
+ * Three tokens exist only here, because TMS has a concept the account console does not: money with
+ * a sign. --ntms-revenue, --ntms-cost and --ntms-margin-negative are used wherever a figure's
+ * meaning, not just its value, has to be legible at a glance.
+ */
+
+:root {
+  --ntms-primary: #4472c4;
+  --ntms-primary-dark: #365a9e;
+  --ntms-primary-soft: #eaf0fa;
+  --ntms-sidebar: #2c3e50;
+  --ntms-sidebar-hover: rgba(255, 255, 255, 0.1);
+
+  --ntms-bg: #f8f9fa;
+  --ntms-surface: #ffffff;
+  --ntms-border: #dee2e6;
+  --ntms-border-strong: #ced4da;
+
+  --ntms-text: #212529;
+  --ntms-text-muted: #6c757d;
+  --ntms-text-inverse: #ffffff;
+
+  --ntms-danger: #dc3545;
+  --ntms-danger-soft: #fdecee;
+  --ntms-warning: #b8860b;
+  --ntms-warning-soft: #fff8e1;
+  --ntms-success: #198754;
+  --ntms-success-soft: #e8f5ee;
+
+  /*
+   * Revenue reads as the neutral/positive figure, cost as the one being spent, and a negative
+   * margin as an error - because it is one. A job sold below the cost of its purchase orders is
+   * the single most important thing a report can tell a PM, and it should not need to be computed
+   * by eye from two black numbers.
+   */
+  --ntms-revenue: #1b5e9c;
+  --ntms-cost: #8a5a00;
+  --ntms-margin-negative: #c0392b;
+
+  --ntms-sidebar-width: 232px;
+  --ntms-radius: 8px;
+  --ntms-radius-sm: 6px;
+  --ntms-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --ntms-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.18);
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--ntms-bg);
+  color: var(--ntms-text);
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic',
+    '맑은 고딕', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 700;
+}
+
+button {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ntms-primary);
+  outline-offset: 2px;
+}
+
+/*
+ * Tabular figures for every number in a table.
+ *
+ * Money in this system is a decimal string rendered right-aligned in long columns. With
+ * proportional digits the glyph widths differ, so a column of amounts does not line up at the
+ * decimal point and a 1 next to a 7 reads as a different magnitude. This is applied via the
+ * .cellMono / .amount classes in ui.module.css.
+ */

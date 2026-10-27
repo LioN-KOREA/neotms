@@ -1,0 +1,82 @@
+.wrap {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  background: linear-gradient(160deg, #2c3e50 0%, #3d5a75 100%);
+}
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px;
+  background: var(--ntms-surface);
+  border-radius: 12px;
+  box-shadow: var(--ntms-shadow-lg);
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 서비스 이름을 두 줄로 나눈다. '라이온코리아 TMS 시스템' 은 한 줄로 두면 카드 안에서
+   줄바꿈 위치를 브라우저가 정하게 되고, 그 위치가 폭마다 달라진다. */
+.brandOrg {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ntms-text-muted);
+}
+
+.brandText {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.lead {
+  margin: -4px 0 4px;
+  font-size: 0.83rem;
+  color: var(--ntms-text-muted);
+  line-height: 1.6;
+}
+
+.action {
+  margin-top: 6px;
+  padding: 9px 14px;
+}
+
+.meta {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--ntms-text-muted);
+  word-break: break-all;
+}
+
+.altActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
+  margin-top: 10px;
+}
+
+.linkButton {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ntms-text-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.linkButton:hover {
+  color: var(--ntms-text);
+}

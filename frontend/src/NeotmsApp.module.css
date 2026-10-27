@@ -1,0 +1,157 @@
+.shell {
+  display: flex;
+  min-height: 100%;
+}
+
+.sidebar {
+  width: var(--ntms-sidebar-width);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 14px;
+  background: var(--ntms-sidebar);
+  color: rgba(255, 255, 255, 0.75);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--ntms-text-inverse);
+}
+
+/* '라이온코리아 TMS 시스템' 은 사이드바 폭보다 길다. 두 줄 로크업으로 나눠, 줄바꿈 위치를
+   브라우저가 폭에 따라 다르게 정하지 않도록 한다. */
+.brandOrg {
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.brandProduct {
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.navLink {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--ntms-radius-sm);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.88rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.navLink:hover {
+  background: var(--ntms-sidebar-hover);
+  color: var(--ntms-text-inverse);
+}
+
+.navLinkActive,
+.navLinkActive:hover {
+  background: var(--ntms-primary);
+  color: var(--ntms-text-inverse);
+  font-weight: 600;
+}
+
+/* 담당 범위 안내. 숫자를 회사 전체 숫자로 착각하는 것을 막는 유일한 장치이므로,
+   사이드바에서 사라지지 않게 메뉴와 계정 사이에 고정한다. */
+.scopeHint {
+  margin: 10px 2px 0;
+  padding: 7px 9px;
+  border-radius: var(--ntms-radius-sm);
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.account {
+  padding-top: 14px;
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.8rem;
+}
+
+.accountName {
+  color: var(--ntms-text-inverse);
+  font-weight: 600;
+}
+
+.accountRole {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.75rem;
+}
+
+.accountEmail {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 0.75rem;
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+
+.logout {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--ntms-radius-sm);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.logout:hover {
+  background: var(--ntms-sidebar-hover);
+  color: var(--ntms-text-inverse);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: 26px 28px 48px;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+  }
+
+  .nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .main {
+    padding: 18px 16px 32px;
+  }
+}

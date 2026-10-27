@@ -1,0 +1,643 @@
+/* Shared building blocks. Every feature view composes from these so the screens stay visually
+   identical without a UI framework dependency.
+
+   Carried over from the account-management console, plus the pieces TMS needs that it does not
+   have: .amount / .amountNeg for right-aligned money, .filterBar for the list filters, .statGrid
+   for the report callouts, and .toolbar for a card header that holds more than a search box. */
+
+/* ── Page ─────────────────────────────────────────────────────────────── */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pageHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pageTitle {
+  font-size: 1.3rem;
+}
+
+.pageHint {
+  margin: 4px 0 0;
+  color: var(--ntms-text-muted);
+  font-size: 0.85rem;
+  max-width: 68ch;
+}
+
+/* ── Card ─────────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--ntms-surface);
+  border: 1px solid var(--ntms-border);
+  border-radius: var(--ntms-radius);
+  box-shadow: var(--ntms-shadow);
+  overflow: hidden;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ntms-border);
+  background: #fbfcfd;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.cardBody {
+  padding: 16px;
+}
+
+.cardBodyFlush {
+  padding: 0;
+}
+
+/*
+ * A card header that wraps instead of squeezing.
+ *
+ * The list screens carry a search box plus two or three selects, which at 1366px - the width of
+ * the office laptops - does not fit on one line next to a title. `.cardHeader` alone would shrink
+ * every control instead of wrapping, leaving selects too narrow to read their own values.
+ */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ── Forms ────────────────────────────────────────────────────────────── */
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px 16px;
+}
+
+/* A field that should take the full row of .formGrid — addresses, memos, long names. */
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ntms-text-muted);
+}
+
+.required::after {
+  content: ' *';
+  color: var(--ntms-danger);
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--ntms-border-strong);
+  border-radius: var(--ntms-radius-sm);
+  background: var(--ntms-surface);
+}
+
+.textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  background: var(--ntms-bg);
+  color: var(--ntms-text-muted);
+}
+
+/*
+ * Numeric inputs are monospaced and right-aligned.
+ *
+ * Every money and volume value in this system is a decimal STRING end to end (see the api layer),
+ * never a JS number, so these fields are `type="text"` with an inputMode. Right-aligning them is
+ * what makes a mistyped amount - 1000000 where 100000 was meant - visible while typing.
+ */
+.inputNum {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Codes typed by hand: invoice numbers, bank accounts, PO codes.
+ *
+ * Monospaced but NOT right-aligned and NOT tabular - these are identifiers, not quantities. The
+ * reason to monospace them is that `0` vs `O` and `1` vs `l` are distinguishable, which matters
+ * when the value is copied off a paper tax invoice.
+ */
+.inputMono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/*
+ * Two controls on one line inside a single .field - a date next to its time.
+ *
+ * The schema keeps the day and the time of day in separate columns (`prj_eday` is a date,
+ * `prj_eday_time` is text), because a due date with no time means "some time that day" and a
+ * single datetime input cannot express that - it would write 00:00 and turn it into "by midnight".
+ * So the pair stays two inputs under one label, and this is what keeps them on one row.
+ */
+.inputRow {
+  display: flex;
+  gap: 6px;
+}
+
+.inputRow > .input {
+  min-width: 0;
+}
+
+.hint {
+  font-size: 0.76rem;
+  color: var(--ntms-text-muted);
+}
+
+.formActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+/* Pushes what follows to the right edge of .formActions / .toolbar. */
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* ── Filters ──────────────────────────────────────────────────────────── */
+
+.filterBar {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ntms-border);
+  background: #fbfcfd;
+}
+
+.filterField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.filterField > .label {
+  font-size: 0.74rem;
+}
+
+.filterField .input,
+.filterField .select {
+  padding: 4px 8px;
+  font-size: 0.82rem;
+}
+
+.searchInput {
+  min-width: 220px;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--ntms-radius-sm);
+  background: var(--ntms-bg);
+  color: var(--ntms-text);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  background: var(--ntms-primary);
+  border-color: var(--ntms-primary);
+  color: var(--ntms-text-inverse);
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--ntms-primary-dark);
+  border-color: var(--ntms-primary-dark);
+}
+
+.btnGhost {
+  background: transparent;
+  border-color: var(--ntms-border-strong);
+}
+
+.btnGhost:hover:not(:disabled) {
+  background: var(--ntms-bg);
+}
+
+.btnDanger {
+  background: transparent;
+  border-color: var(--ntms-danger);
+  color: var(--ntms-danger);
+}
+
+.btnDanger:hover:not(:disabled) {
+  background: var(--ntms-danger-soft);
+}
+
+.btnSm {
+  padding: 3px 9px;
+  font-size: 0.78rem;
+}
+
+/* A button that looks like a link — for "open this row" inside a table cell. */
+.btnLink {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ntms-primary-dark);
+  font-weight: 600;
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.btnLink:hover {
+  text-decoration: underline;
+}
+
+/* ── Table ────────────────────────────────────────────────────────────── */
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.table th {
+  text-align: left;
+  padding: 10px 14px;
+  background: #f1f3f5;
+  border-bottom: 1px solid var(--ntms-border);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f1f3f5;
+  vertical-align: middle;
+}
+
+.table tbody tr:hover {
+  background: #fafbfc;
+}
+
+.cellMuted {
+  color: var(--ntms-text-muted);
+}
+
+.cellMono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--ntms-text-muted);
+  word-break: break-all;
+}
+
+/* Keeps a long name on one line with an ellipsis instead of widening the whole table. */
+.cellClamp {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowActions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* ── Money ────────────────────────────────────────────────────────────── */
+
+/*
+ * `tabular-nums` is the load-bearing property here, not the alignment.
+ *
+ * With proportional digits a column of amounts does not line up at the decimal point, so 1 next
+ * to 7 reads as a different magnitude and a column cannot be scanned for an outlier. This is the
+ * one piece of typography in the system that is about correctness rather than looks.
+ */
+.amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.amountRevenue {
+  color: var(--ntms-revenue);
+}
+
+.amountCost {
+  color: var(--ntms-cost);
+}
+
+/* A negative margin is an error condition — a job sold below the cost of its purchase orders. */
+.amountNeg {
+  color: var(--ntms-margin-negative);
+  font-weight: 600;
+}
+
+/* A sortable column header. */
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable:hover {
+  color: var(--ntms-primary-dark);
+}
+
+.sortMark {
+  margin-left: 4px;
+  font-size: 0.7rem;
+  color: var(--ntms-text-muted);
+}
+
+/* ── Stat callouts (reports) ──────────────────────────────────────────── */
+
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.stat {
+  padding: 14px 16px;
+  border: 1px solid var(--ntms-border);
+  border-radius: var(--ntms-radius);
+  background: var(--ntms-surface);
+}
+
+.statLabel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ntms-text-muted);
+}
+
+.statValue {
+  margin-top: 4px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* ── Badges ───────────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  background: var(--ntms-bg);
+  color: var(--ntms-text-muted);
+  border: 1px solid var(--ntms-border);
+}
+
+.badgePrimary {
+  background: var(--ntms-primary-soft);
+  color: var(--ntms-primary-dark);
+  border-color: transparent;
+}
+
+.badgeWarn {
+  background: var(--ntms-warning-soft);
+  color: var(--ntms-warning);
+  border-color: transparent;
+}
+
+.badgeDanger {
+  background: var(--ntms-danger-soft);
+  color: var(--ntms-danger);
+  border-color: transparent;
+}
+
+.badgeSuccess {
+  background: var(--ntms-success-soft);
+  color: var(--ntms-success);
+  border-color: transparent;
+}
+
+.badgeList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ── Status blocks ────────────────────────────────────────────────────── */
+
+.alert {
+  padding: 10px 14px;
+  border-radius: var(--ntms-radius-sm);
+  font-size: 0.85rem;
+  border: 1px solid transparent;
+}
+
+.alertError {
+  background: var(--ntms-danger-soft);
+  border-color: #f5c2c7;
+  color: #842029;
+}
+
+.alertSuccess {
+  background: var(--ntms-success-soft);
+  border-color: #badbcc;
+  color: #0f5132;
+}
+
+.alertInfo {
+  background: var(--ntms-primary-soft);
+  border-color: #bcd0ee;
+  color: var(--ntms-primary-dark);
+}
+
+.placeholder {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--ntms-text-muted);
+  font-size: 0.86rem;
+}
+
+.loadMore {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  border-top: 1px solid var(--ntms-border);
+}
+
+/* ── Checkbox grid ────────────────────────────────────────────────────── */
+
+.checkGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 16px;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--ntms-radius-sm);
+  cursor: pointer;
+}
+
+.check:hover {
+  background: var(--ntms-bg);
+}
+
+.check input {
+  margin-top: 3px;
+  flex: none;
+}
+
+.checkText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.checkLabel {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.checkDesc {
+  font-size: 0.75rem;
+  color: var(--ntms-text-muted);
+}
+
+/* ── Detail (read-only key/value pairs) ───────────────────────────────── */
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 20px;
+}
+
+.detailItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.detailLabel {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--ntms-text-muted);
+}
+
+.detailValue {
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+
+/* ── Record picker ────────────────────────────────────────────────────────
+ *
+ * Choosing the parent record (a project's customer, a PO's job) cannot be a <select>: the server
+ * caps a page at 200 rows and there are more customers than that, so a dropdown would silently be
+ * missing the one you want. These classes dress a search box plus a short result list instead.
+ * See RecordPicker.tsx. */
+
+.pickerSelected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--ntms-border-strong);
+  border-radius: var(--ntms-radius-sm);
+  background: var(--ntms-bg);
+  min-width: 0;
+}
+
+.pickerSelectedText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.pickerResults {
+  display: flex;
+  flex-direction: column;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--ntms-border);
+  border-radius: var(--ntms-radius-sm);
+}
+
+.pickerItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--ntms-border);
+  background: var(--ntms-surface);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.pickerItem:last-child {
+  border-bottom: 0;
+}
+
+.pickerItem:hover {
+  background: var(--ntms-bg);
+}
+
+.pickerItemTitle {
+  font-size: 0.85rem;
+}
+
+.pickerItemSub {
+  font-size: 0.75rem;
+  color: var(--ntms-text-muted);
+}
