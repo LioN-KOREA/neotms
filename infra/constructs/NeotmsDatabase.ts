@@ -181,7 +181,9 @@ export class NeotmsDatabase extends Construct {
         // characters are the ones that break shell quoting and JDBC URLs.
         excludeCharacters: "\"@/\\'",
       }),
-      serverlessV2MinCapacity: config.capacity.businessHoursMinAcu,
+      // The creation value only. NeotmsAcuScheduler owns the floor from the first schedule firing
+      // onwards, so this number and the one in the console will disagree between 00:00 and 06:00.
+      serverlessV2MinCapacity: config.capacity.staffedHoursMinAcu,
       serverlessV2MaxCapacity: config.capacity.maxAcu,
       serverlessV2AutoPauseDuration: cdk.Duration.seconds(config.capacity.secondsUntilAutoPause),
       /*

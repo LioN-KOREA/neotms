@@ -17,28 +17,47 @@
  *
  * `0` is a real setting on Aurora Serverless v2 and it is the whole cost argument: the cluster
  * genuinely stops billing compute while idle (storage and backups still bill). The reason the
- * business-hours floor is NOT zero is latency, not money - a cluster resuming from zero answers the
+ * staffed-hours floor is NOT zero is latency, not money - a cluster resuming from zero answers the
  * first statement with `DatabaseResumingException` and takes a handful of seconds to come back. That
- * is acceptable at 03:00 and is not acceptable when a PM opens a project list at 09:05.
+ * is acceptable at 03:00 and is not acceptable when a PM opens a project list.
+ *
+ * The window below is NOT office hours, and the naming is deliberate. Official hours are 09:00-18:00
+ * (Q11), but project managers arrive as early as 06:30 and work as late as 23:00, so a floor that
+ * tracks the official day stalls real people on both ends of it - and a stall is indistinguishable
+ * from a broken system to the person waiting. `staffedHours` is therefore the ENVELOPE of when any
+ * human might be working, 06:00-00:00 every day, which costs ~$55/month of compute against ~$73 for
+ * a flat floor and ~$20 for the 09:00-18:00 Mon-Fri window it replaces. The $35 is buying the
+ * absence of a support call nobody can reproduce.
  *
  * See NeotmsAcuScheduler: EventBridge moves the floor between these two numbers.
  */
 export interface NeotmsCapacityConfig {
-  /** ACU floor during business hours. 0.5 is the smallest non-zero step. */
-  readonly businessHoursMinAcu: number;
-  /** ACU floor outside business hours. 0 lets the cluster pause. */
+  /** ACU floor while anyone might be working. 0.5 is the smallest non-zero step. */
+  readonly staffedHoursMinAcu: number;
+  /** ACU floor outside those hours. 0 lets the cluster pause. */
   readonly offHoursMinAcu: number;
   /** Ceiling. Reached only by reporting queries; the floor is what drives the bill. */
   readonly maxAcu: number;
   /**
    * Idle seconds before a cluster at a zero floor actually pauses. Only meaningful while the floor
    * is 0; Aurora requires 300-86400.
+   *
+   * Left at 15 minutes rather than the 300-second minimum even though the zero-floor window is now
+   * only six hours long. Shortening it would save well under a dollar a month, and it would cost a
+   * resume stall to exactly the person least able to absorb one - someone working at 02:00 against a
+   * deadline, whose ten-minute gap between saves would no longer keep the cluster warm.
    */
   readonly secondsUntilAutoPause: number;
-  /** Cron hour (KST) at which the floor is raised. Business hours are 09:00-18:00 KST (Q11). */
-  readonly businessHoursStartHourKst: number;
-  /** Cron hour (KST) at which the floor is dropped back to `offHoursMinAcu`. */
-  readonly businessHoursEndHourKst: number;
+  /** Cron hour (KST) at which the floor is raised. 6, i.e. ahead of the earliest arrival (06:30). */
+  readonly staffedHoursStartHourKst: number;
+  /**
+   * Cron hour (KST) at which the floor is dropped back to `offHoursMinAcu`.
+   *
+   * 0, meaning midnight - so the window wraps the date boundary and the two cron expressions are
+   * `0 6 * * ? *` and `0 0 * * ? *`. It cannot be written as `24`: EventBridge cron hours are 0-23
+   * and the schedule would be rejected at deploy time.
+   */
+  readonly staffedHoursEndHourKst: number;
 }
 
 export interface NeotmsAuthConfig {
@@ -136,16 +155,20 @@ const TMS_ACCESS_AUTHORITY_ID = "527c4c39-be80-4f70-8f3e-a334b809ce10";
 /**
  * Shared capacity profile.
  *
- * Both stages use the same shape because the development cluster's cost matters just as much
- * proportionally - an idle dev cluster at a 0.5 ACU floor is roughly $43/month of nothing.
+ * Both stages use the same shape, which is arguably wrong now and is left alone deliberately. At
+ * $0.20 per ACU-hour in Seoul an 18-hour floor costs ~$55/month, and the development cluster has no
+ * early-arriving PM to protect - 09:00-18:00 Mon-Fri would do, at a third of the price. The reason
+ * to keep them identical is that the schedule is the thing most likely to be blamed for a
+ * "production is slow" report, and a dev stack that cannot reproduce production's pause behaviour
+ * cannot be used to rule it out. Split them if the dev cluster's bill ever becomes the problem.
  */
 const CAPACITY: NeotmsCapacityConfig = {
-  businessHoursMinAcu: 0.5,
+  staffedHoursMinAcu: 0.5,
   offHoursMinAcu: 0,
   maxAcu: 4,
   secondsUntilAutoPause: 900,
-  businessHoursStartHourKst: 9,
-  businessHoursEndHourKst: 18,
+  staffedHoursStartHourKst: 6,
+  staffedHoursEndHourKst: 0,
 };
 
 export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {

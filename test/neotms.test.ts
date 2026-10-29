@@ -166,6 +166,48 @@ describe("ACU scheduling", () => {
     }
   });
 
+  test("the floor is held every day of the week, not Mon-Fri", () => {
+    /*
+     * This was `MON-FRI` and it was a defect, not a saving.
+     *
+     * A weekend floor is ~29% of the monthly compute bill paid for days when the office is shut -
+     * which is a persuasive argument right up to the point where a PM picks up a weekend delivery
+     * and meets a paused cluster. The resume stall is several seconds and is indistinguishable from
+     * a broken system, on the one day there is nobody around to explain it.
+     *
+     * CDK renders an unrestricted day-of-week as a literal `?`, so this asserts the absence of any
+     * weekday enumeration rather than the presence of a particular spelling.
+     */
+    const schedules = Object.values(synth().findResources("AWS::Scheduler::Schedule"));
+    expect(schedules).toHaveLength(2);
+    for (const schedule of schedules) {
+      expect(schedule.Properties.ScheduleExpression).toMatch(/^cron\(\d+ \d+ \* \* \? \*\)$/);
+    }
+  });
+
+  test("the floor is up before the earliest arrival and down after the latest departure", () => {
+    /*
+     * PMs arrive as early as 06:30 and work as late as 23:00, so the only hours that may carry a
+     * zero floor are 00:00-06:00. Written as two bounds rather than as `[0, 6]` because the failure
+     * this guards is someone "restoring" the official 09:00-18:00 day (Q11) to save money, and the
+     * message should say why that is wrong.
+     */
+    const schedules = Object.values(synth().findResources("AWS::Scheduler::Schedule"));
+    const hourOf = (expression: string) => Number(/^cron\(\d+ (\d+)/.exec(expression)![1]);
+
+    const floorOf = (s: Record<string, any>) =>
+      scheduleInput(s).ServerlessV2ScalingConfiguration.MinCapacity;
+    const raise = schedules.find((s) => floorOf(s) > 0)!;
+    const drop = schedules.find((s) => floorOf(s) === 0)!;
+
+    // KST. The raise must be at or before 06:00 (earliest arrival 06:30), and the drop at midnight
+    // (latest departure 23:00) - any later and the floor is paid for hours nobody works.
+    expect(hourOf(raise.Properties.ScheduleExpression)).toBeLessThanOrEqual(6);
+    expect(hourOf(drop.Properties.ScheduleExpression)).toBe(0);
+    expect(raise.Properties.ScheduleExpressionTimezone).toBe("Asia/Seoul");
+    expect(drop.Properties.ScheduleExpressionTimezone).toBe("Asia/Seoul");
+  });
+
   test("the scheduler role is scoped to this cluster, not to *", () => {
     // rds:ModifyDBCluster on * would let the schedule resize, rename or disable deletion protection
     // on every cluster in the account.
