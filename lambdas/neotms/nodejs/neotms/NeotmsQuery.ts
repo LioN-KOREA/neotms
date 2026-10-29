@@ -10,8 +10,9 @@
 //   * the row-level scope predicate is the fine-grained half of authorization, and it has to be
 //     applied to every query, including the one behind a client-supplied cursor;
 //   * the LIKE pattern has to be escaped, or a customer named "50%" searches as a wildcard;
-//   * the page size has to be clamped, because the Data API caps a result set at 1 MiB and
-//     `?limit=100000` would otherwise fail from deep inside the SQL layer.
+//   * the page size has to be clamped. The Data API's 1 MiB result cap is gone, but Lambda still
+//     caps a response at 6 MB, so `?limit=100000` would otherwise build a page the function cannot
+//     return - and the failure would surface from deep inside the SQL layer rather than as a 400.
 
 import {
   clampLimit,
@@ -24,7 +25,7 @@ import {
   type SqlParamKind,
   type SortTarget,
   type SqlParameter,
-} from "../utils/RdsDataUtils.js";
+} from "../utils/PostgresUtils.js";
 import { NEOTMS_PAGE_SIZE_DEFAULT, NEOTMS_PAGE_SIZE_MAX } from "../env/NeotmsEnv.js";
 import type { NeotmsCaller } from "../auth/NeotmsAuthGuard.js";
 import type { RequestData } from "../reqres/RequestResponse.js";
@@ -166,21 +167,45 @@ const escapeLike = (term: string): string =>
   term.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 
 /**
- * A substring search across one or more columns, answered from a pg_bigm index.
+ * A substring search across one or more columns, answered from a PGroonga index.
  *
- * `LIKE '%term%'` rather than a tsvector match, and pg_bigm rather than pg_trgm, for a reason that
+ * `LIKE '%term%'` rather than a tsvector match, and PGroonga rather than pg_trgm, for a reason that
  * only shows up in Korean: pg_trgm indexes 3-grams, so a two-character term - 삼성, 번역, 계약 - has
  * no trigram at all and the planner falls back to a sequential scan. The index exists and does
- * nothing, silently. pg_bigm indexes 2-grams, which is the shortest term people actually type.
+ * nothing, silently. PGroonga tokenises CJK text properly and serves the two-character case, which
+ * is the shortest term people actually type.
  *
- * `ESCAPE '\'` is explicit because the default escape character is already backslash but relying on
- * the default makes the escaping above look decorative.
+ * ## Why this still says LIKE
+ *
+ * PGroonga has its own operators (`&@~`, `%%`) and they would be the obvious thing to emit. LIKE is
+ * kept because PGroonga documents an internal rewrite of `column LIKE '%KEYWORD%'` into
+ * `column %% 'KEYWORD'`, so the index is used either way - and keeping LIKE means this one function
+ * is the entire search layer. Switching to `%%` would push a PGroonga dependency into every list
+ * query in the ~20 dbops modules, and make the SQL untestable against a plain PostgreSQL.
+ *
+ * Two conditions have to hold for that rewrite, and neither is enforceable from here:
+ *
+ *   * The indexed column must be `text`. PGroonga cannot use an index against `varchar`, so LIKE on
+ *     a varchar column is ALWAYS a sequential search - silently. All 13 searched columns are `text`
+ *     (002_tables.sql), and that is load-bearing rather than incidental.
+ *   * The index must use a LIKE-capable operator class, `pgroonga_text_regexp_ops_v2` here. The
+ *     default class serves PGroonga's operators and not LIKE.
+ *
+ * `db/004_verify_search.sql` asserts both, on a table large enough for the planner to have a real
+ * choice, and fails the deploy rather than letting a Seq Scan reach production.
+ *
+ * ## Why there is no `ESCAPE` clause
+ *
+ * There used to be an explicit `ESCAPE '\'`, on the grounds that it documented the escaping done by
+ * `escapeLike` above. It is gone, and the reason is not style: backslash is ALREADY PostgreSQL's
+ * default LIKE escape character, so the clause changed nothing semantically, while PGroonga's
+ * documented rewrite is described only for the bare `LIKE '%KEYWORD%'` form. Keeping a redundant
+ * clause that might suppress the rewrite trades a comment for a sequential scan. 004 checks the
+ * ESCAPE form too, and warns, so that nobody reinstates it on a hunch.
  */
 export function searchClause(columns: string[], term: string | null): SqlClause {
   if (!term || columns.length === 0) return EMPTY_CLAUSE;
-  const predicate = columns
-    .map((column) => `${column} LIKE :search ESCAPE '\\'`)
-    .join(" OR ");
+  const predicate = columns.map((column) => `${column} LIKE :search`).join(" OR ");
   return {
     fragment: `AND (${predicate})`,
     parameters: [param("search", `%${escapeLike(term)}%`, "text")],

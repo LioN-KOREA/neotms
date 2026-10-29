@@ -11,7 +11,8 @@
 // `numeric(18,2)` exceeds the 53 bits of integer precision a JS number has, and JSON has no decimal
 // type. A price that arrives as the JSON number `1234567890123456.78` is already wrong before any
 // code touches it. So amounts travel as decimal strings, are validated as decimal strings, and are
-// sent to PostgreSQL as strings with a DECIMAL type hint (see `param` in RdsDataUtils). Nothing in
+// sent to PostgreSQL as strings on a placeholder cast to `numeric` (see `param` and `CASTS` in
+// PostgresUtils), so the server parses the decimal and no float is ever involved. Nothing in
 // this codebase performs arithmetic on a currency amount in JavaScript - the totals are computed in
 // SQL, where `numeric` arithmetic is exact. The legacy system stored amounts in `nvarchar` and
 // converted per row, which is how a yearly report came to take minutes; converting them to floats
@@ -19,8 +20,10 @@
 //
 // ## Ids are strings
 //
-// `bigint` primary keys, returned as strings by the Data API (`longReturnType: "STRING"`). Kept as
-// strings end to end so nothing rounds, and so an id is never accidentally arithmetic.
+// `bigint` primary keys, returned as strings by node-postgres - its default `int8` parser hands
+// back a string precisely because the type does not fit a JS number, and `registerTypeParsers` in
+// PostgresUtils pins that so a dependency update cannot change it. Kept as strings end to end so
+// nothing rounds, and so an id is never accidentally arithmetic.
 //
 // ## Dates and times are separate, and they are strings
 //
@@ -115,6 +118,13 @@ const settable = <S extends v.GenericSchema>(schema: S) => v.optional(v.nullable
  * "000-0000-0000"), which are worse than nulls because they look like data.
  *
  * `cusCode` is absent on purpose - it is minted from a sequence (see NeotmsCodes), never supplied.
+ *
+ * `cusUpro` was here and was removed. "UPRO" is 사용 프로그램 - which CAT tool the counterparty
+ * works in - and most clients of this company do not send translation work, so the field was a
+ * required-looking box with no answer. The column survives for the ETL and is still read (see
+ * CustomerRow.cusUpro); nothing can write it. `v.object` strips unknown keys rather than rejecting
+ * them, so a browser still running yesterday's bundle and still posting `cusUpro` has it quietly
+ * dropped instead of being handed a validation error for a field its user never saw.
  */
 export const CustomerCreateSchema = v.object({
   cusName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
@@ -125,10 +135,9 @@ export const CustomerCreateSchema = v.object({
   /** Free text, not an ISO code: the legacy values are inconsistent Korean/English country names. */
   cusNation: settable(text(100)),
   cusCoin: settable(CodeSchema),
-  /** The customer's grade/class, which selects the default rate band. */
-  cusUpro: settable(CodeSchema),
   /** Minimum charge per job, in `cusCoin`. */
   cusMincost: settable(MoneySchema),
+  /** 분야. A `sys_code` code in the 'FIELD' domain - the screen picks it from a dropdown. */
   cusField: settable(CodeSchema),
   active: v.optional(v.boolean()),
 });
@@ -371,6 +380,117 @@ export const ReportQuerySchema = v.object({
 });
 
 /* -------------------------------------------------------------------------- */
+/* sys_code - the 유지보수 screen                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A display order. Whole, small, and arriving as either a string or a number.
+ *
+ * Via `String` and a regex rather than `v.number()`, for the same reason `MoneySchema` does it: a
+ * number input in a browser hands back a string, and `Number("")` is 0 while `Number("abc")` is
+ * NaN - both of which would be accepted by a bare `v.number()` after a careless transform and then
+ * written to the column. The regex rejects the empty string, signs, decimals and exponents before
+ * anything is converted.
+ */
+export const OrdNoSchema = v.pipe(
+  v.union([v.string(), v.number()]),
+  v.transform(String),
+  v.regex(/^\d{1,5}$/, "must be a whole number between 0 and 99999"),
+  v.transform(Number),
+);
+
+/**
+ * Adding a code to one of the `sys_code` domains.
+ *
+ * `code` is required and is the only field that can never be changed afterwards: twenty-two foreign
+ * keys across the schema reference `sys_code (code)`, so it is the natural key rather than a label.
+ * `CodeUpdateSchema` below drops it for exactly that reason.
+ *
+ * `codeParent` is the domain ('FIELD', 'WORK', 'UNIT', 'LANG', 'UPRO' as seeded by
+ * db/007_codes.sql). Validated as a code, not as a picklist of those five: an administrator is
+ * allowed to create a sixth domain, and a picklist here would refuse to let them while giving a
+ * validation error that blames the field rather than explaining the policy. What a new domain does
+ * NOT get is a dropdown somewhere reading it - that needs a line of frontend code.
+ */
+export const CodeCreateSchema = v.object({
+  code: CodeSchema,
+  codeName: settable(text(200)),
+  /** Used when a document is rendered in English - see `purchase_order.po_lang`. */
+  codeEngName: settable(text(200)),
+  codeParent: settable(CodeSchema),
+  ordNo: settable(OrdNoSchema),
+  active: v.optional(v.boolean()),
+});
+
+/**
+ * Editing a code. Everything optional, and `code` itself is absent.
+ *
+ * `v.partial(v.omit(...))` rather than a hand-written object so a field added above cannot be
+ * forgotten here - the omission of `code` is then the one difference, stated once.
+ */
+export const CodeUpdateSchema = v.partial(v.omit(CodeCreateSchema, ["code"]));
+
+/* -------------------------------------------------------------------------- */
+/* staff - the 사용자 관리 screen, and self-registration                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What an administrator may change about somebody else's staff row.
+ *
+ * Three fields, and all three are load-bearing security values. That is the whole point of this
+ * schema being this small: the legacy system read the role out of an unsigned cookie, so anyone who
+ * could edit a cookie could grant themselves anything. Here the role is a column, and the column is
+ * writable through exactly one route, gated on one menu, validated by this object.
+ *
+ * `roleId` is nullable on purpose - clearing it is how an account is suspended without being
+ * deleted. A staff row with no role signs in successfully and can do nothing, which is the state a
+ * self-registered user starts in.
+ *
+ * What is NOT here: the person's name, email, phone or position. An administrator assigning a role
+ * has no business editing somebody's contact details, and the user maintains those themselves (see
+ * `SelfProfileSchema`). Keeping the two apart means the audit question "who changed this role" has
+ * a different answer from "who corrected this phone number".
+ */
+export const StaffAdminUpdateSchema = v.partial(
+  v.object({
+    roleId: v.nullable(IdSchema),
+    /**
+     * `Y` = sees every row, `N` = sees only their own.
+     *
+     * A picklist of two, though `VIEW_SCOPE_ALL` in NeotmsAuthGuard also accepts the legacy 'ALL'
+     * and 'A'. The guard has to read what the ETL loads; this screen only ever writes the canonical
+     * pair, so the value set does not keep growing from the new system's side.
+     */
+    viewScope: v.picklist(["Y", "N"]),
+    /** False removes the sign-in without deleting the history attributed to this `mgr_id`. */
+    active: v.boolean(),
+  }),
+);
+
+/**
+ * What a user may say about themselves - at sign-up and afterwards.
+ *
+ * The defaults are prefilled from LPX's `/userInfo`, and every one of them is editable here,
+ * including the name. That is deliberate: `mgr_name` is what gets printed on a purchase order and
+ * an invoice, and the name on an SSO account is not always the name a person works under. Letting
+ * them correct it is the difference between a document that looks official and one that looks wrong.
+ *
+ * Notice what this cannot touch: `roleId`, `viewScope`, `active`, `mgrId`, `corpCode`, `lpxSub`.
+ * The first three are the permission system; the last three are identity. A self-service form that
+ * could write any of the six would be the cookie-forging defect rebuilt with better manners.
+ */
+export const SelfProfileSchema = v.object({
+  /** The name on documents. Required - a PO with a blank 담당자 is not a usable PO. */
+  name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
+  /** Romanised name, for English-language POs and invoices. */
+  nameEng: settable(text(300)),
+  email: settable(text(300)),
+  phone: settable(text(100)),
+  /** 직위. Printed on outgoing documents. */
+  position: settable(text(100)),
+});
+
+/* -------------------------------------------------------------------------- */
 /* Inferred types                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -385,3 +505,7 @@ export type JobUpdate = v.InferOutput<typeof JobUpdateSchema>;
 export type PurchaseOrderCreate = v.InferOutput<typeof PurchaseOrderCreateSchema>;
 export type PurchaseOrderUpdate = v.InferOutput<typeof PurchaseOrderUpdateSchema>;
 export type ReportQuery = v.InferOutput<typeof ReportQuerySchema>;
+export type CodeCreate = v.InferOutput<typeof CodeCreateSchema>;
+export type CodeUpdate = v.InferOutput<typeof CodeUpdateSchema>;
+export type StaffAdminUpdate = v.InferOutput<typeof StaffAdminUpdateSchema>;
+export type SelfProfile = v.InferOutput<typeof SelfProfileSchema>;

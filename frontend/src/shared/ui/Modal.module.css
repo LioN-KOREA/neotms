@@ -1,3 +1,20 @@
+/*
+ * 다이얼로그의 옷.
+ *
+ * ## 위에서 48px, 가운데가 아니다
+ *
+ * 세로 가운데 정렬을 쓰지 않는다. 이 앱의 모달 중 가장 큰 것(작업 등록)은 필드가 20개이고,
+ * 화면 높이에 따라 내용이 커졌다 작아졌다 한다 — 가운데 정렬이면 필드 하나가 늘어날 때마다
+ * 패널 전체가 위아래로 움직이고, 오류 문구가 붙는 순간 지금 보고 있던 줄이 이동한다. 위에서
+ * 고정 거리로 떨어뜨리면 패널의 머리는 늘 같은 자리에 있다.
+ *
+ * ## 배경이 진하지 않다
+ *
+ * `0.38` 은 설계안보다 옅다. 이 모달은 **뒤에 있는 표를 보면서** 채우는 일이 많다(발주 단가를
+ * 작업 목록의 매출과 비교하는 식). 완전히 가려 버리면 사용자는 모달을 닫고 숫자를 외운 뒤
+ * 다시 연다.
+ */
+
 .backdrop {
   position: fixed;
   inset: 0;
@@ -5,58 +22,107 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 48px 16px;
-  background: rgba(33, 37, 41, 0.45);
+  padding: 40px 16px;
+  background: rgba(27, 23, 64, 0.38);
   overflow-y: auto;
+  /* 뒤쪽이 흐려지면 "지금은 이 패널만 만질 수 있다" 가 색 대비 없이도 전해진다. 지원하지
+     않는 브라우저에서는 그냥 무시되고 위의 반투명 배경만 남는다. */
+  backdrop-filter: blur(1.5px);
 }
 
 .panel {
   width: 100%;
-  background: var(--ntms-surface);
-  border-radius: var(--ntms-radius);
-  box-shadow: var(--ntms-shadow-lg);
+  background: var(--nt-surface);
+  border: 1px solid var(--nt-line2);
+  border-radius: var(--nt-r-lg);
+  box-shadow: var(--nt-sh-pop);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 96px);
+  max-height: calc(100vh - 80px);
+  /* 머리글의 배경색이 패널 모서리를 넘어가지 않게 한다. */
+  overflow: hidden;
 }
 
+/*
+ * 머리글.
+ *
+ * 카드의 머리글(`ui.cardHeader`)과 같은 옷을 입힌다 — 같은 화면 안에서 "구획의 제목" 이라는
+ * 역할이 같으므로, 모달만 다르게 생기면 모달이 다른 앱에서 온 것처럼 보인다. 다른 점은 위쪽에
+ * 그라디언트 선 하나를 더 두는 것뿐이고, 그건 이 패널이 지금 **떠 있다**는 표시다.
+ */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--ntms-border);
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--nt-line);
+  /* 그라디언트 선은 배경 레이어로 깐다 — 가짜 요소(`::before`)로 만들면 `.header` 가
+     `position: relative` 가 되어야 하고, 그러면 그 안의 닫기 버튼이 쌓임 문맥을 하나 더
+     만든다. 띠 하나 때문에 쌓임 순서를 건드릴 이유가 없다. */
+  background-color: var(--nt-tint3);
+  background-image: var(--nt-grad);
+  background-size: 100% 2px;
+  background-repeat: no-repeat;
+  background-position: top left;
 }
 
 .title {
-  font-size: 1rem;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--nt-ink);
 }
 
+/*
+ * 닫기.
+ *
+ * 글자 '×' 를 쓴다(아이콘이 아니라). 24px 짜리 정사각형 안에 중앙 정렬된 한 글자는 어떤
+ * 폰트에서도 같은 자리에 오고, 이 버튼은 같은 자리에 있는 것이 모양보다 중요하다 — 사용자가
+ * 보지 않고 누르는 유일한 버튼이다.
+ */
 .close {
-  border: none;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--nt-r-sm);
   background: transparent;
-  font-size: 1.4rem;
+  font-size: 15px;
   line-height: 1;
-  color: var(--ntms-text-muted);
+  color: var(--nt-ink3);
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0;
 }
 
 .close:hover {
-  color: var(--ntms-text);
+  border-color: var(--nt-line2);
+  background: var(--nt-bg);
+  color: var(--nt-ink);
 }
 
 .body {
-  padding: 18px;
+  padding: 14px;
   overflow-y: auto;
 }
 
+/*
+ * 바닥 — 취소와 저장.
+ *
+ * `position: sticky` 가 아니다. `.panel` 이 `flex-direction: column` 이고 `.body` 만 스크롤을
+ * 받으므로, 바닥은 이미 패널 안에서 고정이다. sticky 를 덧붙이면 짧은 모달에서 바닥이 내용
+ * 바로 아래가 아니라 패널 끝에 붙어 빈칸이 생긴다.
+ */
 .footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--ntms-border);
-  background: #fbfcfd;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--nt-line);
+  background: var(--nt-tint3);
 }

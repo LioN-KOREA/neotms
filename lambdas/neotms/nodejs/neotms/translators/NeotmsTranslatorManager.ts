@@ -8,10 +8,10 @@
 
 import {
   paginate,
-  rdsExecute,
-  rdsQuery,
+  pgExecute,
+  pgQuery,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { readListQuery, sortAlias } from "../NeotmsQuery.js";
 import { created, notFound, ok, runDb, type ListPage } from "../NeotmsResult.js";
@@ -69,7 +69,7 @@ export async function listTranslators(
   const facets = readFacets(request);
   const activeOnly = request.queryParams["inactive"] !== "true";
   return runDb("list translators", async () => {
-    const rows: SqlRow[] = (await rdsQuery(TranslatorListOps(query, facets, activeOnly))).data;
+    const rows: SqlRow[] = (await pgQuery(TranslatorListOps(query, facets, activeOnly))).data;
     const page = paginate(
       rows,
       query.limit,
@@ -83,7 +83,7 @@ export async function listTranslators(
 
 export async function getTranslator(id: string): Promise<ResponseData<TranslatorRow | string>> {
   return runDb("get translator", async () => {
-    const row = (await rdsQuery(TranslatorGetOps(id))).data;
+    const row = (await pgQuery(TranslatorGetOps(id))).data;
     return row ? ok(row) : notFound("translator");
   });
 }
@@ -93,7 +93,7 @@ export async function createTranslator(
   ctx: WriteContext,
 ): Promise<ResponseData<TranslatorRow | string>> {
   return runDb("create translator", async () => {
-    const row = (await rdsExecute(TranslatorCreateOps(input, ctx))).data;
+    const row = (await pgExecute(TranslatorCreateOps(input, ctx))).data;
     return row ? created(row) : { status: 500, body: "The translator was not created" };
   });
 }
@@ -107,7 +107,7 @@ export async function updateTranslator(
     return { status: 400, body: "No editable field was supplied" };
   }
   return runDb("update translator", async () => {
-    const row = (await rdsExecute(TranslatorUpdateOps(id, input, ctx))).data;
+    const row = (await pgExecute(TranslatorUpdateOps(id, input, ctx))).data;
     return row ? ok(row) : notFound("translator");
   });
 }
@@ -125,14 +125,14 @@ export async function deleteTranslator(
   ctx: WriteContext,
 ): Promise<ResponseData<{ id: string } | string>> {
   return runDb("delete translator", async () => {
-    const livePos = (await rdsQuery(TranslatorLivePoCountOps(id))).data;
+    const livePos = (await pgQuery(TranslatorLivePoCountOps(id))).data;
     if (livePos > 0) {
       return {
         status: 409,
         body: `This translator still has ${livePos} live purchase order(s). Deactivate them instead of deleting.`,
       };
     }
-    const deletedId = (await rdsExecute(TranslatorSoftDeleteOps(id, ctx))).data;
+    const deletedId = (await pgExecute(TranslatorSoftDeleteOps(id, ctx))).data;
     return deletedId ? ok({ id: deletedId }) : notFound("translator");
   });
 }

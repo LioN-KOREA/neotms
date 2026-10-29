@@ -13,8 +13,9 @@ import ui from '@/shared/ui/ui.module.css'
  * ## 화면을 열었다고 조회하지 않는다
  *
  * 이 시스템에서 가장 비싼 쿼리다. 기본 기간으로 자동 조회하면, 사용자가 원하는 기간을 고르는
- * 동안 쓸 일 없는 집계가 이미 한 번 돌아간다 — ACU 상한이 4인 클러스터에서 그 한 번이 그대로
- * 비용이고 응답 시간이다. 그래서 `enabled` 를 '조회' 버튼이 통제한다.
+ * 동안 쓸 일 없는 집계가 이미 한 번 돌아간다. DB 는 용량이 고정된 소형 인스턴스이고 부하에
+ * 따라 늘어나지 않으므로, 그 한 번은 같은 순간 목록을 보는 다른 사람의 응답 시간으로 간다.
+ * 그래서 `enabled` 를 '조회' 버튼이 통제한다.
  *
  * 기간을 바꾸면 조회 상태가 풀린다. 그러지 않으면 화면에는 새 기간이, 표에는 옛 기간의 숫자가
  * 남는다 — 금액이 틀린 리포트는 없는 리포트보다 나쁘다.
@@ -75,13 +76,18 @@ export function ReportsView() {
 
   return (
     <div className={ui.page}>
-      <div className={ui.pageHead}>
-        <div>
-          <h1 className={ui.pageTitle}>보고서</h1>
-          <p className={ui.pageHint}>
-            매출은 작업의 원화 환산 합계, 원가는 발주의 원화 환산 합계입니다. 마진은 그 차액입니다.
-          </p>
-        </div>
+      {/*
+       * 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석.
+       *
+       * 이 화면에는 오른쪽에 둘 버튼이 없다(조회는 아래 필터 바에 있다). 그래도 `.pageBar` 를
+       * 쓰는 이유는 여덟 화면의 첫 줄 높이가 같아야 메뉴를 옮겨 다닐 때 본문이 위아래로 흔들리지
+       * 않기 때문이다 — `.pageBar` 의 `min-height` 가 그 일을 한다.
+       */}
+      <div className={ui.pageBar}>
+        <p className={ui.pageNote}>
+          <b>매출</b>은 작업의 원화 환산 합계, <b>원가</b>는 발주의 원화 환산 합계입니다. 마진은 그
+          차액입니다.
+        </p>
       </div>
 
       {/* 마감 임박. 집계와 달리 자동으로 읽는다 — 위 주석 참고. */}
@@ -270,6 +276,33 @@ export function ReportsView() {
                 </tr>
               ))}
             </tbody>
+            {/*
+             * 합계를 표 바닥에 한 번 더 적는다.
+             *
+             * 위의 `.statGrid` 에도 같은 세 숫자가 있지만, 그쪽은 표를 스크롤하면 화면에서
+             * 사라진다. 집계 기준이 '고객사별' 이면 행이 수백 개이고, 그 상태에서 한 행의
+             * 마진을 보는 사람이 "이게 전체의 몇 분의 일인가" 를 알려면 위로 되돌아가야 한다.
+             * `tfoot` 는 `.table tfoot td` 에서 아래쪽에 고정되므로 늘 같이 보인다.
+             *
+             * 잘린 결과일 때 합계 칸에 '(일부)' 를 붙이는 이유는 위쪽 경고를 지나친 사람이
+             * 바로 이 숫자를 전체 합계로 베껴 쓰기 때문이다.
+             */}
+            {result && result.lines.length > 0 ? (
+              <tfoot>
+                <tr>
+                  <td>합계{result.truncated ? ' (일부)' : ''}</td>
+                  <td>
+                    <Amount value={result.totals.revenue} kind="revenue" />
+                  </td>
+                  <td>
+                    <Amount value={result.totals.cost} kind="cost" />
+                  </td>
+                  <td>
+                    <Amount value={result.totals.margin} kind="margin" />
+                  </td>
+                </tr>
+              </tfoot>
+            ) : null}
           </table>
         </div>
       </div>

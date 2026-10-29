@@ -4,10 +4,10 @@
 
 import {
   paginate,
-  rdsExecute,
-  rdsQuery,
+  pgExecute,
+  pgQuery,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { JobProjectOps } from "../jobs/NeotmsJob.dbops.js";
@@ -69,7 +69,7 @@ export async function listPurchaseOrders(
   const query = readListQuery(request, PO_SORTS, "created");
   const filters = readFilters(request);
   return runDb("list purchase orders", async () => {
-    const rows: SqlRow[] = (await rdsQuery(PoListOps(caller, query, filters))).data;
+    const rows: SqlRow[] = (await pgQuery(PoListOps(caller, query, filters))).data;
     const page = paginate(
       rows,
       query.limit,
@@ -86,7 +86,7 @@ export async function getPurchaseOrder(
   id: string,
 ): Promise<ResponseData<PurchaseOrderRow | string>> {
   return runDb("get purchase order", async () => {
-    const row = (await rdsQuery(PoGetOps(caller, id))).data;
+    const row = (await pgQuery(PoGetOps(caller, id))).data;
     return row ? ok(row) : notFound("purchase order");
   });
 }
@@ -115,20 +115,20 @@ export async function createPurchaseOrder(
     ? input
     : { ...input, poPmId: caller.staffId };
   return runDb("create purchase order", async () => {
-    const projectId = (await rdsQuery(JobProjectOps(caller, input.jobId))).data;
+    const projectId = (await pgQuery(JobProjectOps(caller, input.jobId))).data;
     if (projectId === null) return notFound("job");
 
     if (assigned.translatorId) {
-      const tranName = (await rdsQuery(TranslatorNameOps(assigned.translatorId))).data;
+      const tranName = (await pgQuery(TranslatorNameOps(assigned.translatorId))).data;
       if (tranName === null) {
         return { status: 400, body: "That translator does not exist or has been deleted" };
       }
     }
 
-    const row = (await rdsExecute(PoCreateOps(assigned, projectId, ctx))).data;
+    const row = (await pgExecute(PoCreateOps(assigned, projectId, ctx))).data;
     if (!row) return { status: 500, body: "The purchase order was not created" };
     // Re-read for the job and project columns, which RETURNING cannot reach.
-    const full = (await rdsQuery(PoGetOps(caller, row.id))).data;
+    const full = (await pgQuery(PoGetOps(caller, row.id))).data;
     return created(full ?? row);
   });
 }
@@ -144,14 +144,14 @@ export async function updatePurchaseOrder(
   }
   return runDb("update purchase order", async () => {
     if (input.translatorId) {
-      const tranName = (await rdsQuery(TranslatorNameOps(input.translatorId))).data;
+      const tranName = (await pgQuery(TranslatorNameOps(input.translatorId))).data;
       if (tranName === null) {
         return { status: 400, body: "That translator does not exist or has been deleted" };
       }
     }
-    const row = (await rdsExecute(PoUpdateOps(caller, id, input, ctx))).data;
+    const row = (await pgExecute(PoUpdateOps(caller, id, input, ctx))).data;
     if (!row) return notFound("purchase order");
-    const full = (await rdsQuery(PoGetOps(caller, id))).data;
+    const full = (await pgQuery(PoGetOps(caller, id))).data;
     return ok(full ?? row);
   });
 }
@@ -169,7 +169,7 @@ export async function deletePurchaseOrder(
   ctx: WriteContext,
 ): Promise<ResponseData<{ id: string } | string>> {
   return runDb("delete purchase order", async () => {
-    const deletedId = (await rdsExecute(PoSoftDeleteOps(caller, id, ctx))).data;
+    const deletedId = (await pgExecute(PoSoftDeleteOps(caller, id, ctx))).data;
     return deletedId ? ok({ id: deletedId }) : notFound("purchase order");
   });
 }

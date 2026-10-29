@@ -3,7 +3,7 @@
 // The customer master (legacy CUSTB_MAIN). Head of the revenue chain.
 //
 // Pure statement builders - no client, no credentials, no network - so the SQL these produce can be
-// asserted in a unit test. The executors live in RdsDataUtils.
+// asserted in a unit test. The executors live in PostgresUtils.
 //
 // Every selected column is aliased, including the ones that could not collide today. That is not
 // tidiness: `formatRecordsAs: "JSON"` keys each row by column name, so two same-named columns from
@@ -24,7 +24,7 @@ import {
   type SortTarget,
   type SqlOps,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import { CUSTOMER_CODE, codeExpression } from "../NeotmsCodes.js";
 import {
   cursorClause,
@@ -56,6 +56,17 @@ export type CustomerRow = {
   cusAddr: string | null;
   cusNation: string | null;
   cusCoin: string | null;
+  /**
+   * READ-ONLY. Legacy CUS_UPRO - which CAT tool the customer works in, NOT a grade or rate tier
+   * (db/002_tables.sql said tier for a while and was wrong).
+   *
+   * Still selected, no longer writable: it is absent from CUSTOMER_FIELDS and from
+   * CustomerCreateSchema, so no request can set it. It stays on the read path because the ETL will
+   * land legacy values here, and a column the API cannot even report is a column whose data is
+   * discovered years later by someone querying the database directly. `translator.tranUpro` is the
+   * live one - see db/007_codes.sql section 2e for why the question was worth asking of a translator
+   * and not of a client.
+   */
   cusUpro: string | null;
   /** A decimal string. Never a number - see neotms.schemas. */
   cusMincost: string | null;
@@ -126,7 +137,7 @@ export type CustomerSortKey = keyof typeof CUSTOMER_SORTS;
 /**
  * Columns the free-text search covers.
  *
- * `cus_name` is backed by a pg_bigm 2-gram index (`ix_cus_name_bigm`), which is what makes a
+ * `cus_name` is backed by a PGroonga index (`ix_cus_name_pgrn`), which is what makes a
  * two-character Korean term - 삼성, 네이버 - an index scan rather than a sequential one. The other
  * three have no index and are compared within the rows the name predicate already narrowed; that is
  * fine on a table of a few thousand customers, and it is the reason not to add a fifth column here
@@ -222,6 +233,13 @@ export const CustomerLiveProjectCountOps: (id: string) => SqlOps<number> = (id) 
  *
  * `cus_code` is absent: it is minted from a sequence inside the INSERT and never changes
  * afterwards, because it appears on issued invoices.
+ *
+ * `cus_upro` is absent too, and for a different reason: the field was removed from the registration
+ * screen (most clients of this company do not send translation work, so "which CAT tool do you
+ * use?" had no answer), and this list is what makes that removal real rather than cosmetic. Taking
+ * the input off the form while leaving the column here would mean every save rewrites the column
+ * with the blank the form no longer collects - which is how a legacy value loaded by the ETL
+ * disappears the first time somebody edits a phone number.
  */
 const CUSTOMER_FIELDS: readonly FieldSpec<CustomerUpdate>[] = [
   { column: "cus_name", kind: "text", read: (i) => i.cusName },
@@ -231,7 +249,6 @@ const CUSTOMER_FIELDS: readonly FieldSpec<CustomerUpdate>[] = [
   { column: "cus_addr", kind: "text", read: (i) => i.cusAddr },
   { column: "cus_nation", kind: "text", read: (i) => i.cusNation },
   { column: "cus_coin", kind: "text", read: (i) => i.cusCoin },
-  { column: "cus_upro", kind: "text", read: (i) => i.cusUpro },
   { column: "cus_mincost", kind: "money", read: (i) => i.cusMincost },
   { column: "cus_field", kind: "text", read: (i) => i.cusField },
   { column: "active", kind: "bool", read: (i) => i.active },

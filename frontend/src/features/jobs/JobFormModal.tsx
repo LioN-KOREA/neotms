@@ -1,13 +1,8 @@
 import { useState } from 'react'
 import { useCreateJob, useUpdateJob } from '@/apis/queries/neotms.mutation'
-import {
-  codeOptions,
-  COIN_CODES,
-  JOB_STATES,
-  UNIT_CODES,
-  WORK_CODES,
-} from '@/apis/neotms.codes'
+import { CODE_DOMAIN, codeOptions, COIN_CODES, JOB_STATES } from '@/apis/neotms.codes'
 import type { JobInput, JobRow, JobUpdate } from '@/apis/neotms.types'
+import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
@@ -263,19 +258,17 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           <label className={ui.label} htmlFor="job-work">
             작업 종류
           </label>
-          <select
+          {/*
+           * `sys_code` 에서 온다. 전에는 이 파일에 하드코딩된 `WORK_CODES` 를 썼고, 그 목록이
+           * DB 의 코드 테이블과 어긋나면 고를 수는 있지만 저장은 23503 으로 거절되는 선택지가
+           * 되었다 — `job.work_code` 가 `sys_code (code)` 를 참조하는 외래키다.
+           */}
+          <CodeSelect
             id="job-work"
-            className={ui.select}
+            domain={CODE_DOMAIN.WORK}
             value={form.workCode}
-            onChange={(e) => set('workCode', e.target.value)}
-          >
-            <option value="">선택 없음</option>
-            {codeOptions(WORK_CODES, form.workCode).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => set('workCode', v)}
+          />
         </div>
 
         <div className={ui.field}>
@@ -297,17 +290,24 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           </select>
         </div>
 
-        {/* 언어쌍은 코드 목록이 없어 자유 입력이다. 리포트의 언어쌍 집계가 이 값으로 묶인다. */}
+        {/*
+         * 언어쌍. 자유 입력이었고, 그래서 **어떤 값도 저장되지 않았다.**
+         *
+         * `job_slang`·`job_elang` 은 `sys_code (code)` 를 참조하는 8개 언어 컬럼 중 둘이다.
+         * 입력란에 "한국어" 라는 placeholder 를 띄워 두고 그대로 받았으니, 코드 테이블이 비어
+         * 있던 동안에는 작업 등록 자체가 불가능했다. 리포트의 언어쌍별 집계가 이 값으로
+         * 묶이므로, 드롭다운이 된 것은 집계 품질에도 직접 영향이 있다 — 자유 입력에서는
+         * '영어' 와 '영어 ' 와 'English' 가 서로 다른 언어쌍이 된다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="job-slang">
             출발어
           </label>
-          <input
+          <CodeSelect
             id="job-slang"
-            className={ui.input}
-            placeholder="한국어"
+            domain={CODE_DOMAIN.LANG}
             value={form.jobSlang}
-            onChange={(e) => set('jobSlang', e.target.value)}
+            onChange={(v) => set('jobSlang', v)}
           />
         </div>
 
@@ -315,12 +315,11 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           <label className={ui.label} htmlFor="job-elang">
             도착어
           </label>
-          <input
+          <CodeSelect
             id="job-elang"
-            className={ui.input}
-            placeholder="영어"
+            domain={CODE_DOMAIN.LANG}
             value={form.jobElang}
-            onChange={(e) => set('jobElang', e.target.value)}
+            onChange={(v) => set('jobElang', v)}
           />
         </div>
 
@@ -336,19 +335,15 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
               value={form.jobVolume}
               onChange={(e) => set('jobVolume', e.target.value)}
             />
-            <select
-              className={ui.select}
-              aria-label="단위"
+            {/* 가로로 붙는 자리라 설명을 그리지 않는다 — CodeSelect 의 `silent` 주석 참고. */}
+            <CodeSelect
+              ariaLabel="단위"
+              domain={CODE_DOMAIN.UNIT}
               value={form.unitCode}
-              onChange={(e) => set('unitCode', e.target.value)}
-            >
-              <option value="">단위</option>
-              {codeOptions(UNIT_CODES, form.unitCode).map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => set('unitCode', v)}
+              placeholder="단위"
+              silent
+            />
           </div>
         </div>
 

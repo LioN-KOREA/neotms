@@ -13,6 +13,8 @@ import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
 import { mayDo } from '@/shared/permissions'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
+import { Icon } from '@/shared/ui/Icon'
+import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import ui from '@/shared/ui/ui.module.css'
 import { ProjectFormModal } from './ProjectFormModal'
@@ -30,8 +32,8 @@ import { ProjectFormModal } from './ProjectFormModal'
  * ## 프로젝트명이 링크다
  *
  * 금액은 이 화면에 없다. 매출은 작업(JOB)에 쌓이므로 프로젝트의 합계는 소속 작업을 모아야 나오고,
- * 그건 상세 화면이 한다. 목록에서 합계를 보여 주려면 행마다 집계 쿼리가 필요하다 — ACU 상한이
- * 4인 클러스터에서 50행짜리 목록에 50번의 집계를 붙일 수는 없다.
+ * 그건 상세 화면이 한다. 목록에서 합계를 보여 주려면 행마다 집계 쿼리가 필요하다 — 용량이
+ * 고정된 소형 DB 인스턴스에서 50행짜리 목록에 50번의 집계를 붙일 수는 없다.
  */
 
 const FILTER_KEYS = ['q', 'state', 'invoiceState', 'moneyState'] as const
@@ -100,19 +102,21 @@ export function ProjectsView() {
 
   return (
     <div className={ui.page}>
-      <div className={ui.pageHead}>
-        <div>
-          <h1 className={ui.pageTitle}>프로젝트</h1>
-          <p className={ui.pageHint}>
-            고객사로부터 받은 일 한 건입니다. 매출은 이 아래의 작업에 쌓입니다.
-          </p>
-        </div>
+      {/*
+       * 제목이 없다. 경로 표시줄(셸)과 좌측 패널이 이미 '프로젝트' 라고 두 번 적고 있으므로,
+       * 여기서는 그 메뉴 이름으로는 알 수 없는 것 — 이 화면의 한 건이 무엇인지 — 만 적는다.
+       */}
+      <div className={ui.pageBar}>
+        <p className={ui.pageNote}>
+          고객사로부터 받은 일 한 건입니다. 매출은 이 아래의 작업에 쌓입니다.
+        </p>
         {mayCreate ? (
           <button
             type="button"
             className={`${ui.btn} ${ui.btnPrimary}`}
             onClick={() => setEditing(null)}
           >
+            <Icon name="plus" size={13} />
             프로젝트 등록
           </button>
         ) : null}
@@ -244,7 +248,7 @@ export function ProjectsView() {
                     {/*
                      * 상세로 가는 링크. `<a href>` 가 아니라 `<Link>` 다 — href 를 쓰면 클릭마다
                      * 전체 문서가 다시 로드되고, 그때 프로필·목록 캐시가 전부 날아간 뒤 다시
-                     * 읽힌다. 그 재조회가 그대로 Data API 호출 비용이다.
+                     * 읽힌다. 그 재조회는 람다 호출과 DB 쿼리를 그만큼 더 쓴다.
                      */}
                     <Link className={ui.btnLink} to={`/projects/${row.id}`}>
                       {row.prjName || '(이름 없음)'}
@@ -272,36 +276,22 @@ export function ProjectsView() {
                       {row.prjEdayTime ? ` ${row.prjEdayTime}` : ''}
                     </div>
                   </td>
+                  {/*
+                   * 색은 StatusChip 의 표가 정한다.
+                   *
+                   * 여기서 삼항 연산자로 고르던 것을 옮긴 이유는, 같은 '정산완료' 가 이 화면과
+                   * 발주 목록·프로젝트 상세에서 각각 따로 적혀 있었기 때문이다. 한 곳만 고치면
+                   * 같은 값이 화면에 따라 다른 색으로 나오고, 담당자는 그걸 데이터의 차이로
+                   * 읽는다.
+                   */}
                   <td>
-                    <span
-                      className={`${ui.badge} ${row.prjState === '진행' ? ui.badgePrimary : ''}`}
-                    >
-                      {row.prjState || '-'}
-                    </span>
+                    <StatusChip value={row.prjState} />
                   </td>
                   <td>
-                    <span
-                      className={`${ui.badge} ${row.prjInvoiceState === '발행' ? ui.badgeSuccess : ''}`}
-                    >
-                      {row.prjInvoiceState || '-'}
-                    </span>
+                    <StatusChip value={row.prjInvoiceState} />
                   </td>
                   <td>
-                    {/*
-                     * 미정산만 경고색이다. 입금은 이 시스템에서 가장 늦게 끝나는 단계이고,
-                     * 끝나지 않은 채로 잊히는 것이 실제로 손실이 되는 유일한 상태다.
-                     */}
-                    <span
-                      className={`${ui.badge} ${
-                        row.prjMoneyState === '정산완료'
-                          ? ui.badgeSuccess
-                          : row.prjMoneyState === '미정산'
-                            ? ui.badgeWarn
-                            : ''
-                      }`}
-                    >
-                      {row.prjMoneyState || '-'}
-                    </span>
+                    <StatusChip value={row.prjMoneyState} />
                   </td>
                   <td>
                     <div className={ui.rowActions}>

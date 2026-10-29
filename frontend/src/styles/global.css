@@ -1,52 +1,144 @@
 /*
- * 라이온코리아 TMS 시스템 — global tokens and resets.
+ * 라이온코리아 neoTMS — design tokens and resets.
  *
- * The palette is the one the account-management console uses, so the two systems read as one
- * family to the same staff: #2c3e50 sidebar, #4472C4 primary, #f8f9fa page ground.
+ * ## 팔레트를 바꾼 이유
  *
- * Three tokens exist only here, because TMS has a concept the account console does not: money with
- * a sign. --ntms-revenue, --ntms-cost and --ntms-margin-negative are used wherever a figure's
- * meaning, not just its value, has to be legible at a glance.
+ * 이전 팔레트는 계정관리 콘솔의 것(#4472C4 / #2c3e50)을 그대로 가져온 것이었다. 두 시스템이 한
+ * 식구로 보이게 하려는 의도였지만, TMS 는 계정 콘솔과 성격이 다르다 — 계정 콘솔은 목록 여섯 개가
+ * 전부인 화면이고, 이쪽은 **하루 종일 띄워 놓고 숫자를 읽는 업무 화면**이다. 그래서 neoTMS UI
+ * 설계안(neoTMS_UI_Design.pdf)의 블루-바이올렛 테마로 옮긴다.
+ *
+ * ## 토큰이 두 벌인 이유
+ *
+ * 아래에는 `--nt-*`(설계안의 원색)와 `--ntms-*`(기존 이름) 두 벌이 있고, 뒤쪽은 앞쪽을 가리키는
+ * 별칭이다. 한 벌로 합치지 않은 것은 의도다:
+ *
+ *   - `--ntms-*` 는 다섯 개 CSS 파일과 일부 인라인 스타일에 이미 퍼져 있다. 이름을 바꾸면
+ *     한 군데를 놓쳤을 때 그 값이 **빈 문자열**이 되고, CSS 에서 빈 값은 오류가 아니라 '그 선언만
+ *     조용히 무시' 다. 테두리가 사라지거나 글자가 검게 나오는데 콘솔에는 아무것도 찍히지 않는다.
+ *   - 반대로 `--nt-*` 만 새로 쓰는 코드에서 참조하면, 설계안의 색 이름(Indigo 600, Ink 700)과
+ *     코드가 1:1 로 읽힌다. 설계안을 보며 고칠 때 번역이 필요 없다.
+ *
+ * 즉 `--ntms-*` 는 호환을 위한 얇은 층이고, 새 코드는 `--nt-*` 를 쓴다.
  */
 
 :root {
-  --ntms-primary: #4472c4;
-  --ntms-primary-dark: #365a9e;
-  --ntms-primary-soft: #eaf0fa;
-  --ntms-sidebar: #2c3e50;
-  --ntms-sidebar-hover: rgba(255, 255, 255, 0.1);
+  /* ── 브랜드 ─────────────────────────────────────────────────────────────
+   * 설계안 §디자인 시스템의 PRIMARY / BRAND 열. 인디고에서 바이올렛으로 가는 좁은 범위이고,
+   * 넓은 면(상단바, 주요 버튼)은 그라데이션으로, 좁은 면(활성 표시, 링크)은 단색으로 쓴다. */
+  --nt-ind: #5b50e8; /* Indigo 600 — 활성·포커스 */
+  --nt-ind-d: #4338ca; /* Indigo 700 — 링크, 강조 글자 */
+  --nt-vio: #8b5cf6; /* Violet 500 — 편집 중 셀, 보조 강조 */
+  --nt-vio-l: #a78bfa; /* Violet 300 — 틀고정 선 */
 
-  --ntms-bg: #f8f9fa;
-  --ntms-surface: #ffffff;
-  --ntms-border: #dee2e6;
-  --ntms-border-strong: #ced4da;
+  /* 틴트 세 단계. 1 은 활성 행/칩 배경, 2 는 선택된 열·헤더, 3 은 아주 옅은 패널. */
+  --nt-tint: #f1f0fe;
+  --nt-tint2: #e7e5fd;
+  --nt-tint3: #f7f7fd;
 
-  --ntms-text: #212529;
-  --ntms-text-muted: #6c757d;
-  --ntms-text-inverse: #ffffff;
+  /* ── 중립 ───────────────────────────────────────────────────────────── */
+  --nt-v900: #1b1740; /* 레일 상단, 말풍선 */
+  --nt-v800: #262050;
+  --nt-v700: #332b6b;
 
-  --ntms-danger: #dc3545;
-  --ntms-danger-soft: #fdecee;
-  --ntms-warning: #b8860b;
-  --ntms-warning-soft: #fff8e1;
-  --ntms-success: #198754;
-  --ntms-success-soft: #e8f5ee;
+  --nt-ink: #1e2140; /* 본문 */
+  --nt-ink2: #5a5c80; /* 보조 본문 */
+  --nt-ink3: #8a8ca8; /* 라벨, 비활성 */
+
+  --nt-line: #e2e1f2; /* 일반 경계 */
+  --nt-line2: #cfccea; /* 강한 경계 — 헤더 아래, 입력란 테두리 */
+  --nt-grid: #e8e8f3; /* 표 안쪽 격자. --nt-line 보다 한 단계 옅다 */
+
+  --nt-bg: #f4f4fb; /* 바탕 */
+  --nt-surface: #ffffff;
+
+  /* ── 상태색 ─────────────────────────────────────────────────────────── */
+  --nt-ok: #0ea572; /* 진행·완료 */
+  --nt-warn: #e8a317; /* 지연 */
+  --nt-dan: #e2495e; /* 클레임·오류 */
+  --nt-info: #1e9ae0; /* 샘플·안내 */
 
   /*
-   * Revenue reads as the neutral/positive figure, cost as the one being spent, and a negative
-   * margin as an error - because it is one. A job sold below the cost of its purchase orders is
-   * the single most important thing a report can tell a PM, and it should not need to be computed
-   * by eye from two black numbers.
+   * 상단바와 주요 버튼이 공유하는 그라데이션.
+   *
+   * 100deg 이지 90deg 가 아닌 것은 설계안 그대로다 — 가로로 긴 상단바에서 왼쪽 위가 살짝 더
+   * 어두워지면서 브랜드마크 쪽에 무게가 생긴다. 버튼처럼 좁은 면에서는 차이가 보이지 않으므로
+   * 같은 값을 그대로 쓴다.
    */
-  --ntms-revenue: #1b5e9c;
-  --ntms-cost: #8a5a00;
-  --ntms-margin-negative: #c0392b;
+  --nt-grad: linear-gradient(100deg, #4a3fd6 0%, #6d4fe0 52%, #8b5cf6 100%);
+  --nt-grad-rail: linear-gradient(180deg, #221c4c, #171233);
 
-  --ntms-sidebar-width: 232px;
-  --ntms-radius: 8px;
-  --ntms-radius-sm: 6px;
-  --ntms-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  --ntms-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.18);
+  /* ── 모서리 ─────────────────────────────────────────────────────────────
+   *
+   * 설계안보다 한 단계씩 각지게 잡았다(설계안은 카드 12px, 버튼 8px). 요청이기도 하지만
+   * 화면 성격에도 맞다 — 이 앱의 본문은 **표**이고, 표는 직각으로 맞물린 칸의 격자다. 그 위에
+   * 둥근 카드와 둥근 버튼이 얹히면 모서리마다 배경이 비쳐 격자가 끊겨 보인다.
+   *
+   * 원형을 남겨 둔 곳은 아바타뿐이다(`--nt-r-full`). 사람 얼굴이 들어갈 자리는 원이어야 그
+   * 자리로 읽히고, 사각형으로 만들면 아이콘 버튼과 구분되지 않는다. 상태 칩은 설계안에서
+   * 알약 모양이지만 여기서는 `--nt-r-sm` 이다 — '덜 둥글게' 라는 기준을 칩만 예외로 두면
+   * 표 안에서 칩만 떠 보인다.
+   */
+  --nt-r-xs: 2px; /* 태그, 아주 작은 표식 */
+  --nt-r-sm: 3px; /* 버튼, 입력란, 칩, 툴바 항목 */
+  --nt-r-md: 4px; /* 모달, 큰 입력 묶음 */
+  --nt-r-lg: 6px; /* 카드, 패널, 표 바깥 테두리 */
+  --nt-r-full: 50%; /* 아바타 전용 */
+
+  /* ── 그림자 ─────────────────────────────────────────────────────────────
+   * 카드는 거의 보이지 않을 만큼만 띄운다. 표가 가득한 화면에서 그림자가 진하면 카드마다
+   * 테두리가 두 겹(선 + 그림자)으로 보여 격자가 지저분해진다. */
+  --nt-sh-card: 0 1px 2px rgba(30, 33, 64, 0.05);
+  --nt-sh-pop: 0 8px 22px rgba(27, 23, 64, 0.22);
+  --nt-sh-modal: 0 18px 44px rgba(27, 23, 64, 0.28);
+  --nt-sh-pri: 0 1px 4px rgba(91, 80, 232, 0.3);
+
+  /* ── 치수 ───────────────────────────────────────────────────────────── */
+  --nt-rail-w: 76px; /* 아이콘 레일 */
+  --nt-nav-w: 188px; /* 2차 메뉴 패널 */
+  --nt-top-h: 44px; /* 상단 그라데이션 바 */
+  --nt-crumb-h: 32px; /* 경로 표시줄 */
+
+  /* ── 기존 이름(별칭) ────────────────────────────────────────────────────
+   * 새 코드에서는 쓰지 않는다. 위쪽 주석의 이유로 남겨 둔 호환 층이다. */
+  --ntms-primary: var(--nt-ind);
+  --ntms-primary-dark: var(--nt-ind-d);
+  --ntms-primary-soft: var(--nt-tint);
+  --ntms-sidebar: var(--nt-v900);
+  --ntms-sidebar-hover: rgba(255, 255, 255, 0.1);
+
+  --ntms-bg: var(--nt-bg);
+  --ntms-surface: var(--nt-surface);
+  --ntms-border: var(--nt-line);
+  --ntms-border-strong: var(--nt-line2);
+
+  --ntms-text: var(--nt-ink);
+  --ntms-text-muted: var(--nt-ink3);
+  --ntms-text-inverse: #ffffff;
+
+  --ntms-danger: var(--nt-dan);
+  --ntms-danger-soft: #fce9ec;
+  --ntms-warning: #b97e07;
+  --ntms-warning-soft: #fdf1dc;
+  --ntms-success: #0a8c60;
+  --ntms-success-soft: #e2f7ef;
+
+  /*
+   * 부호가 있는 돈.
+   *
+   * TMS 에만 있는 개념이라 별도 토큰이다. 매출은 중립, 원가는 '나가는 돈', 마이너스 마진은
+   * 오류색이다 — 발주 원가가 수주액을 넘긴 작업은 보고서가 알려 줄 수 있는 가장 중요한
+   * 사실이고, 검은 숫자 두 개를 눈으로 빼서 알아내게 둘 일이 아니다.
+   */
+  --ntms-revenue: #3730a3;
+  --ntms-cost: #9a6b00;
+  --ntms-margin-negative: #c62f45;
+
+  --ntms-sidebar-width: var(--nt-nav-w);
+  --ntms-radius: var(--nt-r-lg);
+  --ntms-radius-sm: var(--nt-r-sm);
+  --ntms-shadow: var(--nt-sh-card);
+  --ntms-shadow-lg: var(--nt-sh-modal);
 
   color-scheme: light;
 }
@@ -61,15 +153,48 @@ body,
   height: 100%;
 }
 
+/*
+ * 본문 13px.
+ *
+ * 14px 에서 한 단계 줄였다. 이 화면의 기본 단위는 문단이 아니라 **표의 한 행**이고, 담당자가
+ * 한 번에 보려는 것은 문장 하나가 아니라 목록 전체다 — 1366px 노트북에서 13px 이면 열 두어
+ * 개가 더 들어오고, 그만큼 가로 스크롤이 줄어든다. 설계안의 본문 11.5px 보다는 크게 잡았다:
+ * 설계안은 1600px 폭을 전제한 조감도이고, 실제로 읽을 글자는 그보다 커야 한다.
+ */
 body {
   margin: 0;
-  background-color: var(--ntms-bg);
-  color: var(--ntms-text);
+  background-color: var(--nt-bg);
+  color: var(--nt-ink);
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic',
     '맑은 고딕', sans-serif;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.5;
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+
+  /*
+   * 한국어 줄바꿈을 낱말 단위로 끊는다.
+   *
+   * 브라우저의 기본값(`word-break: normal`)은 한글을 **글자 단위**로 끊을 수 있다고 본다.
+   * 그래서 폭이 조금만 모자라면 '초기값으로 쓰 / 입니다' 처럼 한 낱말 한가운데가 갈라지고,
+   * 읽는 사람은 다음 줄 첫 글자까지 본 뒤에야 무슨 말인지 안다. 화면을 찍어 보기 전까지는
+   * 이게 보이지 않았다 — 글자가 다 나오기 때문에 버그처럼 느껴지지 않고, 폭이 특정 값일
+   * 때만 생긴다.
+   *
+   * `keep-all` 은 "낱말 가운데서 끊지 말라" 이고, 그 결과 띄어쓰기 자리에서만 줄이 바뀐다.
+   * 영어 문장은 원래 그렇게 동작하므로 바뀌는 것이 없다.
+   *
+   * `overflow-wrap: break-word` 를 같이 거는 이유: `keep-all` 만 두면 띄어쓰기가 없는 긴
+   * 토막(URL, 'PRJ-2026-0412' 같은 코드, 공백 없이 쓴 긴 고객사명)이 **한 낱말**로 취급되어
+   * 칸을 뚫고 나간다. `break-word` 는 "그 낱말 하나가 한 줄에도 안 들어갈 때만" 끊으므로,
+   * 평소에는 `keep-all` 이 이기고 넘칠 때만 끼어든다.
+   *
+   * 숫자·코드처럼 반드시 다르게 끊어야 하는 자리는 각자 `word-break: break-all` 로 덮는다
+   * (`.statValue`, `.meta`, `.cellMono`).
+   */
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 h1,
@@ -78,6 +203,7 @@ h3,
 h4 {
   margin: 0;
   font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 button {
@@ -92,15 +218,49 @@ textarea {
 }
 
 :focus-visible {
-  outline: 2px solid var(--ntms-primary);
-  outline-offset: 2px;
+  outline: 2px solid var(--nt-ind);
+  outline-offset: 1px;
 }
 
 /*
- * Tabular figures for every number in a table.
+ * 스크롤바를 가늘게.
  *
- * Money in this system is a decimal string rendered right-aligned in long columns. With
- * proportional digits the glyph widths differ, so a column of amounts does not line up at the
- * decimal point and a 1 next to a 7 reads as a different magnitude. This is applied via the
- * .cellMono / .amount classes in ui.module.css.
+ * 표가 가로세로로 겹쳐 스크롤되는 화면이라 기본 두께(17px)의 막대가 두 개씩 생기면 그만큼
+ * 데이터 폭이 줄고, 카드 모서리 안쪽에 회색 띠가 남는다. WebKit 계열에만 적용되고 Firefox 는
+ * `scrollbar-width` 로 따로 준다 — 둘 다 없는 브라우저에서는 기본 막대가 나오고, 그래도 된다.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c9c7e0 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #c9c7e0;
+  border-radius: var(--nt-r-sm);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #aeabd0;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/*
+ * 표 안의 모든 숫자는 고정폭 자릿수로.
+ *
+ * 이 시스템의 돈은 끝까지 10진 문자열이고(api 레이어 참고) 긴 열에 오른쪽 정렬로 쌓인다.
+ * 비례폭 숫자는 글리프 너비가 달라서 소수점이 세로로 맞지 않고, 그러면 1 옆의 7 이 다른
+ * 자릿수처럼 보여 열을 훑어 이상값을 찾을 수가 없다. 이 앱의 타이포그래피 중 보기가 아니라
+ * **정확성**에 관한 유일한 항목이다. 적용은 ui.module.css 의 .cellMono / .amount 가 한다.
  */

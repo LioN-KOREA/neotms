@@ -1,7 +1,7 @@
 -- =====================================================================
 -- NEOTMS :: 002_tables.sql
 -- Greenfield rebuild of LKTMS (Classic ASP + MS SQL Server 2019).
--- Target: Aurora Serverless v2, PostgreSQL 16, via the RDS Data API.
+-- Target: Supabase Postgres, reached over the Supavisor pooler (6543).
 -- Run after 001_extensions.sql.
 -- =====================================================================
 --
@@ -442,7 +442,7 @@ COMMENT ON COLUMN translator.tran_cat_use IS
 COMMENT ON COLUMN translator.tran_calc IS
   'Legacy TRAN_CALC, nvarchar(10). "CALC" = calculation method -- how this translator''s fee is computed (e.g. source-word vs target-word basis, or gross vs net CAT weighting). INTENT NOT CONFIRMED, so left as unconstrained text with no FK and no CHECK rather than guessing an enum.';
 COMMENT ON COLUMN translator.tran_upro IS
-  'Legacy TRAN_UPRO. "UPRO" = grade/class: the professional grade assigned to this translator, which drives default rate selection. Search facet.';
+  'Legacy TRAN_UPRO. "UPRO" = 사용 프로그램: which translation (CAT) application this translator works in. FK to sys_code(code), domain ''UPRO'' (see db/007_codes.sql). Load-bearing for dispatch rather than for pricing -- a Trados package sent to a translator who does not run Trados comes back unopened. NULL means never asked; the code ''사용 안 함'' means asked, and works without one. Search facet.';
 COMMENT ON COLUMN translator.tran_field IS
   'Legacy TRAN_FIELD. Subject domain this translator handles (legal, medical, IT, ...). Search facet.';
 COMMENT ON COLUMN translator.tran_unfield IS
@@ -664,7 +664,8 @@ COMMENT ON COLUMN customer.cus_nation IS
 COMMENT ON COLUMN customer.cus_coin IS
   'Legacy CUS_COIN. Default billing currency for this customer.';
 COMMENT ON COLUMN customer.cus_upro IS
-  'Legacy CUS_UPRO. "UPRO" = grade/class: the customer''s tier, which selects the default rate band.';
+  'Legacy CUS_UPRO. "UPRO" = 사용 프로그램: which translation (CAT) application this customer primarily works in -- Trados, memoQ and so on. FK to sys_code(code), domain ''UPRO'' (see db/007_codes.sql). NOT A GRADE OR RATE TIER; the comment here used to say that and it was wrong.
+RETAINED BUT NOT WRITTEN BY THE APPLICATION: the customer registration screen dropped this field, because most clients of this company do not send translation work and so have no answer to the question. The column stays as the ETL''s landing place for legacy values. translator.tran_upro is the live one.';
 COMMENT ON COLUMN customer.cus_mincost IS
   'Legacy CUS_MINCOST. "MINCOST" = minimum charge: the floor amount billed for a job regardless of computed volume, expressed in cus_coin. Legacy nvarchar(30) -> numeric(18,2).';
 COMMENT ON COLUMN customer.cus_field IS

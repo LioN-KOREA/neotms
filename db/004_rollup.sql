@@ -66,7 +66,7 @@ CREATE TABLE report_daily_rollup (
 );
 
 COMMENT ON TABLE report_daily_rollup IS
-  'Pre-aggregated daily fact table for the 8 report screens and the dashboard counters. One row per business date per combination of the 8 reporting dimensions. Rebuilt nightly, one business date at a time, by the recompute statement at the bottom of this file. Derived data only -- it can be dropped and rebuilt from job + purchase_order at any time, and SHOULD be rebuilt in full whenever the revenue/cost definition changes. revenue comes from JOB totals, cost from PO totals, so margin = revenue - cost.';
+  'Pre-aggregated daily fact table for the 8 report screens and the dashboard counters. One row per business date per combination of the 8 reporting dimensions. Rebuilt nightly, one business date at a time, by report_rollup_recompute(date), defined at the bottom of this file. Derived data only -- it can be dropped and rebuilt from job + purchase_order at any time, and SHOULD be rebuilt in full whenever the revenue/cost definition changes. revenue comes from JOB totals, cost from PO totals, so margin = revenue - cost.';
 
 COMMENT ON COLUMN report_daily_rollup.business_date IS
   'The date the revenue and cost are attributed to. Sourced from job.job_eday (job delivery date), NOT from created_at: delivery is the point of revenue recognition here, and a job created in December and delivered in January belongs to January. Cost is attributed to the SAME date as its parent job rather than to the PO''s own deadline, so that revenue and cost land on the same row and margin is meaningful at every level of aggregation. Rows whose job has a NULL job_eday are skipped entirely (see the recompute''s WHERE clause) -- they are undated and cannot be placed in a time series.';
@@ -111,11 +111,35 @@ CREATE INDEX ix_rollup_langpair ON report_daily_rollup (slang, elang, business_d
 -- =====================================================================
 -- NIGHTLY RECOMPUTE -- one business date per invocation.
 --
--- Parameterised as :business_date, which is what the scheduled job binds.
--- Run it for yesterday, and re-run it for a trailing window (say the last
--- 30 days) to pick up back-dated edits; it is idempotent.
+-- A FUNCTION, not a loose statement, and that is a deliberate change.
+-- It used to be a bare `BEGIN; DELETE ... WHERE business_date =
+-- :business_date; INSERT ...; COMMIT;` block sitting in this file, which
+-- was wrong in three ways:
 --
--- Two statements, in this order, inside ONE transaction:
+--   1. It made this file un-runnable. `:business_date` is an APPLICATION
+--      placeholder -- `toPositional` in PostgresUtils.ts rewrites `:name`
+--      to `$1` before the driver ever sees it. psql and the Supabase SQL
+--      editor have no such rewrite, so applying this file as part of the
+--      bootstrap failed with `syntax error at or near ":"`. A bootstrap
+--      file must be applicable as-is.
+--   2. Nothing owned it. No application code writes this table (the app
+--      only reads it, see NeotmsReport.dbops.ts), so the statement was a
+--      recipe that a future scheduled job was expected to copy -- and a
+--      copied aggregation is a second definition of revenue waiting to
+--      drift from this one.
+--   3. `BEGIN; ... COMMIT;` is the wrong shape for this deployment. On the
+--      Supavisor pooler in transaction mode (port 6543) a caller gets a
+--      different server connection per transaction, so a multi-statement
+--      transaction issued as separate round trips is not safe. A function
+--      call is ONE statement and is atomic by itself, which is exactly
+--      what transaction mode wants.
+--
+-- Call it for yesterday, and re-run it over a trailing window (say the
+-- last 30 days) to pick up back-dated edits; it is idempotent.
+--
+--   SELECT report_rollup_recompute(current_date - 1);
+--
+-- Internals, in this order, and the order matters:
 --
 --   1. DELETE for the date. Required because a dimension combination can
 --      DISAPPEAR between runs (a job is reassigned to another PM, or soft
@@ -130,92 +154,149 @@ CREATE INDEX ix_rollup_langpair ON report_daily_rollup (slang, elang, business_d
 -- COALESCE is mandatory on every dimension: see the comment on
 -- report_daily_rollup.corp_id for why a NULL in a composite PK breaks
 -- ON CONFLICT.
+--
+-- NOTE THE PARAMETER NAME. It is `p_business_date`, not `business_date`,
+-- because `business_date` is also a COLUMN of the table this function
+-- writes. plpgsql resolves that collision by refusing to run the query at
+-- all -- `column reference "business_date" is ambiguous` -- and it raises
+-- that at CALL time, not at CREATE time, so the function would create
+-- cleanly and then fail on first use. Keep the prefix.
 -- =====================================================================
 
-BEGIN;
+CREATE OR REPLACE FUNCTION report_rollup_recompute(p_business_date date)
+RETURNS integer
+LANGUAGE plpgsql
+-- Pinned so the function cannot be hijacked by a caller's search_path, and
+-- so it behaves the same from psql, from the scheduler and from the app.
+-- Only `public` is needed: nothing here calls a PGroonga operator.
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  rows_written integer;
+BEGIN
+  IF p_business_date IS NULL THEN
+    -- Fail loudly. A NULL date would DELETE nothing (`= NULL` matches no
+    -- row) and INSERT nothing, i.e. report success having done nothing --
+    -- which in a nightly job is a silently stale report, not an outage.
+    RAISE EXCEPTION 'report_rollup_recompute: p_business_date must not be NULL';
+  END IF;
 
-DELETE FROM report_daily_rollup
- WHERE business_date = :business_date;
+  DELETE FROM report_daily_rollup
+   WHERE business_date = p_business_date;
 
-INSERT INTO report_daily_rollup (
-  business_date, corp_id, customer_id, pm_id, sales_mgr_id,
-  slang, elang, category_id, revenue, cost, computed_at
-)
-SELECT
-  j.job_eday                                      AS business_date,
-  COALESCE(p.corp_id,      0)                     AS corp_id,
-  COALESCE(p.customer_id,  0)                     AS customer_id,
-  COALESCE(j.job_pm_id,    0)                     AS pm_id,
-  COALESCE(p.prj_mgr_id,   0)                     AS sales_mgr_id,
-  COALESCE(j.job_slang,   '')                     AS slang,
-  COALESCE(j.job_elang,   '')                     AS elang,
-  COALESCE(cat.id,         0)                     AS category_id,
-  COALESCE(SUM(j.job_price_ksum),      0)         AS revenue,
-  COALESCE(SUM(po.po_cost_ksum),       0)         AS cost,
-  now()                                           AS computed_at
-FROM job j
--- INNER join: a job with no project cannot be placed on any dimension.
--- Legacy has orphan jobs (PRJTB_JOB had no FK to PRJTB_MAIN), so this join
--- CAN silently drop revenue. Reconcile orphans during the ETL and then
--- monitor with:
---   SELECT count(*), SUM(job_price_ksum) FROM job j
---    WHERE NOT j.deleted AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = j.project_id);
-JOIN project p
-  ON p.id = j.project_id
- AND NOT p.deleted
--- Resolve the project's primary subject field to a sys_code id for the
--- category dimension. LEFT JOIN: retired field codes with no sys_code row
--- must fall through to sentinel 0, not drop the job.
-LEFT JOIN sys_code cat
-  ON cat.code = p.prj_field
--- Pre-aggregate PO cost per job BEFORE joining, so that a job with several
--- POs does not fan out and multiply its own revenue across the rows.
--- This is the classic double-count trap in this schema: revenue lives one
--- level up the hierarchy from cost.
-LEFT JOIN (
-  SELECT job_id, SUM(po_price_ksum) AS po_cost_ksum
-    FROM purchase_order
-   WHERE NOT deleted
-   GROUP BY job_id
-) po
-  ON po.job_id = j.id
-WHERE NOT j.deleted
-  AND j.job_eday = :business_date
-GROUP BY
-  j.job_eday,
-  COALESCE(p.corp_id,     0),
-  COALESCE(p.customer_id, 0),
-  COALESCE(j.job_pm_id,   0),
-  COALESCE(p.prj_mgr_id,  0),
-  COALESCE(j.job_slang,  ''),
-  COALESCE(j.job_elang,  ''),
-  COALESCE(cat.id,        0)
-ON CONFLICT (business_date, corp_id, customer_id, pm_id,
-             sales_mgr_id, slang, elang, category_id)
-DO UPDATE SET
-  revenue     = EXCLUDED.revenue,
-  cost        = EXCLUDED.cost,
-  computed_at = EXCLUDED.computed_at;
+  INSERT INTO report_daily_rollup (
+    business_date, corp_id, customer_id, pm_id, sales_mgr_id,
+    slang, elang, category_id, revenue, cost, computed_at
+  )
+  SELECT
+    j.job_eday                                    AS business_date,
+    COALESCE(p.corp_id,      0)                   AS corp_id,
+    COALESCE(p.customer_id,  0)                   AS customer_id,
+    COALESCE(j.job_pm_id,    0)                   AS pm_id,
+    COALESCE(p.prj_mgr_id,   0)                   AS sales_mgr_id,
+    COALESCE(j.job_slang,   '')                   AS slang,
+    COALESCE(j.job_elang,   '')                   AS elang,
+    COALESCE(cat.id,         0)                   AS category_id,
+    COALESCE(SUM(j.job_price_ksum),      0)       AS revenue,
+    COALESCE(SUM(po.po_cost_ksum),       0)       AS cost,
+    now()                                         AS computed_at
+  FROM job j
+  -- INNER join: a job with no project cannot be placed on any dimension.
+  -- Legacy has orphan jobs (PRJTB_JOB had no FK to PRJTB_MAIN), so this join
+  -- CAN silently drop revenue. Reconcile orphans during the ETL and then
+  -- monitor with:
+  --   SELECT count(*), SUM(job_price_ksum) FROM job j
+  --    WHERE NOT j.deleted AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = j.project_id);
+  JOIN project p
+    ON p.id = j.project_id
+   AND NOT p.deleted
+  -- Resolve the project's primary subject field to a sys_code id for the
+  -- category dimension. LEFT JOIN: retired field codes with no sys_code row
+  -- must fall through to sentinel 0, not drop the job.
+  LEFT JOIN sys_code cat
+    ON cat.code = p.prj_field
+  -- Pre-aggregate PO cost per job BEFORE joining, so that a job with several
+  -- POs does not fan out and multiply its own revenue across the rows.
+  -- This is the classic double-count trap in this schema: revenue lives one
+  -- level up the hierarchy from cost.
+  LEFT JOIN (
+    SELECT job_id, SUM(po_price_ksum) AS po_cost_ksum
+      FROM purchase_order
+     WHERE NOT deleted
+     GROUP BY job_id
+  ) po
+    ON po.job_id = j.id
+  WHERE NOT j.deleted
+    AND j.job_eday = p_business_date
+  GROUP BY
+    j.job_eday,
+    COALESCE(p.corp_id,     0),
+    COALESCE(p.customer_id, 0),
+    COALESCE(j.job_pm_id,   0),
+    COALESCE(p.prj_mgr_id,  0),
+    COALESCE(j.job_slang,  ''),
+    COALESCE(j.job_elang,  ''),
+    COALESCE(cat.id,        0)
+  ON CONFLICT (business_date, corp_id, customer_id, pm_id,
+               sales_mgr_id, slang, elang, category_id)
+  DO UPDATE SET
+    revenue     = EXCLUDED.revenue,
+    cost        = EXCLUDED.cost,
+    computed_at = EXCLUDED.computed_at;
 
-COMMIT;
+  -- Returned, not logged. The caller needs a way to tell "that date has no
+  -- jobs" (0, legitimate for a Sunday) from "the job did not run" -- and a
+  -- scheduler that only sees success/failure cannot tell those apart.
+  GET DIAGNOSTICS rows_written = ROW_COUNT;
+  RETURN rows_written;
+END;
+$fn$;
+
+COMMENT ON FUNCTION report_rollup_recompute(date) IS
+  'Rebuilds report_daily_rollup for one business date. Idempotent: DELETEs the '
+  'date first, so dimension combinations that disappeared between runs do not '
+  'survive as stale rows. Returns the number of rows written. This is the ONLY '
+  'definition of revenue and cost for reporting -- do not copy the aggregation '
+  'into a scheduled job.';
 
 
 -- =====================================================================
 -- FULL REBUILD (initial load after the ETL, and after any change to the
--- revenue/cost definition). Loop the statement above over every distinct
--- job_eday rather than writing a second, divergent aggregation -- one
--- definition of revenue, in one place:
+-- revenue/cost definition).
 --
---   DO $$
---   DECLARE d date;
---   BEGIN
---     FOR d IN SELECT DISTINCT job_eday FROM job
---               WHERE NOT deleted AND job_eday IS NOT NULL ORDER BY 1
---     LOOP
---       -- execute the DELETE + INSERT above with :business_date := d
---     END LOOP;
---   END $$;
+-- Loops the function over every distinct job_eday rather than writing a
+-- second, faster, bulk aggregation: one definition of revenue, in one
+-- place. It is slower by a wide margin and that is an accepted cost --
+-- this runs once per ETL, not nightly.
 --
+-- LEFT COMMENTED OUT ON PURPOSE. This file is part of the bootstrap and is
+-- applied with `psql -f` before the ETL has loaded anything, when the loop
+-- would do nothing; after the ETL it runs for minutes, which is past both
+-- the API Gateway and the Lambda timeout. Paste it into psql by hand when
+-- you actually want it.
+-- =====================================================================
+
+-- DO $rebuild$
+-- DECLARE
+--   d          date;
+--   n          integer;
+--   days       integer := 0;
+--   total_rows bigint  := 0;
+-- BEGIN
+--   FOR d IN SELECT DISTINCT job_eday
+--              FROM job
+--             WHERE NOT deleted
+--               AND job_eday IS NOT NULL
+--             ORDER BY 1
+--   LOOP
+--     n          := report_rollup_recompute(d);
+--     days       := days + 1;
+--     total_rows := total_rows + n;
+--   END LOOP;
+--   RAISE NOTICE 'rebuilt % business dates, % rollup rows', days, total_rows;
+-- END
+-- $rebuild$;
+
 -- Then reconcile against the verification anchor at the top of this file:
 --   SELECT to_char(SUM(revenue), 'FM999,999,999,999') FROM report_daily_rollup;
 --   -- expected: 8,870,363,824

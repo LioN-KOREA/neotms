@@ -1,82 +1,152 @@
+/*
+ * 로그인 전에 보이는 화면들의 옷.
+ *
+ * ## 셸과 다르게 생겨야 한다
+ *
+ * 이 카드가 보일 때 사용자는 아직 아무 데이터도 볼 수 없다. 셸(좌측 레일 + 상단 그라디언트)과
+ * 같은 모습이면 "로그인은 된 것 같은데 왜 비었지" 로 읽히고, 실제로 레거시에서 그 문의가
+ * 들어왔다. 그래서 배경을 짙은 보라 한 판으로 깔고 가운데에 카드 하나만 둔다 — 셸의 어떤
+ * 화면과도 닮지 않은 모양이다.
+ *
+ * ## 배경색은 레일의 색이다
+ *
+ * `--nt-v900` / `--nt-v800` 은 좌측 레일과 같은 계열이다. 로그인 직후 레일이 나타날 때 같은
+ * 색에서 이어지므로 화면이 한 번 하얗게 번쩍이지 않는다.
+ */
+
 .wrap {
   min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 32px 16px;
-  background: linear-gradient(160deg, #2c3e50 0%, #3d5a75 100%);
+  background: linear-gradient(
+    155deg,
+    var(--nt-v900) 0%,
+    var(--nt-v700) 58%,
+    var(--nt-ind-d) 100%
+  );
 }
 
 .card {
   width: 100%;
-  max-width: 420px;
+  max-width: 400px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 28px;
-  background: var(--ntms-surface);
-  border-radius: 12px;
-  box-shadow: var(--ntms-shadow-lg);
+  gap: 11px;
+  padding: 22px;
+  border-radius: var(--nt-r-lg);
+  box-shadow: var(--nt-sh-pop);
+  /* 위쪽 2px 그라디언트 선. 모달 머리글과 같은 장치이고(Modal.module.css 참고), 이 앱의
+     "떠 있는 판" 에 공통으로 붙는 표시다. 테두리가 아니라 배경 레이어인 이유는 모서리
+     둥글기가 선에도 그대로 적용되어야 하기 때문이다 — `border-top` 으로 그리면 양 끝이
+     모서리 곡선을 따라 비스듬히 잘린다. */
+  background-color: var(--nt-surface);
+  background-image: var(--nt-grad);
+  background-size: 100% 2px;
+  background-repeat: no-repeat;
+  background-position: top left;
+}
+
+/*
+ * 회원가입 폼만 넓은 카드를 쓴다.
+ *
+ * 다른 게이트 화면은 문장 한 문단과 버튼 하나라서 400px 가 오히려 읽기 좋은 폭이다. 폼은
+ * 입력란이 다섯 개이고 `ui.formGrid` 가 `minmax(190px, 1fr)` 의 auto-fit 이므로, 400px 안에서는
+ * 두 칸이 들어가지 못해 전부 한 줄씩 쌓인다 — 세로로 긴 카드가 되어 제출 버튼이 접히는 선
+ * 아래로 내려간다. 560px 면 두 칸이 들어가서 폼이 카드 안에서 끝난다.
+ */
+.cardWide {
+  max-width: 560px;
 }
 
 .brand {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--nt-line);
 }
 
 /* 서비스 이름을 두 줄로 나눈다. '라이온코리아 TMS 시스템' 은 한 줄로 두면 카드 안에서
    줄바꿈 위치를 브라우저가 정하게 되고, 그 위치가 폭마다 달라진다. */
 .brandOrg {
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--ntms-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--nt-ind-d);
 }
 
 .brandText {
-  font-size: 1.05rem;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--nt-ink);
 }
 
 .lead {
-  margin: -4px 0 4px;
-  font-size: 0.83rem;
-  color: var(--ntms-text-muted);
-  line-height: 1.6;
+  margin: 0;
+  font-size: 12px;
+  color: var(--nt-ink2);
+  line-height: 1.65;
+  letter-spacing: -0.02em;
 }
 
+/*
+ * 이 카드의 주요 버튼.
+ *
+ * `ui.btn` 의 26px 높이를 덮어쓴다. 표 안의 버튼은 한 행에 둘셋이 같이 서므로 작아야 하지만,
+ * 여기서는 화면 전체에서 누를 수 있는 것이 이 버튼 하나다 — 그 경우 작은 버튼은 "비활성인가"
+ * 로 읽힌다. `width: 100%` 인 것도 같은 이유다.
+ */
 .action {
-  margin-top: 6px;
-  padding: 9px 14px;
+  margin-top: 3px;
+  height: 32px;
+  width: 100%;
+  justify-content: center;
+  font-size: 12.5px;
 }
 
 .meta {
   margin: 0;
-  font-size: 0.78rem;
-  color: var(--ntms-text-muted);
+  padding-left: 7px;
+  border-left: 2px solid var(--nt-line2);
+  font-size: 11px;
+  color: var(--nt-ink3);
   word-break: break-all;
+  letter-spacing: -0.02em;
 }
 
 .altActions {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 4px 16px;
-  margin-top: 10px;
+  gap: 4px 14px;
+  margin-top: 3px;
+  padding-top: 9px;
+  border-top: 1px solid var(--nt-line);
 }
 
+/*
+ * 보조 동작 — '로그아웃', '다른 계정으로 로그인'.
+ *
+ * 버튼 모양을 주지 않는다. 이 화면에서 눌러야 하는 것은 위의 주요 버튼이고, 이쪽은 그게
+ * 통하지 않을 때의 빠져나갈 길이다. 둘이 같은 무게면 사용자는 둘 중 무엇이 정상 경로인지
+ * 판단해야 한다.
+ */
 .linkButton {
   padding: 0;
   border: none;
   background: none;
   font: inherit;
-  font-size: 0.85rem;
-  color: var(--ntms-text-muted);
+  font-size: 11.5px;
+  color: var(--nt-ink3);
   text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 
 .linkButton:hover {
-  color: var(--ntms-text);
+  color: var(--nt-ind-d);
 }

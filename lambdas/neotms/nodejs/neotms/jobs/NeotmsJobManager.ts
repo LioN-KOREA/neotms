@@ -4,10 +4,10 @@
 
 import {
   paginate,
-  rdsExecute,
-  rdsQuery,
+  pgExecute,
+  pgQuery,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { ProjectVisibleOps } from "../projects/NeotmsProject.dbops.js";
@@ -62,7 +62,7 @@ export async function listJobs(
   const query = readListQuery(request, JOB_SORTS, "created");
   const filters = readFilters(request);
   return runDb("list jobs", async () => {
-    const rows: SqlRow[] = (await rdsQuery(JobListOps(caller, query, filters))).data;
+    const rows: SqlRow[] = (await pgQuery(JobListOps(caller, query, filters))).data;
     const page = paginate(rows, query.limit, sortAlias(query.sort.column), "job_id", toJobRow);
     return ok(page);
   });
@@ -73,7 +73,7 @@ export async function getJob(
   id: string,
 ): Promise<ResponseData<JobRow | string>> {
   return runDb("get job", async () => {
-    const row = (await rdsQuery(JobGetOps(caller, id))).data;
+    const row = (await pgQuery(JobGetOps(caller, id))).data;
     return row ? ok(row) : notFound("job");
   });
 }
@@ -95,14 +95,14 @@ export async function createJob(
 ): Promise<ResponseData<JobRow | string>> {
   const assigned: JobCreate = input.jobPmId ? input : { ...input, jobPmId: caller.staffId };
   return runDb("create job", async () => {
-    const visible = (await rdsQuery(ProjectVisibleOps(caller, input.projectId))).data;
+    const visible = (await pgQuery(ProjectVisibleOps(caller, input.projectId))).data;
     if (!visible) return notFound("project");
 
-    const row = (await rdsExecute(JobCreateOps(assigned, ctx))).data;
+    const row = (await pgExecute(JobCreateOps(assigned, ctx))).data;
     if (!row) return { status: 500, body: "The job was not created" };
     // Re-read so the created job carries its project's code and name, which `RETURNING` cannot
     // reach. See the mapper comment on JobCreateOps.
-    const full = (await rdsQuery(JobGetOps(caller, row.id))).data;
+    const full = (await pgQuery(JobGetOps(caller, row.id))).data;
     return created(full ?? row);
   });
 }
@@ -117,7 +117,7 @@ export async function updateJob(
     return { status: 400, body: "No editable field was supplied" };
   }
   return runDb("update job", async () => {
-    const row = (await rdsExecute(JobUpdateOps(caller, id, input, ctx))).data;
+    const row = (await pgExecute(JobUpdateOps(caller, id, input, ctx))).data;
     return row ? ok(row) : notFound("job");
   });
 }
@@ -136,14 +136,14 @@ export async function deleteJob(
   ctx: WriteContext,
 ): Promise<ResponseData<{ id: string } | string>> {
   return runDb("delete job", async () => {
-    const livePos = (await rdsQuery(JobLivePoCountOps(id))).data;
+    const livePos = (await pgQuery(JobLivePoCountOps(id))).data;
     if (livePos > 0) {
       return {
         status: 409,
         body: `This job still has ${livePos} live purchase order(s). Cancel them first, or the cost would be left without its revenue.`,
       };
     }
-    const deletedId = (await rdsExecute(JobSoftDeleteOps(caller, id, ctx))).data;
+    const deletedId = (await pgExecute(JobSoftDeleteOps(caller, id, ctx))).data;
     return deletedId ? ok({ id: deletedId }) : notFound("job");
   });
 }

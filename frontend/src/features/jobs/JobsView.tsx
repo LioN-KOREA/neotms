@@ -2,13 +2,16 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
 import { useJobs, useProfile } from '@/apis/queries/neotms.query'
 import { useDeleteJob } from '@/apis/queries/neotms.mutation'
-import { codeOptions, JOB_STATES, WORK_CODES } from '@/apis/neotms.codes'
+import { CODE_DOMAIN, codeOptions, JOB_STATES } from '@/apis/neotms.codes'
 import type { JobRow } from '@/apis/neotms.types'
 import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
 import { mayDo } from '@/shared/permissions'
 import { Amount } from '@/shared/ui/Amount'
+import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
+import { Icon } from '@/shared/ui/Icon'
+import { KindTag, StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import { decimalSum } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
@@ -93,19 +96,18 @@ export function JobsView() {
 
   return (
     <div className={ui.page}>
-      <div className={ui.pageHead}>
-        <div>
-          <h1 className={ui.pageTitle}>작업</h1>
-          <p className={ui.pageHint}>
-            프로젝트를 쪼갠 실제 일감입니다. 원화 환산 합계가 이 시스템의 매출입니다.
-          </p>
-        </div>
+      {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
+      <div className={ui.pageBar}>
+        <p className={ui.pageNote}>
+          프로젝트를 쪼갠 실제 일감입니다. 원화 환산 합계가 이 시스템의 <b>매출</b>입니다.
+        </p>
         {mayCreate ? (
           <button
             type="button"
             className={`${ui.btn} ${ui.btnPrimary}`}
             onClick={() => setEditing(null)}
           >
+            <Icon name="plus" size={13} />
             작업 등록
           </button>
         ) : null}
@@ -163,30 +165,36 @@ export function JobsView() {
             <label className={ui.label} htmlFor="jf-work">
               작업 종류
             </label>
-            <select
+            {/*
+             * 필터의 '전체' 는 빈 문자열이다. 등록 폼의 '선택 없음' 과 같은 값이지만 뜻이
+             * 다르다 — 폼에서는 "값 없음으로 저장", 여기서는 "이 조건으로 좁히지 않음".
+             */}
+            <CodeSelect
               id="jf-work"
-              className={ui.select}
+              domain={CODE_DOMAIN.WORK}
               value={draft.workCode}
-              onChange={(e) => setDraft((p) => ({ ...p, workCode: e.target.value }))}
-            >
-              <option value="">전체</option>
-              {codeOptions(WORK_CODES, draft.workCode).map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setDraft((p) => ({ ...p, workCode: v }))}
+              placeholder="전체"
+              silent
+            />
           </div>
 
           <div className={ui.filterField}>
             <label className={ui.label} htmlFor="jf-slang">
               출발어
             </label>
-            <input
+            {/*
+             * 자유 입력이었다. 필터에서 자유 입력은 저장을 깨뜨리지는 않지만 조용히 **0건**을
+             * 돌려준다 — '영어' 로 저장된 작업을 'English' 로 찾으면 결과가 없고, 화면은
+             * "검색한 작업이 없습니다" 라고만 말한다. 찾는 사람은 작업이 없다고 결론 낸다.
+             */}
+            <CodeSelect
               id="jf-slang"
-              className={ui.input}
+              domain={CODE_DOMAIN.LANG}
               value={draft.slang}
-              onChange={(e) => setDraft((p) => ({ ...p, slang: e.target.value }))}
+              onChange={(v) => setDraft((p) => ({ ...p, slang: v }))}
+              placeholder="전체"
+              silent
             />
           </div>
 
@@ -194,11 +202,13 @@ export function JobsView() {
             <label className={ui.label} htmlFor="jf-elang">
               도착어
             </label>
-            <input
+            <CodeSelect
               id="jf-elang"
-              className={ui.input}
+              domain={CODE_DOMAIN.LANG}
               value={draft.elang}
-              onChange={(e) => setDraft((p) => ({ ...p, elang: e.target.value }))}
+              onChange={(v) => setDraft((p) => ({ ...p, elang: v }))}
+              placeholder="전체"
+              silent
             />
           </div>
 
@@ -221,6 +231,14 @@ export function JobsView() {
                 <th>코드</th>
                 <th>작업명</th>
                 <th>프로젝트 · 고객사</th>
+                {/*
+                 * 작업 종류 열.
+                 *
+                 * 걸러내기에는 있었는데 표에는 없던 값이다. 그 조합은 쓸 수 없다 — '감수' 로
+                 * 걸러낸 목록과 '번역' 으로 걸러낸 목록이 화면에서 똑같이 생겼으므로, 담당자는
+                 * 자기가 무엇을 보고 있는지 걸러내기 칸을 다시 봐야 확인할 수 있었다.
+                 */}
+                <th>종류</th>
                 <th>언어쌍</th>
                 <th>물량 · 단가</th>
                 <th>매출(원화)</th>
@@ -239,7 +257,7 @@ export function JobsView() {
                     ? '조건에 맞는 작업이 없습니다.'
                     : '등록된 작업이 없습니다. 프로젝트를 먼저 만든 뒤 작업을 추가합니다.'
                 }
-                colSpan={9}
+                colSpan={10}
               />
               {rows.map((row) => (
                 <tr key={row.id}>
@@ -252,6 +270,9 @@ export function JobsView() {
                       </Link>
                     </div>
                     {row.cusCodeName ? <div>{row.cusCodeName}</div> : null}
+                  </td>
+                  <td>
+                    <KindTag value={row.workCode} />
                   </td>
                   <td className={ui.cellMuted}>
                     {[row.jobSlang, row.jobElang].filter(Boolean).join(' → ') || '-'}
@@ -283,11 +304,7 @@ export function JobsView() {
                     {row.jobEdayTime ? <div>{row.jobEdayTime}</div> : null}
                   </td>
                   <td>
-                    <span
-                      className={`${ui.badge} ${row.jobState === '진행' ? ui.badgePrimary : ''}`}
-                    >
-                      {row.jobState || '-'}
-                    </span>
+                    <StatusChip value={row.jobState} />
                   </td>
                   <td>
                     <div className={ui.rowActions}>

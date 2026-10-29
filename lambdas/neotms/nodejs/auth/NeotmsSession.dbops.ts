@@ -7,10 +7,19 @@
 // SHA-256 of that id rather than by the id itself, so a read of the table - a support query, a
 // backup, an export - does not hand out working session cookies.
 //
-// This is the one part of NEOTMS that is not in Aurora, and the reason is cost rather than taste: a
-// session read happens on every authenticated request, so putting it in the cluster would hold the
-// cluster awake all day. At ~0.5 ACU around the clock that is roughly $48/month - about half the
-// entire budget - to check cookies. See NeotmsStorage.ts.
+// This is the one part of NEOTMS that is not in Postgres. On the Aurora variant the reason was
+// cost: a session read on every request would have held the cluster awake all day, at roughly
+// $48/month in ACU floor to check cookies. Supabase bills a flat monthly compute price, so that
+// argument is gone - but the decision stands on a different one, which is CONNECTIONS.
+//
+// A session read happens on every authenticated request, before any routing or authorization. Were
+// it a Postgres read it would have to go through the Supavisor pooler, so the function would need a
+// server connection for requests that are only checking a cookie - including the ones that then
+// turn out to be 401s and touch no business data at all. With `reservedConcurrentExecutions: 20`
+// and a pool `max` of 2 (see NeotmsApi.ts and PostgresUtils.ts) the whole function is budgeted at
+// 40 client connections, and spending that budget on cookie checks is what would make a traffic
+// spike present as connection exhaustion rather than as slowness. DynamoDB is a separate, unpooled
+// quota, and on-demand pricing for this traffic is cents. See NeotmsStorage.ts.
 
 import type { AttributeValue } from "@aws-sdk/client-dynamodb";
 import { NeotmsEnv } from "../env/NeotmsEnv.js";

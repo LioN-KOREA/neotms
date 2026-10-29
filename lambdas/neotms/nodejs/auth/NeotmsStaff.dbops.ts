@@ -17,7 +17,7 @@
 // themselves any role. That is the defect being closed, and it is closed by there being no code
 // path anywhere in NEOTMS that accepts either value from a caller.
 
-import { param, readBool, readId, readText, type SqlOps, type SqlRow } from "../utils/RdsDataUtils.js";
+import { param, readBool, readId, readText, type SqlOps, type SqlRow } from "../utils/PostgresUtils.js";
 
 /** One menu's five action flags, in `sys_role_auth.role_1 .. role_5` order. */
 export type MenuPermissions = [boolean, boolean, boolean, boolean, boolean];
@@ -163,6 +163,150 @@ export const StaffClaimOps: (staffId: string, sub: string) => SqlOps<StaffRow | 
   `,
   parameters: [param("sub", sub, "text"), param("staff_id", staffId, "id")],
   mapper: firstStaffRow,
+});
+
+/**
+ * Provision - or repair - the staff row for an LPX administrator, and return its id.
+ *
+ * This is the recovery path for an empty NEOTMS. Everything above assumes a `staff` table that
+ * somebody has already populated; immediately after `db/002..005` nobody has, so `StaffByLpxSubOps`
+ * finds nothing, `StaffUnclaimedByEmailOps` finds nothing, and every sign-in is refused with "not
+ * registered as NEOTMS staff" - including the sign-in of the person who would have registered the
+ * others. Only a caller holding `lpx.admin.access` reaches this (see NeotmsAuthGuard), and only when
+ * their own lookup came back missing or inactive.
+ *
+ * ALL OF THE DECISION IS IN THE DATABASE, deliberately, and that is why this file - which is
+ * otherwise only queries - calls a function. Three reasons, in order of how much they cost if
+ * ignored:
+ *
+ *   1. It is one statement, so it is atomic without a transaction. Supavisor's transaction mode
+ *      hands the connection back at COMMIT, so a read-then-decide-then-write sequence from here
+ *      could be spread over three different backends with other work interleaved. Two
+ *      administrators signing in together would both find no row and both insert one, and one
+ *      person would end up with two staff records - which splits their project history, because
+ *      `mgr_id` is what every legacy `REG_ID` points at.
+ *   2. The repair, adopt and mint branches all need `FOR UPDATE` and a `unique_violation` handler to
+ *      be correct under that race. Those exist in SQL and have no equivalent here.
+ *   3. `role_id`, `view_scope` and `active` are the three values this codebase refuses to let a
+ *      caller influence. Deciding them inside a `SECURITY INVOKER` function with a pinned
+ *      `search_path` keeps the decision in the same place as the constraints that bound it.
+ *
+ * It returns the id and not the row, because a volatile function and a `JOIN staff` in the same
+ * statement would read the snapshot taken before the function ran and come back empty. The caller
+ * re-reads through `StaffByLpxSubOps`, which is an ordinary statement with a fresh snapshot.
+ *
+ * Idempotent: called twice for the same subject it returns the same id the second time. It never
+ * downgrades - an explicitly assigned role, or a `view_scope` of 'N', survives a repair.
+ *
+ * See db/006_bootstrap.sql section 4 for the branches and for the consequence stated plainly there:
+ * a holder of this authority cannot be locked out of NEOTMS from inside NEOTMS. Revocation is
+ * removing the authority on LPX, or blanking `NEOTMS_BOOTSTRAP_AUTHORITY_ID`.
+ */
+export const StaffBootstrapSuperuserOps: (
+  sub: string,
+  email: string | null,
+  name: string | null,
+) => SqlOps<string | null> = (sub, email, name) => ({
+  /*
+   * The three `::text` casts are not decoration. node-postgres sends these parameters with no
+   * declared type, and PostgreSQL resolves an unknown-typed argument by looking for a unique
+   * function of this name and arity. That works today and would start failing - at runtime, on the
+   * bootstrap path specifically, which is the path nobody exercises again after go-live - the day
+   * somebody adds a second `staff_bootstrap_superuser` overload. Casting pins the signature.
+   */
+  sql: `SELECT staff_bootstrap_superuser(:sub::text, :email::text, :name::text) AS staff_id`,
+  parameters: [
+    param("sub", sub, "text"),
+    // NULL rather than '' when userInfo omits them: the function tests these with NULLIF(btrim(..))
+    // and treats blank and absent alike, but a NULL that arrives as '' would be stored as '' by the
+    // mint branch and break every `IS NULL` check against `mgr_email` afterwards.
+    param("email", email, "text"),
+    param("name", name, "text"),
+  ],
+  mapper: (rows) => (rows.length > 0 ? readId(rows[0]!, "staff_id") : null),
+});
+
+/**
+ * Create the staff row for an employee registering themselves, and return its id.
+ *
+ * Deliberately next to `StaffBootstrapSuperuserOps`, because the two are the only paths in this
+ * system that mint a `staff` row and the difference between them is the thing worth being able to
+ * see at a glance:
+ *
+ *   * The bootstrap runs for a caller holding `lpx.admin.access` and produces a WORKING ACCOUNT -
+ *     it assigns a role, because its entire purpose is to get the first administrator in.
+ *   * This one runs for anybody holding the NEOTMS app authority and produces a REQUEST - `role_id`
+ *     is NULL, so the row grants nothing until an administrator assigns a role on 사용자 관리.
+ *
+ * It follows the bootstrap's shape for the same three reasons given there, and the first applies
+ * more sharply here. The decision is "does this subject already have a row, and if not which free
+ * `mgr_id` can it take" - a read, then a write, against a column with a UNIQUE constraint. Under
+ * Supavisor's transaction mode those would be two different backends, so two tabs submitting the
+ * form together would both find nothing and both insert; one person would end up with two staff
+ * records, and because `mgr_id` is what every legacy `REG_ID` points at, their history would be
+ * split across both from that day on. As one statement calling one function it is atomic without a
+ * transaction, and the `unique_violation` handler inside decides the collision.
+ *
+ * It also returns the id rather than the row, for the reason the bootstrap does: a volatile function
+ * and a `JOIN staff` in one statement would read the snapshot taken before the function ran and come
+ * back empty. The caller re-reads through the ordinary path - and in fact re-reads through
+ * `getProfile`, so the response it builds is the same `ProfileView` the SPA would get from
+ * `/api/v0/me` a moment later, built by the same code.
+ *
+ * Idempotent per subject: called twice it returns the same id and changes nothing. Notably it does
+ * NOT update - a second submission cannot rewrite the name on a row an administrator may already
+ * have approved. See db/009_selfservice.sql, which also records why there is no adopt-by-email
+ * branch here when the bootstrap has one.
+ */
+export const StaffSelfRegisterOps: (
+  sub: string,
+  profile: {
+    name: string;
+    nameEng?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    position?: string | null;
+  },
+  ip: string | null,
+) => SqlOps<string | null> = (sub, profile, ip) => ({
+  // Every argument cast, for the reason spelled out on `StaffBootstrapSuperuserOps`: node-postgres
+  // sends these untyped, PostgreSQL resolves an untyped argument by finding a unique function of
+  // this name and arity, and a seven-argument signature of all-text is exactly the kind somebody
+  // adds an overload of. The casts pin it.
+  sql: `
+    SELECT staff_self_register(
+             :sub::text,
+             :name::text,
+             :name_eng::text,
+             :email::text,
+             :phone::text,
+             :position::text,
+             :ip::text
+           ) AS staff_id
+  `,
+  parameters: [
+    param("sub", sub, "text"),
+    param("name", profile.name, "text"),
+    /*
+     * `?? null` on all four, and not `?? ""`.
+     *
+     * `SelfProfileSchema` uses `settable(...)`, so a field the form left empty arrives as
+     * `undefined` and a field the user cleared arrives as `null`. The function treats blank and
+     * absent alike - every one of these is wrapped in `NULLIF(btrim(...), '')` - so the distinction
+     * does not survive into the row, and that is correct for a CREATE: there is nothing to leave
+     * alone. What matters is that `undefined` must not reach `param` as a bound value of its own,
+     * because an unbound parameter is a statement that fails rather than a column left NULL.
+     */
+    param("name_eng", profile.nameEng ?? null, "text"),
+    param("email", profile.email ?? null, "text"),
+    param("phone", profile.phone ?? null, "text"),
+    param("position", profile.position ?? null, "text"),
+    // Text, not inet, and that is the point: `clientInet` only shape-checks the header, so a value
+    // like "1.2.3.4.5" reaches here intact. Casting it in SQL would abort the registration; the
+    // function casts it inside a subtransaction and stores NULL if it will not parse.
+    param("ip", ip, "text"),
+  ],
+  mapper: (rows) => (rows.length > 0 ? readId(rows[0]!, "staff_id") : null),
 });
 
 /**

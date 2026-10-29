@@ -1,5 +1,9 @@
 import { neotmsApi } from './neotms.client'
 import type {
+  CodeInput,
+  CodeListView,
+  CodeRow,
+  CodeUpdateInput,
   CustomerInput,
   CustomerRow,
   JobInput,
@@ -15,6 +19,11 @@ import type {
   PurchaseOrderUpdate,
   ReportQuery,
   ReportResult,
+  RoleListView,
+  SelfProfileInput,
+  StaffListView,
+  StaffRow,
+  StaffUpdateInput,
   TranslatorInput,
   TranslatorRow,
   WorkloadCounts,
@@ -39,6 +48,104 @@ import type {
 
 export const fetchProfile = (signal?: AbortSignal) =>
   neotmsApi<ProfileView>('/api/v0/me', { signal })
+
+/**
+ * 회원가입 요청. `staff` 행을 만들지만 **역할은 비워 둔 채로** 만든다.
+ *
+ * 응답은 생성된 행이 아니라 `ProfileView` 다 — `/api/v0/me` 가 잠시 뒤에 줄 것과 같은 값이고,
+ * 서버에서 같은 코드가 만든다. 그래서 성공 직후 `registration: 'pending'` 을 이 응답에서 바로
+ * 읽을 수 있고, 대기 화면을 그리기 위해 한 번 더 왕복하지 않는다.
+ *
+ * 이것이 `staff` 행이 없어도 호출할 수 있는 두 엔드포인트 중 하나다(다른 하나는
+ * `/api/v0/me`). 나머지 전부는 쓸 수 있는 `staff` 행을 요구하므로, 그 행을 만드는 이 호출이
+ * 같은 요구를 하면 아무도 등록할 수 없다.
+ */
+export const registerSelf = (input: SelfProfileInput) =>
+  neotmsApi<ProfileView>('/api/v0/registration', { method: 'POST', body: input })
+
+/* -------------------------------------------------------------------------- */
+/* 코드 (sys_code)                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 드롭다운용 코드 목록. 활성 코드 전부를 **한 번에** 받는다.
+ *
+ * 도메인별로 나누어 받지 않는 이유는 수요의 모양이다 — 작업 등록 모달 하나가 작업 종류와 단가
+ * 단위와 출발어와 도착어를 동시에 필요로 하므로, 도메인별 호출은 모달 하나를 그리는 데 네 번의
+ * 왕복이 되고 그 네 번이 각각 Supavisor 커넥션을 하나씩 가져간다(총 한도 40). 전체가 60행
+ * 남짓의 짧은 문자열이라 나눠서 얻을 것이 없다.
+ *
+ * 메뉴 권한을 보지 않는 `anyStaff` 엔드포인트다. 분야·작업 종류 없이는 어떤 폼도 그려지지
+ * 않으므로, 유지보수 권한이 없는 PM 에게 이것을 거절하면 빈 드롭다운을 주는 것이 된다.
+ */
+export const fetchCodes = (signal?: AbortSignal) =>
+  neotmsApi<CodeListView>('/api/v0/codes', { signal })
+
+/**
+ * 유지보수 화면용 목록. 비활성 코드까지 포함한다.
+ *
+ * 위 `fetchCodes` 에 `?includeInactive=true` 를 붙이는 대신 경로를 나눈 것은, "폐기된 코드를
+ * 볼 수 있는가" 를 호출자가 넘기는 질의 문자열이 아니라 **도달한 경로**가 결정하게 하기
+ * 위해서다. 그러면 그 판단이 `sys_role_auth` 의 유지보수 권한으로 환원된다.
+ */
+export const fetchAdminCodes = (signal?: AbortSignal) =>
+  neotmsApi<CodeListView>('/api/v0/admin/codes', { signal })
+
+export const createCode = (input: CodeInput) =>
+  neotmsApi<CodeRow>('/api/v0/admin/codes', { method: 'POST', body: input })
+
+export const updateCode = (id: string, input: CodeUpdateInput) =>
+  neotmsApi<CodeRow>(`/api/v0/admin/codes/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+  })
+
+/**
+ * 물리 삭제. 이 API 에서 유일하게 행을 실제로 지우는 삭제다.
+ *
+ * `sys_code` 에는 `deleted` 컬럼이 없고, 폐기는 `active = false` 로 한다. 참조가 하나라도
+ * 있으면 22개 제약 중 하나가 거절하므로 대개 실패하고, 서버가 그 거절을 "비활성화하십시오" 라는
+ * 문장으로 바꿔서 돌려준다(NeotmsCodeManager.ts).
+ */
+export const deleteCode = (id: string) =>
+  neotmsApi<{ id: string }>(`/api/v0/admin/codes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/* -------------------------------------------------------------------------- */
+/* 직원·역할 — 사용자 관리                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 직원 전체. 역할 미배정(가입 요청) 행이 맨 위로 온다.
+ *
+ * 커서가 없다. `staff` 는 회사 직원이라 수십 행이고, 한 화면에 들어가는 목록에 페이지 처리를
+ * 붙이면 클라이언트가 다뤄야 할 상태만 늘어난다.
+ *
+ * 정렬이 기능이다 — 가입 요청을 알려 주는 알림 경로가 이 시스템에 없으므로(메일을 보내지
+ * 않는다), 새 동료가 무한정 기다리지 않게 하는 유일한 장치는 그 행이 이 목록의 첫 줄이라는
+ * 사실이다. 그래서 정렬은 서버가 하고 화면은 다시 정렬하지 않는다.
+ */
+export const fetchStaff = (signal?: AbortSignal) =>
+  neotmsApi<StaffListView>('/api/v0/admin/staff', { signal })
+
+/** 배정 가능한 역할. 드롭다운 하나를 채우는 용도다. */
+export const fetchRoles = (signal?: AbortSignal) =>
+  neotmsApi<RoleListView>('/api/v0/admin/roles', { signal })
+
+/**
+ * 역할·열람 범위·사용 여부를 쓴다. **이 앱에서 가장 위험한 호출이다.**
+ *
+ * `staff.role_id` 가 모든 권한의 출처이므로, 이 PATCH 에 도달할 수 있는 계정은 누구에게든
+ * 무엇이든 부여할 수 있다. 그래서 짝이 되는 POST 도 DELETE 도 없다 — 직원 행은 ETL 과 본인
+ * 가입으로만 생기고, 접근을 끝내는 방법은 삭제가 아니라 `active: false` 다.
+ *
+ * 서버는 호출자가 **자기 자신의** 역할을 회수하거나 자기를 비활성화하는 것을 409 로 거절한다.
+ * 그 거절을 되돌릴 화면에 스스로 접근할 수 없게 되기 때문이다.
+ */
+export const updateStaff = (id: string, input: StaffUpdateInput) =>
+  neotmsApi<StaffRow>(`/api/v0/admin/staff/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+  })
 
 /* -------------------------------------------------------------------------- */
 /* 고객사                                                                      */

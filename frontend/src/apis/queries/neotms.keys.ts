@@ -13,6 +13,25 @@
 export const neotmsKeys = {
   profile: ['profile'] as const,
 
+  /*
+   * 코드. 두 목록이 같은 접두사 아래 있는 것이 중요하다.
+   *
+   * 유지보수 화면에서 코드를 하나 고치면 그 화면의 목록(`codesAdmin`)만이 아니라 모든 폼이 쓰는
+   * 드롭다운 목록(`codesActive`)도 같이 낡는다. 접두사 하나를 무효화하면 둘 다 처리된다 —
+   * 반대로 둘을 따로 두면, 코드명을 고친 담당자에게는 바로 반영되고 옆자리 PM 의 드롭다운에는
+   * 옛 이름이 남는다.
+   */
+  codes: ['codes'] as const,
+  codesActive: ['codes', 'active'] as const,
+  codesAdmin: ['codes', 'admin'] as const,
+
+  /*
+   * 직원과 역할. 역할 목록은 직원 목록 아래가 아니라 따로다 — `sys_role` 은 직원을 고쳐도
+   * 변하지 않으므로, 역할 배정 한 번에 역할 목록까지 다시 읽을 이유가 없다.
+   */
+  staff: ['staff'] as const,
+  roles: ['roles'] as const,
+
   customers: ['customers'] as const,
   customerList: (query: unknown) => ['customers', 'list', query] as const,
   customer: (id: string) => ['customers', 'detail', id] as const,

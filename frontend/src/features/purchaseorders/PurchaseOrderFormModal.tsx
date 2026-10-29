@@ -4,19 +4,19 @@ import {
   useUpdatePurchaseOrder,
 } from '@/apis/queries/neotms.mutation'
 import {
+  CODE_DOMAIN,
   codeOptions,
   COIN_CODES,
   INVOICE_STATES,
   MONEY_STATES,
   PO_STATES,
-  UNIT_CODES,
-  WORK_CODES,
 } from '@/apis/neotms.codes'
 import type {
   PurchaseOrderInput,
   PurchaseOrderRow,
   PurchaseOrderUpdate,
 } from '@/apis/neotms.types'
+import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
@@ -306,19 +306,12 @@ export function PurchaseOrderFormModal({
           <label className={ui.label} htmlFor="po-work">
             작업 종류
           </label>
-          <select
+          <CodeSelect
             id="po-work"
-            className={ui.select}
+            domain={CODE_DOMAIN.WORK}
             value={form.poWorkCode}
-            onChange={(e) => set('poWorkCode', e.target.value)}
-          >
-            <option value="">선택 없음</option>
-            {codeOptions(WORK_CODES, form.poWorkCode).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => set('poWorkCode', v)}
+          />
         </div>
 
         <div className={ui.field}>
@@ -340,15 +333,23 @@ export function PurchaseOrderFormModal({
           </select>
         </div>
 
+        {/*
+         * 자유 입력이었다. `po_slang`·`po_elang` 도 `sys_code (code)` 참조이므로 작업 쪽과 같은
+         * 이유로 드롭다운이어야 한다(JobFormModal 의 같은 자리 주석 참고).
+         *
+         * 발주의 언어쌍은 보통 작업의 언어쌍과 같지만 자동으로 채우지 않는다 — 한 작업을 두
+         * 언어로 쪼개어 발주하는 경우가 있고, 그때 자동 입력된 값은 **맞아 보이기 때문에**
+         * 아무도 고치지 않는다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-slang">
             출발어
           </label>
-          <input
+          <CodeSelect
             id="po-slang"
-            className={ui.input}
+            domain={CODE_DOMAIN.LANG}
             value={form.poSlang}
-            onChange={(e) => set('poSlang', e.target.value)}
+            onChange={(v) => set('poSlang', v)}
           />
         </div>
 
@@ -356,11 +357,11 @@ export function PurchaseOrderFormModal({
           <label className={ui.label} htmlFor="po-elang">
             도착어
           </label>
-          <input
+          <CodeSelect
             id="po-elang"
-            className={ui.input}
+            domain={CODE_DOMAIN.LANG}
             value={form.poElang}
-            onChange={(e) => set('poElang', e.target.value)}
+            onChange={(v) => set('poElang', v)}
           />
         </div>
 
@@ -376,19 +377,14 @@ export function PurchaseOrderFormModal({
               value={form.poVolume}
               onChange={(e) => set('poVolume', e.target.value)}
             />
-            <select
-              className={ui.select}
-              aria-label="단위"
+            <CodeSelect
+              ariaLabel="단위"
+              domain={CODE_DOMAIN.UNIT}
               value={form.poUnitCode}
-              onChange={(e) => set('poUnitCode', e.target.value)}
-            >
-              <option value="">단위</option>
-              {codeOptions(UNIT_CODES, form.poUnitCode).map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => set('poUnitCode', v)}
+              placeholder="단위"
+              silent
+            />
           </div>
         </div>
 

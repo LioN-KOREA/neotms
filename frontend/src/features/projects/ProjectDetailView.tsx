@@ -11,7 +11,9 @@ import { DETAIL_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { mayDo } from '@/shared/permissions'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, InfoNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
+import { Icon } from '@/shared/ui/Icon'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
+import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, formatDateTime, isOverdue } from '@/shared/utils/format'
 import { decimalSubtract, decimalSum } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
@@ -100,9 +102,14 @@ export function ProjectDetailView() {
   if (projectQuery.error || !project) {
     return (
       <div className={ui.page}>
-        <div className={ui.pageHead}>
-          <h1 className={ui.pageTitle}>프로젝트를 불러올 수 없습니다</h1>
-        </div>
+        {/*
+         * 여기는 제목을 남긴다.
+         *
+         * 다른 화면의 제목을 없앤 근거는 "경로 표시줄이 이미 같은 말을 한다" 였다. 이 분기는
+         * 그 경로 표시줄이 '업무 › 프로젝트' 라고 적고 있는데 화면에는 아무것도 없는 상태이고,
+         * 사용자가 알아야 하는 것은 메뉴 이름이 아니라 **방금 누른 링크가 실패했다**는 사실이다.
+         */}
+        <h1 className={ui.pageTitle}>프로젝트를 불러올 수 없습니다</h1>
         <ErrorNotice error={projectQuery.error} />
         <p className={ui.pageHint}>
           <Link className={ui.btnLink} to="/projects">
@@ -118,21 +125,35 @@ export function ProjectDetailView() {
 
   return (
     <div className={ui.page}>
-      <div className={ui.pageHead}>
-        <div>
-          <p className={ui.pageHint}>
-            <Link className={ui.btnLink} to="/projects">
-              ← 프로젝트 목록
-            </Link>
-          </p>
+      {/*
+       * 여기도 제목을 남긴다 — 목록 화면들과 달리.
+       *
+       * 목록에서 제목을 없앤 근거는 '프로젝트' 라는 **메뉴 이름**이 좌측 패널과 경로 표시줄에
+       * 이미 두 번 적혀 있다는 것이었다. 이 화면의 제목은 메뉴 이름이 아니라 **이 한 건의
+       * 이름**이고, 그건 셸의 어디에도 없다. 담당자들이 주소를 서로 보내는 화면이므로(파일 머리
+       * 주석) 받은 사람이 가장 먼저 확인하는 것이 이 줄이다.
+       *
+       * 다만 크기는 15px 다(`.pageTitle`). 20px 짜리 큰 글자를 쓰지 않는 이유는 아래 표가
+       * 12px 이고, 그 사이에 20px 이 끼면 한 화면 안에서 글자 크기가 세 단으로 뛰기 때문이다.
+       */}
+      <div className={ui.pageBar}>
+        <div className={ui.recordHead}>
+          <Link className={ui.btnLink} to="/projects">
+            <Icon name="chevronLeft" size={11} />
+            프로젝트 목록
+          </Link>
           <h1 className={ui.pageTitle}>{project.prjName || '(이름 없음)'}</h1>
-          <p className={ui.pageHint}>
-            <span className={ui.cellMono}>{project.prjCode}</span>
-            {project.cusCodeName ? ` · ${project.cusCodeName}` : ''}
-          </p>
+          <span className={ui.cellMono}>{project.prjCode}</span>
+          {project.cusCodeName ? <span className={ui.hint}>{project.cusCodeName}</span> : null}
+          {/* 상태 세 개를 제목 줄에 붙인다. 아래 '프로젝트 정보' 카드에도 같은 값이 있지만,
+              이 화면에서 가장 먼저 묻는 질문이 "이거 지금 어디까지 왔나" 다. */}
+          <StatusChip value={project.prjState} />
+          <StatusChip value={project.prjInvoiceState} />
+          <StatusChip value={project.prjMoneyState} />
         </div>
         {mayUpdateProject ? (
           <button type="button" className={ui.btn} onClick={() => setEditingProject(true)}>
+            <Icon name="pencil" size={13} />
             프로젝트 수정
           </button>
         ) : null}
@@ -193,20 +214,27 @@ export function ProjectDetailView() {
         </div>
         <div className={ui.cardBody}>
           <div className={ui.detailGrid}>
+            {/* 세 상태는 위 제목 줄에도 칩으로 서 있다. 여기 한 번 더 두는 이유는 이 격자가
+                '이 프로젝트의 모든 필드' 를 훑는 자리이고, 그 목록에서 상태만 빠지면 "여기
+                없다 = 값이 없다" 로 읽히기 때문이다. */}
             <div className={ui.detailItem}>
               <span className={ui.detailLabel}>진행 상태</span>
-              <span className={ui.detailValue}>{project.prjState || '-'}</span>
+              <span className={ui.detailValue}>
+                <StatusChip value={project.prjState} />
+              </span>
             </div>
             <div className={ui.detailItem}>
               <span className={ui.detailLabel}>세금계산서</span>
               <span className={ui.detailValue}>
-                {project.prjInvoiceState || '-'}
-                {project.invCode ? ` (${project.invCode})` : ''}
+                <StatusChip value={project.prjInvoiceState} />
+                {project.invCode ? ` ${project.invCode}` : ''}
               </span>
             </div>
             <div className={ui.detailItem}>
               <span className={ui.detailLabel}>입금</span>
-              <span className={ui.detailValue}>{project.prjMoneyState || '-'}</span>
+              <span className={ui.detailValue}>
+                <StatusChip value={project.prjMoneyState} />
+              </span>
             </div>
             <div className={ui.detailItem}>
               <span className={ui.detailLabel}>통화</span>
@@ -344,11 +372,7 @@ export function ProjectDetailView() {
                           {formatDate(job.jobEday)}
                         </td>
                         <td>
-                          <span
-                            className={`${ui.badge} ${job.jobState === '진행' ? ui.badgePrimary : ''}`}
-                          >
-                            {job.jobState || '-'}
-                          </span>
+                          <StatusChip value={job.jobState} />
                         </td>
                         <td>
                           <div className={ui.rowActions}>
@@ -455,25 +479,14 @@ export function ProjectDetailView() {
                       >
                         {formatDate(po.poEday)}
                       </td>
+                      {/* 색을 고르는 삼항 연산자 세 개가 여기 있었다. 같은 '정산완료' 가 이
+                          화면과 발주 목록에서 다른 색으로 나오던 원인이다 — StatusChip.tsx 의
+                          `TONES` 표가 그 판단을 들고 있다. */}
                       <td>
-                        <span
-                          className={`${ui.badge} ${po.poState === '진행' ? ui.badgePrimary : ''}`}
-                        >
-                          {po.poState || '-'}
-                        </span>
+                        <StatusChip value={po.poState} />
                       </td>
                       <td>
-                        <span
-                          className={`${ui.badge} ${
-                            po.poMoneyState === '정산완료'
-                              ? ui.badgeSuccess
-                              : po.poMoneyState === '미정산'
-                                ? ui.badgeWarn
-                                : ''
-                          }`}
-                        >
-                          {po.poMoneyState || '-'}
-                        </span>
+                        <StatusChip value={po.poMoneyState} />
                       </td>
                       <td>
                         <div className={ui.rowActions}>

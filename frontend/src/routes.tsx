@@ -8,10 +8,12 @@ import { CallbackView } from '@/features/auth/CallbackView'
 import { LogoutView } from '@/features/auth/LogoutView'
 import { CustomersView } from '@/features/customers/CustomersView'
 import { JobsView } from '@/features/jobs/JobsView'
+import { MaintenanceView } from '@/features/maintenance/MaintenanceView'
 import { ProjectDetailView } from '@/features/projects/ProjectDetailView'
 import { ProjectsView } from '@/features/projects/ProjectsView'
 import { PurchaseOrdersView } from '@/features/purchaseorders/PurchaseOrdersView'
 import { ReportsView } from '@/features/reports/ReportsView'
+import { StaffView } from '@/features/staff/StaffView'
 import { TranslatorsView } from '@/features/translators/TranslatorsView'
 import ui from '@/shared/ui/ui.module.css'
 
@@ -54,9 +56,14 @@ function RequireMenu({ menuId, children }: { menuId: NeotmsMenuIdValue; children
   if (!mayDo(profile, menuId, 'read')) {
     return (
       <div className={ui.page}>
-        <div className={ui.pageHead}>
-          <h1 className={ui.pageTitle}>접근 권한이 없습니다</h1>
-        </div>
+        {/*
+         * 목록 화면들과 달리 여기는 제목을 남긴다.
+         *
+         * 제목을 없앤 근거는 "경로 표시줄이 같은 말을 한다" 였다. 이 화면에서 경로 표시줄은
+         * 사용자가 열려고 한 메뉴 이름을 적고 있고, 정작 알려야 하는 것 — **그 메뉴를 열
+         * 권한이 없다** — 은 셸의 어디에도 없다. (ui.module.css 의 `.pageTitle` 주석)
+         */}
+        <h1 className={ui.pageTitle}>접근 권한이 없습니다</h1>
         <div className={`${ui.alert} ${ui.alertInfo}`} role="alert">
           이 메뉴에 대한 조회 권한이 없습니다. 필요하다면 시스템 담당자에게 요청해 주세요.
         </div>
@@ -86,9 +93,9 @@ function NotFoundView() {
   const { pathname } = useLocation()
   return (
     <div className={ui.page}>
-      <div className={ui.pageHead}>
-        <h1 className={ui.pageTitle}>페이지를 찾을 수 없습니다</h1>
-      </div>
+      {/* 위 403 과 같은 이유로 제목을 남긴다 — 이 주소에는 메뉴가 없으므로 경로 표시줄도
+          아무것도 말하지 못한다. */}
+      <h1 className={ui.pageTitle}>페이지를 찾을 수 없습니다</h1>
       <p className={ui.pageHint}>
         <code>{pathname}</code> 에 해당하는 화면이 없습니다. 왼쪽 메뉴에서 선택해 주세요.
       </p>
@@ -163,6 +170,33 @@ export const neotmsRouter = createBrowserRouter([
         element: (
           <RequireMenu menuId={NeotmsMenuId.REPORT}>
             <ReportsView />
+          </RequireMenu>
+        ),
+      },
+      {
+        /*
+         * 유지보수. `RequireMenu` 가 막는 것은 안내 문구일 뿐이고(이 파일 위쪽 주석), 실제
+         * 차단은 서버의 라우트 표가 한다 — `/api/v0/admin/codes` 네 개가 MAINTENANCE 메뉴에
+         * 걸려 있다. 드롭다운을 읽는 `GET /api/v0/codes` 는 거기 없다: 모든 직원이 읽는다.
+         */
+        path: 'maintenance',
+        element: (
+          <RequireMenu menuId={NeotmsMenuId.MAINTENANCE}>
+            <MaintenanceView />
+          </RequireMenu>
+        ),
+      },
+      {
+        /*
+         * 사용자 관리. 이 화면의 쓰기만이 **다른 모든 메뉴의 권한을 바꾼다** —
+         * `PATCH /api/v0/admin/staff/:id` 가 `staff.role_id` 를 쓰고, 앱의 모든 권한이 그
+         * 컬럼에서 나온다. 그래서 서버 라우트 표에서 세 엔드포인트가 모두 STAFF 메뉴에 걸려
+         * 있고, 등록(POST)과 삭제(DELETE)는 아예 존재하지 않는다.
+         */
+        path: 'staff',
+        element: (
+          <RequireMenu menuId={NeotmsMenuId.STAFF}>
+            <StaffView />
           </RequireMenu>
         ),
       },

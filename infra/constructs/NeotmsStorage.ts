@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: MIT
 //
-// Buckets, the session table, and the key the report exports are encrypted with.
+// Buckets and the session table.
 //
 // Three stores, each with a different reason to exist:
 //
 //   * Attachments - the quotes, POs, delivered translations and reference files staff upload against
 //     a job. The legacy system holds roughly 1.5-2GB of these in total (Q2), so S3 Standard costs
 //     cents and tiering would cost more in transition requests than it saved.
-//   * Exports - where `aws_s3.query_export_to_s3` writes a report too large for the Data API's 1 MiB
-//     result limit, and where the XLSX renderer picks it up. Short-lived by design.
+//   * Exports - where the FUNCTION spills a report too large for Lambda's 6MB response payload, and
+//     where the presigned download points. Short-lived by design.
 //   * Sessions - DynamoDB, not the database. See the table below for why.
+//
+// Gone from the Aurora variant: the SSE-KMS `exportKey`. It existed only because
+// `aws_s3.query_export_to_s3` refuses to write to a bucket that is not SSE-KMS, and that function
+// existed only because the RDS Data API capped a result set at 1 MiB. Over a plain socket the
+// database is not involved in an export at all, so the bucket takes SSE-S3 like the others and the
+// key, its alias, its rotation and the two grants that referenced it are all simply deleted.
 
 import * as cdk from "aws-cdk-lib/core";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
-import * as kms from "aws-cdk-lib/aws-kms";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { NeotmsStageConfig } from "../config/NeotmsConfig.js";
@@ -25,7 +30,6 @@ export interface NeotmsStorageProps {
 export class NeotmsStorage extends Construct {
   public readonly attachmentBucket: s3.Bucket;
   public readonly exportBucket: s3.Bucket;
-  public readonly exportKey: kms.Key;
   public readonly sessionTable: dynamodb.TableV2;
   public readonly logArchiveBucket: s3.Bucket;
 
@@ -97,33 +101,21 @@ export class NeotmsStorage extends Construct {
     });
 
     /*
-     * The export key.
-     *
-     * `aws_s3.query_export_to_s3` requires the destination bucket to be SSE-KMS. With SSE-S3 the
-     * export fails, and the failure surfaces as a generic S3 error from inside PostgreSQL that says
-     * nothing about encryption - which is why this is a dedicated key with a comment rather than an
-     * inherited default.
-     */
-    this.exportKey = new kms.Key(this, "ExportKey", {
-      alias: `${config.resourcePrefix}-exports`,
-      description: "SSE-KMS key for aws_s3.query_export_to_s3 report exports",
-      enableKeyRotation: true,
-      removalPolicy: retain ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-    });
-
-    /*
      * Exports.
      *
-     * A staging area, not a record. The cluster writes the CSV here, the renderer turns it into the
-     * XLSX the managers actually asked for (Q25 - hand them a raw CSV and they will ask for it in
-     * Excel), the browser downloads it, and seven days later it is gone. Keeping them longer would
-     * mean keeping stale financial snapshots nobody has a reason to trust.
+     * A staging area, not a record. The FUNCTION renders the XLSX the managers actually asked for
+     * (Q25 - hand them a raw CSV and they will ask for it in Excel); if it fits in the 6MB response
+     * payload it goes straight back, and if it does not it lands here and the caller is handed a
+     * presigned URL. Seven days later it is gone. Keeping them longer would mean keeping stale
+     * financial snapshots nobody has a reason to trust.
+     *
+     * SSE-S3, not SSE-KMS. On the Aurora variant this bucket had to be SSE-KMS because
+     * `aws_s3.query_export_to_s3` refuses anything else; nothing writes here from inside PostgreSQL
+     * now, so the managed key is one less resource, one less grant and one less $1/month.
      */
     this.exportBucket = new s3.Bucket(this, "ExportBucket", {
       bucketName: `${config.resourcePrefix}-exports-${cdk.Stack.of(this).account}`,
-      encryption: s3.BucketEncryption.KMS,
-      encryptionKey: this.exportKey,
-      bucketKeyEnabled: true,
+      encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       lifecycleRules: [
@@ -168,10 +160,13 @@ export class NeotmsStorage extends Construct {
     /*
      * Sessions.
      *
-     * In DynamoDB rather than in the PostgreSQL cluster, for one reason: a session read happens on
-     * every single authenticated request, and if it hit the database then the cluster could never be
-     * allowed to pause. That would turn the off-hours ACU floor from 0 back to 0.5 and cost roughly
-     * $48/month - which is half the entire monthly budget, spent on checking cookies.
+     * In DynamoDB rather than in PostgreSQL. On the Aurora variant the reason was the ACU floor: a
+     * session read on every authenticated request would have kept the cluster from ever pausing, at
+     * roughly $48/month to check cookies. Supabase bills flat compute, so that argument is gone and
+     * a different one carries the decision - CONNECTIONS. A cookie check that went to Postgres would
+     * take a Supavisor server connection out of the function's budget of 40 (20 reserved executions
+     * x pool max 2) on every request, including the ones that end in a 401 and read nothing. See
+     * NeotmsSession.dbops.ts.
      *
      * DynamoDB on-demand for a few dozen staff is cents, TTL expiry is free, and a session is
      * exactly the key-value lookup DynamoDB is good at. The refresh-lease condition expression (see

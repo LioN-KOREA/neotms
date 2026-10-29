@@ -20,7 +20,7 @@
 //     column is written as NULL. That distinction is the whole reason a PATCH can clear a due date
 //     without also clearing every other field the client did not mention.
 
-import { param, type SqlParamKind, type SqlParameter } from "../utils/RdsDataUtils.js";
+import { param, type SqlParamKind, type SqlParameter } from "../utils/PostgresUtils.js";
 
 /**
  * Who is writing, and from where. Stamped onto `created_by` / `created_ip`.

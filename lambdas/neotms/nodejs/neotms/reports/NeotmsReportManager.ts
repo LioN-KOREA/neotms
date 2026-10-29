@@ -8,7 +8,7 @@
 // enforced: an unbounded report is the legacy system's slowest screen, and the rollup only helps
 // when the range is bounded.
 
-import { rdsQuery } from "../../utils/RdsDataUtils.js";
+import { pgQuery } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { ok, parseBody, runDb } from "../NeotmsResult.js";
@@ -71,9 +71,9 @@ export async function runReport(
   }
 
   return runDb("run report", async () => {
-    const lines = (await rdsQuery(ReportBreakdownOps(caller, query))).data;
-    const totals = (await rdsQuery(ReportTotalsOps(caller, query))).data;
-    const computedAt = (await rdsQuery(ReportFreshnessOps())).data;
+    const lines = (await pgQuery(ReportBreakdownOps(caller, query))).data;
+    const totals = (await pgQuery(ReportTotalsOps(caller, query))).data;
+    const computedAt = (await pgQuery(ReportFreshnessOps())).data;
     return ok({
       query,
       totals,
@@ -106,7 +106,7 @@ export async function getWorkload(
     return { status: 400, body: "The range must be given as two YYYY-MM-DD dates" };
   }
   return runDb("workload counts", async () => {
-    const counts = (await rdsQuery(WorkloadCountsOps(caller, from, to))).data;
+    const counts = (await pgQuery(WorkloadCountsOps(caller, from, to))).data;
     return ok(counts);
   });
 }

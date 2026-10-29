@@ -1,15 +1,26 @@
 /**
  * 날짜·시각 표시.
  *
- * ## timestamptz 가 'Z' 없이 온다
+ * ## timestamptz 가 ES 표준 형태로 오지 않는다
  *
- * RDS Data API 는 `timestamptz` 를 UTC 로 변환해서 주지만 **표준시 표시자를 붙이지 않는다**:
- * `2026-10-27 03:34:56.789` 같은 문자열이다. 브라우저의 `new Date(...)` 는 그런 문자열을
- * ES 표준에 따라 **로컬 시각**으로 해석한다. 그 결과 한국에서 보면 모든 시각이 9시간 앞으로
- * 밀리고, 아무 오류도 나지 않는다 — 어제 만든 주문이 내일 만들어진 것으로 보인다.
+ * 서버는 `timestamptz` 를 PostgreSQL 의 텍스트 표현 그대로 내려준다(`PostgresUtils` 의
+ * `registerTypeParsers` 가 날짜·시각 파서를 전부 항등으로 고정해 둔 결과다). 그 표현은
+ * ES 표준의 Date Time String Format 과 두 군데가 다르다:
  *
- * 그래서 공백을 'T' 로 바꾸고 'Z' 를 직접 붙인다. 이미 오프셋이 있는 문자열(ISO 형태)은
- * 건드리지 않는다.
+ *   * 날짜와 시각 사이가 'T' 가 아니라 **공백**이다.
+ *   * UTC 오프셋이 분 단위가 0 이면 **시 단위만** 붙는다 — `+00:00` 이 아니라 `+00` 이고,
+ *     세션 시간대가 KST 라면 `+09` 다. 분이 0 이 아닌 시간대에서만 `+05:45` 형태가 된다.
+ *
+ * 두 번째가 조용한 함정이다. `new Date('...+00')` 은 표준 형태가 아니므로 파싱 결과가 엔진
+ * 구현에 달린다. V8 은 받아 주지만 받아 준다는 보장이 없고, 'Z' 를 덧붙이면(`+00Z`) 어느
+ * 엔진에서도 Invalid Date 다 — 화면의 모든 시각이 '-' 로 보인다.
+ *
+ * 그래서 공백을 'T' 로 바꾸고, 오프셋을 `+HH:MM` 으로 **채워서** 정규화한다. 오프셋이 아예
+ * 없는 문자열(`timestamp without time zone`)만 UTC 로 보고 'Z' 를 붙인다.
+ *
+ * (ASv2 변종에서는 Data API 가 `timestamptz` 를 UTC 로 변환해 주면서 표시자를 **아무것도**
+ * 붙이지 않았기 때문에, 하는 일이 'Z' 를 붙이는 것 하나였다. 그 코드를 그대로 두면 지금은
+ * 반대 방향으로 깨진다.)
  *
  * ## 표시는 항상 KST 고정이다
  *
@@ -34,6 +45,34 @@ const DATE_KST = new Intl.DateTimeFormat('ko-KR', {
   month: '2-digit',
   day: '2-digit',
 })
+
+/*
+ * 끝에 붙은 UTC 오프셋. PostgreSQL 은 분·초가 0 이면 그만큼 생략하므로 네 가지가 다 온다:
+ * `+00`, `+0900`, `+09:00`, `+05:21:10`(아주 오래된 날짜의 LMT).
+ *
+ * 날짜 부분을 떼어낸 뒤에만 쓴다. `2026-10-27` 에 그대로 대면 끝의 `-27` 이 오프셋으로 읽힌다.
+ */
+const TRAILING_OFFSET = /([+-])(\d{2}):?(\d{2})?:?(\d{2})?$/
+
+/**
+ * PostgreSQL 의 타임스탬프 텍스트를 `new Date` 가 표준으로 해석할 수 있는 형태로 고친다.
+ *
+ * 오프셋이 있으면 `+HH:MM` 으로 채우고(초 단위는 표준에 없으므로 버린다), 없으면 UTC 로 보고
+ * 'Z' 를 붙인다. 'Z' 로 끝나는 문자열은 이미 표준이므로 공백만 치환한다.
+ */
+function normalizeTimestamp(value: string): string {
+  const withT = value.replace(' ', 'T')
+  if (/[Zz]$/.test(withT)) return withT
+
+  // 'YYYY-MM-DD' 뒤쪽에서만 오프셋을 찾는다.
+  const head = withT.slice(0, 10)
+  const tail = withT.slice(10)
+  const m = TRAILING_OFFSET.exec(tail)
+  if (!m) return `${withT}Z`
+
+  const [, sign, hours, minutes] = m
+  return `${head}${tail.slice(0, m.index)}${sign}${hours}:${minutes ?? '00'}`
+}
 
 /**
  * 백엔드가 준 타임스탬프 문자열을 Date 로 바꾼다. 해석할 수 없으면 null.
@@ -60,11 +99,7 @@ function toDate(value: string | null | undefined): Date | null {
    */
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
 
-  // 이미 오프셋이나 'Z' 가 있으면 그대로 믿는다.
-  const hasZone = dateOnly || /(?:[Zz]|[+-]\d{2}:?\d{2})$/.test(trimmed)
-  const normalized = hasZone ? trimmed.replace(' ', 'T') : `${trimmed.replace(' ', 'T')}Z`
-
-  const d = new Date(normalized)
+  const d = new Date(dateOnly ? trimmed : normalizeTimestamp(trimmed))
   if (Number.isNaN(d.getTime())) return null
   // 레거시 쓰레기 값 방어. 1990년 이전 날짜는 이 시스템에 존재할 수 없다.
   if (d.getUTCFullYear() < 1990) return null

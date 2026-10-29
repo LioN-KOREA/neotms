@@ -35,6 +35,21 @@ export const NeotmsMenuId = {
   PURCHASE_ORDER: 'PURCHASE_ORDER',
   TRANSLATOR: 'TRANSLATOR',
   REPORT: 'REPORT',
+  /**
+   * 유지보수 — 코드 테이블(`sys_code`) 관리.
+   *
+   * 드롭다운을 **읽는** 권한과 코드 목록을 **정하는** 권한을 나눈 것이다. 읽기는 모든 직원에게
+   * 열려 있고(`GET /api/v0/codes`), 이 메뉴는 분야 분류 체계를 누가 결정하는지에 대한 것이다.
+   */
+  MAINTENANCE: 'MAINTENANCE',
+  /**
+   * 사용자 관리 — 직원 목록과 역할 배정.
+   *
+   * 이 메뉴의 쓰기만이 **다른 모든 메뉴의 권한을 바꾼다**(`staff.role_id`). 그래서 이것도 그냥
+   * 하나의 메뉴다 — "슈퍼유저면 된다" 를 코드에 박아 두면 그 권한은 아무 표에도 나타나지 않고,
+   * 회수할 방법도 감사할 방법도 없다.
+   */
+  STAFF: 'STAFF',
 } as const
 
 export type NeotmsMenuIdValue = (typeof NeotmsMenuId)[keyof typeof NeotmsMenuId]
@@ -42,8 +57,8 @@ export type NeotmsMenuIdValue = (typeof NeotmsMenuId)[keyof typeof NeotmsMenuId]
 /**
  * 목록 한 페이지의 기본 건수.
  *
- * 서버의 상한은 200 이다(`NEOTMS_PAGE_SIZE_MAX`). 상한까지 쓰지 않는 이유는 ACU 상한이 4인
- * 클러스터에서 한 번의 응답 시간이 길어지는 것보다 '더 보기' 를 한 번 더 누르는 것이 낫기
+ * 서버의 상한은 200 이다(`NEOTMS_PAGE_SIZE_MAX`). 상한까지 쓰지 않는 이유는 용량 고정인 소형
+ * DB 인스턴스에서 한 번의 응답 시간이 길어지는 것보다 '더 보기' 를 한 번 더 누르는 것이 낫기
  * 때문이다 — 담당자는 보통 첫 화면에서 찾던 행을 찾는다.
  */
 export const LIST_PAGE_SIZE = 50

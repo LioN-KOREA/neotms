@@ -6,10 +6,11 @@
 // network call.
 //
 // NEOTMS uses DynamoDB for exactly one thing: session records. Everything with a foreign key lives
-// in Aurora (see RdsDataUtils). Sessions are the exception on purpose - a session read happens on
-// every authenticated request, and if that read hit the cluster then the cluster could never pause.
-// At ~0.5 ACU around the clock that is roughly $48/month to check cookies, about half the entire
-// budget. On-demand DynamoDB for the same traffic is cents.
+// in Postgres (see PostgresUtils). Sessions are the exception on purpose: a session read happens on
+// every authenticated request, so serving it from Postgres would take a Supavisor server connection
+// out of the function's small budget just to check a cookie - including on requests that end in a
+// 401 and never read business data. On-demand DynamoDB is a separate quota and costs cents at this
+// traffic. The reasoning is spelled out in NeotmsSession.dbops.ts.
 //
 // This file is deliberately narrower than the LPX original: no Query, no BatchGet, no sharding, and
 // an item converter that handles only strings, numbers, booleans and null. Sessions need nothing

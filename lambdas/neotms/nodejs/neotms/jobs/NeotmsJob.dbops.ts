@@ -25,7 +25,7 @@ import {
   type SortTarget,
   type SqlOps,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { JOB_CODE, codeExpression } from "../NeotmsCodes.js";
 import {
@@ -184,7 +184,7 @@ export const JOB_SORTS = {
 
 export type JobSortKey = keyof typeof JOB_SORTS;
 
-/** `j.job_name` and `p.prj_name` are bigm-indexed; the code columns are exact-match helpers. */
+/** `j.job_name` and `p.prj_name` carry PGroonga indexes; the code columns are exact-match helpers. */
 const JOB_SEARCH_COLUMNS = [
   "j.job_name",
   "j.job_code",

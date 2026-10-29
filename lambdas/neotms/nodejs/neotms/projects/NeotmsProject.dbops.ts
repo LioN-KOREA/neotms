@@ -31,7 +31,7 @@ import {
   type SortTarget,
   type SqlOps,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { PROJECT_CODE, codeExpression } from "../NeotmsCodes.js";
 import {
@@ -172,11 +172,12 @@ export const PROJECT_SORTS = {
 export type ProjectSortKey = keyof typeof PROJECT_SORTS;
 
 /**
- * Columns the free-text search covers. Every one of them has a pg_bigm index.
+ * Columns the free-text search covers. Every one of them has a PGroonga index (003_indexes.sql).
  *
  * The denormalised name columns earn their keep here: searching "삼성" finds the project through
  * `cus_code_name` without a join to `customer`, and searching a PM's name finds everything they are
- * on. That is the actual reason the copies exist - a join cannot be bigm-indexed into.
+ * on. That is the actual reason the copies exist - an index serves a column, not a join, so a
+ * search that had to reach `customer.cus_name` through `prj_cus_id` could not use one at all.
  */
 const PROJECT_SEARCH_COLUMNS = [
   "p.prj_name",

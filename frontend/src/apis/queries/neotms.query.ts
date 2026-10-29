@@ -1,5 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import {
+  fetchAdminCodes,
+  fetchCodes,
   fetchCustomer,
   fetchCustomers,
   fetchJob,
@@ -10,6 +12,8 @@ import {
   fetchPurchaseOrder,
   fetchPurchaseOrders,
   fetchReportSummary,
+  fetchRoles,
+  fetchStaff,
   fetchTranslator,
   fetchTranslators,
   fetchWorkload,
@@ -18,6 +22,7 @@ import {
   type PurchaseOrderListQuery,
   type TranslatorListQuery,
 } from '../neotms.api'
+import { codeOptions, codesToOptions, type CodeDomainId, type CodeOption } from '../neotms.codes'
 import type { ListPage, ListQuery, ReportQuery } from '../neotms.types'
 import { neotmsKeys } from './neotms.keys'
 
@@ -27,13 +32,14 @@ import { neotmsKeys } from './neotms.keys'
  * ## 목록은 전부 useInfiniteQuery 다
  *
  * 서버가 키셋 커서를 주고 전체 건수를 주지 않으므로(neotms.types.ts 의 `ListPage` 주석) 페이지
- * 번호를 만들 방법이 없다. 번호를 만들려면 `COUNT(*)` 가 필요하고, 그 쿼리는 ACU 상한이 4인
- * 클러스터에서 목록 쿼리보다 비싸다. '더 보기' 가 설계상의 결론이지 UI 취향이 아니다.
+ * 번호를 만들 방법이 없다. 번호를 만들려면 `COUNT(*)` 가 필요하고, 그 쿼리는 용량 고정인
+ * 소형 DB 인스턴스에서 목록 쿼리보다 비싸다. '더 보기' 가 설계상의 결론이지 UI 취향이 아니다.
  *
  * ## staleTime 이 2분인 이유
  *
- * 화면을 오갈 때마다 다시 읽으면 Data API 호출이 그만큼 늘고, 이 시스템의 비용은 사실상 그
- * 호출 수다. 반대로 너무 길면 옆자리 PM 이 바꾼 납기가 보이지 않는다. 2분은 "회의 중에 한 번
+ * 화면을 오갈 때마다 다시 읽으면 람다 호출과 DB 커넥션을 그만큼 더 쓴다 — 람다는 호출 수로
+ * 과금되고, DB 는 동시에 열 수 있는 커넥션이 정해져 있어서 둘 다 요청 수가 그대로 한계다.
+ * 반대로 너무 길면 옆자리 PM 이 바꾼 납기가 보이지 않는다. 2분은 "회의 중에 한 번
  * 새로고침되는" 정도이고, 쓰기 직후에는 무효화가 즉시 반영하므로 자기가 한 변경이 늦게 보이는
  * 일은 없다.
  */
@@ -56,6 +62,103 @@ export function useProfile(enabled = true) {
     enabled,
     staleTime: 1000 * 60 * 10,
   })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 코드 (sys_code)                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 드롭다운용 코드 목록.
+ *
+ * `staleTime` 이 30분이다 — 이 앱에서 가장 긴 값이고, 가장 자주 읽히는 목록이기 때문이다.
+ * 고객사·프로젝트·작업·발주·번역가 폼이 전부 이것을 필요로 하므로, 짧게 잡으면 화면을 오갈
+ * 때마다 람다 호출과 DB 커넥션이 하나씩 더 나간다. 반대로 길어도 위험하지 않은 유일한 목록이기도
+ * 하다: 분야 목록이 30분에 한 번 늦게 갱신되는 것은 아무 일도 일으키지 않고, 유지보수 화면에서
+ * **직접** 코드를 고친 담당자에게는 쓰기 훅의 무효화가 즉시 반영한다(neotms.mutation.ts).
+ */
+export function useCodes(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.codesActive,
+    queryFn: ({ signal }) => fetchCodes(signal),
+    enabled,
+    staleTime: 1000 * 60 * 30,
+  })
+}
+
+/**
+ * 유지보수 화면용 목록(비활성 포함).
+ *
+ * 짧게 잡는다. 이 화면을 보는 사람은 방금 무언가를 고치려고 들어온 사람이고, 목록이 낡아 있으면
+ * 옆자리에서 이미 추가한 코드를 한 번 더 추가하려다 23505 로 거절당한다.
+ */
+export function useAdminCodes(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.codesAdmin,
+    queryFn: ({ signal }) => fetchAdminCodes(signal),
+    enabled,
+    staleTime: DETAIL_STALE_MS,
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 직원·역할 — 사용자 관리                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 직원 목록.
+ *
+ * `staleTime` 이 짧다(상세와 같은 30초). 이 화면의 목적이 가입 요청을 **발견하는 것**이기
+ * 때문이다 — 알림이 없는 시스템에서 관리자가 요청을 보는 경로는 이 목록 한 곳뿐이고, 그 목록이
+ * 2분 동안 낡아 있으면 방금 가입한 동료가 그만큼 더 기다린다.
+ */
+export function useStaff(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.staff,
+    queryFn: ({ signal }) => fetchStaff(signal),
+    enabled,
+    staleTime: DETAIL_STALE_MS,
+  })
+}
+
+/**
+ * 배정 가능한 역할.
+ *
+ * 길게 잡는다. `sys_role` 은 역할을 새로 만들 때만 바뀌고, 그건 이 앱에 화면이 없는 작업이다
+ * (SQL 로 한다) — 즉 앱을 쓰는 동안에는 사실상 바뀌지 않는 목록이다.
+ */
+export function useRoles(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.roles,
+    queryFn: ({ signal }) => fetchRoles(signal),
+    enabled,
+    staleTime: 1000 * 60 * 30,
+  })
+}
+
+/**
+ * 한 도메인의 선택지와, 그 목록이 비어 있는지.
+ *
+ * 폼이 쓰는 형태. `current` 를 받아야 하는 이유가 중요하다 — `<select>` 에 어떤 option 과도
+ * 맞지 않는 value 를 주면 브라우저는 **첫 번째 option 을 선택된 것으로 표시한다.** 그러면
+ * 담당자가 번역가 행을 열어 전화번호만 고치고 저장하는 순간, 레거시에서 넘어온 분야값이
+ * 목록의 첫 항목으로 조용히 바뀐다. `codeOptions` 가 현재 값을 '등록되지 않은 값' 으로 끼워
+ * 넣어 그것을 막는다.
+ *
+ * `isEmpty` 를 같이 돌려주는 것은 화면이 빈 드롭다운을 **설명할** 수 있게 하기 위해서다. 설명이
+ * 없으면 고를 것이 없는 드롭다운은 고장난 화면으로 읽힌다.
+ */
+export function useCodeOptions(
+  domain: CodeDomainId,
+  current?: string | null,
+): { options: readonly CodeOption[]; isEmpty: boolean; isLoading: boolean } {
+  const codesQuery = useCodes()
+  const fromServer = codesToOptions(codesQuery.data?.items, domain)
+  return {
+    options: codeOptions(fromServer, current),
+    isEmpty: fromServer.length === 0,
+    isLoading: codesQuery.isLoading,
+  }
 }
 
 /* -------------------------------------------------------------------------- */

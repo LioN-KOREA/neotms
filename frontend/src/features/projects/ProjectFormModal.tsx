@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useCreateProject, useUpdateProject } from '@/apis/queries/neotms.mutation'
 import {
+  CODE_DOMAIN,
   codeOptions,
   COIN_CODES,
   INVOICE_STATES,
@@ -8,6 +9,7 @@ import {
   PROJECT_STATES,
 } from '@/apis/neotms.codes'
 import type { ProjectInput, ProjectRow } from '@/apis/neotms.types'
+import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
@@ -303,15 +305,21 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
           <span className={ui.hint}>시각을 비워 두면 '그날 중' 으로 봅니다.</span>
         </div>
 
+        {/*
+         * 두 칸 모두 `sys_code` 의 분야 도메인이다 — `prj_field` 와 `prj_field2` 가 같은
+         * 코드 테이블을 참조한다. 리포트의 분야별 집계가 `prj_field` 로 묶이므로, 자유
+         * 입력이던 동안에는 저장 자체가 안 되거나(코드 테이블이 비어 있던 동안) 집계가
+         * 표기 차이로 쪼개질 수 있었다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="prj-field">
             분야
           </label>
-          <input
+          <CodeSelect
             id="prj-field"
-            className={ui.input}
+            domain={CODE_DOMAIN.FIELD}
             value={form.prjField}
-            onChange={(e) => set('prjField', e.target.value)}
+            onChange={(v) => set('prjField', v)}
           />
         </div>
 
@@ -319,11 +327,12 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
           <label className={ui.label} htmlFor="prj-field2">
             세부 분야
           </label>
-          <input
+          <CodeSelect
             id="prj-field2"
-            className={ui.input}
+            domain={CODE_DOMAIN.FIELD}
             value={form.prjField2}
-            onChange={(e) => set('prjField2', e.target.value)}
+            onChange={(v) => set('prjField2', v)}
+            hint="분야가 둘에 걸칠 때만 채웁니다. 같은 분야 목록에서 고릅니다."
           />
         </div>
 

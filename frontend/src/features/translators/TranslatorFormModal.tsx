@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useCreateTranslator, useUpdateTranslator } from '@/apis/queries/neotms.mutation'
-import { codeOptions, COIN_CODES } from '@/apis/neotms.codes'
+import { CODE_DOMAIN, codeOptions, COIN_CODES } from '@/apis/neotms.codes'
 import type { TranslatorInput, TranslatorRow } from '@/apis/neotms.types'
+import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import { toDateInputValue } from '@/shared/utils/format'
@@ -19,10 +20,11 @@ interface Props {
  *
  * ## 금액 입력란이 하나도 없다
  *
- * `tranUpro`(등급)와 `tranIctax`(원천징수)는 이름이 숫자처럼 읽히지만 둘 다 문자열이다. 등급은
- * `sys_code` 를 참조하는 코드값이고, 원천징수는 세율(`3.3`)인지 구분 코드인지 **운영 데이터를
- * 확인하기 전에는 알 수 없다**(db/002_tables.sql 의 COMMENT). 숫자 입력란으로 만들면 둘 중
- * 하나는 반드시 틀린다.
+ * `tranUpro`(사용 프로그램)와 `tranIctax`(원천징수)는 이름이 숫자처럼 읽히지만 둘 다 문자열이다.
+ * `tranUpro` 는 `sys_code` 를 참조하는 코드값 — 한때 이 주석과 화면 라벨이 '등급' 이라고 적고
+ * 있었고 그건 틀렸다 — 이고, 원천징수는 세율(`3.3`)인지 구분 코드인지 **운영 데이터를 확인하기
+ * 전에는 알 수 없다**(db/002_tables.sql 의 COMMENT). 숫자 입력란으로 만들면 둘 중 하나는
+ * 반드시 틀린다.
  *
  * 계좌번호도 문자열이다 — 앞자리 0 과 하이픈이 의미를 가진다.
  *
@@ -187,43 +189,59 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
           </span>
         </div>
 
-        {/* 아래 네 칸은 모두 sys_code 참조 코드값이다. 목록 엔드포인트가 없어 자유 입력이고,
-            등록되지 않은 값을 넣으면 저장이 409 로 실패한다 — 그래서 안내 문구를 둔다. */}
+        {/*
+         * 아래 네 칸은 모두 `sys_code` 참조 코드값이고, 전부 자유 입력이었다.
+         *
+         * "등록된 코드값만 저장됩니다" 라는 안내가 붙어 있었는데, 그것은 사실이면서 쓸모가
+         * 없었다 — 어떤 코드가 등록되어 있는지 화면이 알려 주지 않았고, 코드 테이블이 비어
+         * 있던 동안에는 등록된 코드가 아예 없어서 **무엇을 입력해도 저장되지 않았다.**
+         * 이제 목록에서 고른다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="tran-upro">
-            등급
+            사용 프로그램
           </label>
-          <input
+          {/*
+           * 라벨이 '등급' 이었다. 틀린 라벨이었다 — `TRAN_UPRO` 의 UPRO 는 이 번역가가 쓰는
+           * 번역 프로그램(Trados 등)이고, 002_tables.sql 의 COMMENT 가 '등급' 이라고 적어 둔
+           * 것을 화면이 따라 적은 것이다. 단가와 아무 관계가 없고, 배포할 때 쓰는 값이다:
+           * Trados 패키지를 Trados 를 쓰지 않는 번역가에게 보내면 그대로 되돌아온다.
+           */}
+          <CodeSelect
             id="tran-upro"
-            className={ui.input}
+            domain={CODE_DOMAIN.UPRO}
             value={form.tranUpro}
-            onChange={(e) => set('tranUpro', e.target.value)}
+            onChange={(v) => set('tranUpro', v)}
+            hint="이 번역가가 쓰는 번역 프로그램입니다. 단가와는 무관합니다."
           />
-          <span className={ui.hint}>등록된 코드값만 저장됩니다. 금액이 아닙니다.</span>
         </div>
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="tran-workcon">
             작업 조건
           </label>
-          <input
+          {/*
+           * `tran_work_con` 은 작업 종류 도메인을 참조한다 — 라벨이 '작업 조건' 이라 다른
+           * 것처럼 읽히지만, 이 번역가가 맡는 작업의 종류(번역/감수/DTP)를 담는 칸이다.
+           */}
+          <CodeSelect
             id="tran-workcon"
-            className={ui.input}
+            domain={CODE_DOMAIN.WORK}
             value={form.tranWorkCon}
-            onChange={(e) => set('tranWorkCon', e.target.value)}
+            onChange={(v) => set('tranWorkCon', v)}
+            hint="주로 맡는 작업 종류입니다."
           />
-          <span className={ui.hint}>등록된 코드값만 저장됩니다.</span>
         </div>
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="tran-field">
             가능 분야
           </label>
-          <input
+          <CodeSelect
             id="tran-field"
-            className={ui.input}
+            domain={CODE_DOMAIN.FIELD}
             value={form.tranField}
-            onChange={(e) => set('tranField', e.target.value)}
+            onChange={(v) => set('tranField', v)}
           />
         </div>
 
@@ -231,13 +249,13 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
           <label className={ui.label} htmlFor="tran-unfield">
             불가 분야
           </label>
-          <input
+          <CodeSelect
             id="tran-unfield"
-            className={ui.input}
+            domain={CODE_DOMAIN.FIELD}
             value={form.tranUnfield}
-            onChange={(e) => set('tranUnfield', e.target.value)}
+            onChange={(v) => set('tranUnfield', v)}
+            hint="맡기지 않아야 하는 분야입니다."
           />
-          <span className={ui.hint}>맡기지 않아야 하는 분야입니다.</span>
         </div>
 
         <div className={ui.field}>

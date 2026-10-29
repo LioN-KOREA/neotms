@@ -1,6 +1,6 @@
 -- =====================================================================
 -- NEOTMS :: 003_indexes.sql
--- Run after 002_tables.sql. Requires pg_bigm and pg_trgm (001).
+-- Run after 002_tables.sql. Requires pgroonga and pg_trgm (001).
 -- =====================================================================
 --
 -- WHY THIS FILE IS THE BIGGEST WIN IN THE MIGRATION
@@ -8,8 +8,8 @@
 --   tables -- only clustered primary keys. Combined with every date and
 --   every amount being stored as nvarchar, that means every search, every
 --   date-range filter and every report is a full table scan with a
---   per-row CONVERT(). This file, not the move to Aurora, is expected to
---   deliver the larger share of the speed-up.
+--   per-row CONVERT(). This file, not the move to a managed Postgres, is
+--   expected to deliver the larger share of the speed-up.
 --
 -- DESIGN RULES APPLIED
 --   1. WHERE NOT deleted on anything the application filters. Soft delete
@@ -19,9 +19,11 @@
 --      matching "NOT deleted" (or "deleted = false") predicate. Any new
 --      query that omits it silently gets a seq scan -- the exact failure
 --      mode we are removing. Keep the predicate in the repository layer.
---   2. gin_bigm_ops (2-gram) for Korean text. Korean search terms here are
---      frequently exactly 2 characters; pg_trgm cannot index below 3 and
---      falls back to a seq scan WITHOUT error.
+--   2. PGroonga for Korean text. Korean search terms here are frequently
+--      exactly 2 characters; pg_trgm cannot index below 3 and falls back to
+--      a seq scan WITHOUT error. The operator class must be a LIKE-capable
+--      one -- see section 1 -- and the column must be `text`, never
+--      varchar, or LIKE is a sequential search no matter what is indexed.
 --   3. gin_trgm_ops (3-gram) for ASCII identifier/contact columns, where
 --      terms are always 3+ characters and trigram indexes are smaller.
 --   4. An index on every FK column that is not already the leading column
@@ -36,7 +38,7 @@
 --   This file creates 71 indexes, roughly double the 25-35 estimate in the
 --   brief. That estimate cannot be met while also following the brief's own
 --   coverage rules, and the arithmetic is worth stating plainly:
---       14  Korean 2-gram indexes  (mandated: every searchable name column,
+--       14  Korean PGroonga indexes (mandated: every searchable name column,
 --                                   including the denormalised *_NAME copies)
 --        6  ASCII 3-gram indexes   (code / phone / email infix search)
 --       16  date indexes           (mandated: one per selectable date
@@ -62,42 +64,92 @@
 
 
 -- =====================================================================
--- 1. Korean-text substring search (2-gram)
+-- 1. Korean-text substring search (PGroonga)
 --    Serves: the search box on the project list, job list, PO list,
 --    customer list, translator list, staff list and both invoice screens.
 --    Every one of these is LIKE '%term%' on an operator-chosen column
 --    today, and the term is very often 2 Korean characters (삼성, 번역).
 -- =====================================================================
+--
+-- THE OPERATOR CLASS IS THE WHOLE POINT OF THIS SECTION.
+--   `USING pgroonga (col)` with no operator class builds an index that
+--   serves PGroonga's own operators (&@~ and friends) and does NOT serve
+--   LIKE. Since the application emits LIKE '%term%' -- deliberately, so
+--   that the ~20 dbops modules and the legacy query shapes are unchanged
+--   -- that index would be built, reported as healthy, never used, and
+--   every search would be a sequential scan. Exactly the defect being
+--   removed.
+--
+--   `pgroonga_text_regexp_ops_v2` is the class chosen here. PGroonga
+--   documents three LIKE-capable classes; this one is picked over
+--   `pgroonga_text_full_text_search_ops_v2` because full-text search
+--   tokenises, so it can only match on token boundaries -- which means a
+--   term that lands mid-token (a partial alphanumeric code, or a Korean
+--   substring the tokeniser did not split there) silently misses rows.
+--   The regexp class indexes for arbitrary substring matching, which is
+--   what LIKE '%term%' actually means.
+--
+--   PGroonga rewrites `col LIKE '%KEYWORD%'` into `col %% 'KEYWORD'`
+--   internally. The resulting plan is a Bitmap Index Scan WITH a Recheck
+--   (the rewrite is approximate, so the recheck re-applies the real LIKE);
+--   that recheck is normal and is not a sign the index is being ignored.
+--   db/004_verify_search.sql asserts the plan is not a Seq Scan.
+--
+--   COLUMN TYPE: every column below is `text` in 002_tables.sql. If any is
+--   ever changed to varchar(n), PGroonga cannot use an index against it
+--   and LIKE becomes a sequential search -- with no error and no plan
+--   warning. This is the single sharpest edge in the file.
+--
+--   THE OPERATOR CLASS IS SCHEMA-QUALIFIED, and must stay that way.
+--   001_extensions.sql installs PGroonga and pg_trgm `WITH SCHEMA
+--   extensions`, following Supabase's own convention, so the operator
+--   classes those extensions define live in `extensions` -- not in
+--   `public`. An unqualified `pgroonga_text_regexp_ops_v2` is resolved
+--   against the search_path, and a role whose search_path does not include
+--   `extensions` gets:
+--
+--     ERROR: operator class "pgroonga_text_regexp_ops_v2" does not exist
+--            for access method "pgroonga"
+--
+--   which reads as "PGroonga is broken / this class does not exist" and
+--   says nothing whatsoever about the search_path. It is also the FIRST
+--   statement in this file, so with ON_ERROR_STOP the whole index build
+--   stops there. Qualifying the name removes the dependency outright:
+--   this file then applies identically from psql, from the Supabase SQL
+--   editor, from a migration runner, and over the pooler -- where a
+--   session-level `SET search_path` would not reliably survive to the next
+--   statement anyway (transaction mode hands out a different server
+--   connection per transaction).
 
 -- Core chain names
-CREATE INDEX ix_prj_name_bigm       ON project          USING gin (prj_name      gin_bigm_ops);
-CREATE INDEX ix_job_name_bigm       ON job              USING gin (job_name      gin_bigm_ops);
-CREATE INDEX ix_po_name_bigm        ON purchase_order   USING gin (po_name       gin_bigm_ops);
-CREATE INDEX ix_cus_name_bigm       ON customer         USING gin (cus_name      gin_bigm_ops);
-CREATE INDEX ix_tran_name_bigm      ON translator       USING gin (tran_name     gin_bigm_ops);
+CREATE INDEX ix_prj_name_pgrn       ON project          USING pgroonga (prj_name      extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_job_name_pgrn       ON job              USING pgroonga (job_name      extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_po_name_pgrn        ON purchase_order   USING pgroonga (po_name       extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_cus_name_pgrn       ON customer         USING pgroonga (cus_name      extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_tran_name_pgrn      ON translator       USING pgroonga (tran_name     extensions.pgroonga_text_regexp_ops_v2);
 
 -- Denormalised *_NAME copies. These are maintained copies of the
 -- authoritative *_id relationship (see the column comments in 002), and the
 -- list screens search them directly rather than joining -- so they need
 -- their own indexes or the denormalisation buys nothing.
-CREATE INDEX ix_prj_mgr_name_bigm   ON project          USING gin (prj_mgr_name  gin_bigm_ops);
-CREATE INDEX ix_prj_pm_name_bigm    ON project          USING gin (prj_pm_name   gin_bigm_ops);
-CREATE INDEX ix_prj_cus_name_bigm   ON project          USING gin (cus_code_name gin_bigm_ops);
-CREATE INDEX ix_prj_cus_mgr_bigm    ON project          USING gin (cus_mgr_name  gin_bigm_ops);
-CREATE INDEX ix_job_pm_name_bigm    ON job              USING gin (job_pm_name   gin_bigm_ops);
-CREATE INDEX ix_po_tran_name_bigm   ON purchase_order   USING gin (po_tran_name  gin_bigm_ops);
-CREATE INDEX ix_po_pm_name_bigm     ON purchase_order   USING gin (po_pm_name    gin_bigm_ops);
-CREATE INDEX ix_cus_mgr_name_bigm   ON customer_contact USING gin (cus_mgr_name  gin_bigm_ops);
-CREATE INDEX ix_staff_name_bigm     ON staff            USING gin (mgr_name      gin_bigm_ops);
+CREATE INDEX ix_prj_mgr_name_pgrn   ON project          USING pgroonga (prj_mgr_name  extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_prj_pm_name_pgrn    ON project          USING pgroonga (prj_pm_name   extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_prj_cus_name_pgrn   ON project          USING pgroonga (cus_code_name extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_prj_cus_mgr_pgrn    ON project          USING pgroonga (cus_mgr_name  extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_job_pm_name_pgrn    ON job              USING pgroonga (job_pm_name   extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_po_tran_name_pgrn   ON purchase_order   USING pgroonga (po_tran_name  extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_po_pm_name_pgrn     ON purchase_order   USING pgroonga (po_pm_name    extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_cus_mgr_name_pgrn   ON customer_contact USING pgroonga (cus_mgr_name  extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_staff_name_pgrn     ON staff            USING pgroonga (mgr_name      extensions.pgroonga_text_regexp_ops_v2);
 
 -- Invoice screens search on the name snapshot held on the invoice itself,
 -- not on the live customer/translator row.
-CREATE INDEX ix_inv_cus_name_bigm   ON invoice_customer   USING gin (cus_name  gin_bigm_ops);
-CREATE INDEX ix_inv_tran_name_bigm  ON invoice_translator USING gin (tran_name gin_bigm_ops);
+CREATE INDEX ix_inv_cus_name_pgrn   ON invoice_customer   USING pgroonga (cus_name  extensions.pgroonga_text_regexp_ops_v2);
+CREATE INDEX ix_inv_tran_name_pgrn  ON invoice_translator USING pgroonga (tran_name extensions.pgroonga_text_regexp_ops_v2);
 
 -- NOT indexed: translator.tran_dup (the duplicate-check alias field). It is
 -- substring-matched when registering a new vendor, but that happens a few
--- times a day against 310k rows -- not worth a GIN index's write cost.
+-- times a day against 310k rows -- not worth the write cost.
 
 
 -- =====================================================================
@@ -105,12 +157,12 @@ CREATE INDEX ix_inv_tran_name_bigm  ON invoice_translator USING gin (tran_name g
 --    Serves: "find by code" lookups where an operator pastes a partial
 --    code off a printed PO or invoice, and phone/email lookup.
 --    These columns are never 2-character Korean, so trgm is correct here
---    and its index is materially smaller than the bigram equivalent.
+--    and its index is materially smaller than a PGroonga index would be.
 -- =====================================================================
 
-CREATE INDEX ix_po_code_trgm        ON purchase_order    USING gin (po_code       gin_trgm_ops);
-CREATE INDEX ix_prj_code_trgm       ON project           USING gin (prj_code      gin_trgm_ops);
-CREATE INDEX ix_job_code_trgm       ON job               USING gin (job_code      gin_trgm_ops);
+CREATE INDEX ix_po_code_trgm        ON purchase_order    USING gin (po_code       extensions.gin_trgm_ops);
+CREATE INDEX ix_prj_code_trgm       ON project           USING gin (prj_code      extensions.gin_trgm_ops);
+CREATE INDEX ix_job_code_trgm       ON job               USING gin (job_code      extensions.gin_trgm_ops);
 -- The UNIQUE constraints on these code columns already give an exact-match
 -- btree; the trigram indexes above exist purely for partial/infix match.
 -- NOT indexed for infix match: translator.tran_code, invoice_customer
@@ -118,8 +170,8 @@ CREATE INDEX ix_job_code_trgm       ON job               USING gin (job_code    
 -- whole (scanned off a document, or followed from a link), so the UNIQUE
 -- btree already serves them.
 
-CREATE INDEX ix_tran_phone_trgm     ON translator        USING gin (tran_phone    gin_trgm_ops);
-CREATE INDEX ix_tran_email_trgm     ON translator        USING gin (tran_email    gin_trgm_ops);
+CREATE INDEX ix_tran_phone_trgm     ON translator        USING gin (tran_phone    extensions.gin_trgm_ops);
+CREATE INDEX ix_tran_email_trgm     ON translator        USING gin (tran_email    extensions.gin_trgm_ops);
 -- NOT indexed: customer.cus_email -- customers are found by name or code,
 -- never by partial email, unlike translators.
 
@@ -288,16 +340,18 @@ CREATE INDEX ix_log_tran_rate ON translator_rate_log (tran_code, created_at DESC
 
 
 -- =====================================================================
--- POST-BUILD
---   ANALYZE every table before benchmarking; GIN indexes are invisible to
---   the planner without statistics, and the ETL leaves none behind.
+-- POST-BUILD -- NOT OPTIONAL
+--   1. ANALYZE every table before benchmarking. GIN and PGroonga indexes
+--      are invisible to the planner without statistics, and the ETL leaves
+--      none behind.
+--   2. Run db/004_verify_search.sql. It asserts that the Korean
+--      2-character LIKE really reaches the PGroonga index, and RAISEs if
+--      it does not. Reading the plan by eye is not good enough here: the
+--      failure mode of this whole design is a search that works and is
+--      slow, which looks like nothing at all on 20 seed rows and looks
+--      like the legacy system on 310,000.
 -- =====================================================================
 -- ANALYZE;
---
--- Verify the Korean 2-character case really uses the bigram index. A
--- Bitmap Index Scan here is the whole point of the migration; a Seq Scan
--- means pg_bigm is missing or the predicate is not sargable:
---   EXPLAIN ANALYZE SELECT id FROM project
---    WHERE prj_name LIKE '%삼성%' AND NOT deleted;
+-- \i db/004_verify_search.sql
 --
 -- END 003_indexes.sql

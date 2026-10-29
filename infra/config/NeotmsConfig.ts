@@ -7,57 +7,68 @@
 // enforce:
 //
 //   1. Nothing that is a secret appears here. The OIDC client is public (PKCE, no client secret -
-//      see 연동 안내서 §2), the database credential is generated into Secrets Manager by CDK, and the
-//      Mailgun key is read at cold start from Secrets Manager by name.
+//      see 연동 안내서 §2), the database password is held in Secrets Manager and never in this repo,
+//      and the Mailgun key is read at cold start from Secrets Manager by name.
 //   2. No wildcard CORS origin, not even in development. An over-broad origin on a cookie-bearing
 //      API is a session-theft primitive, and "we will tighten it later" never happens.
 
 /**
- * Aurora Serverless v2 capacity, in ACUs.
+ * Where the Supabase project is and how to address its pooler.
  *
- * `0` is a real setting on Aurora Serverless v2 and it is the whole cost argument: the cluster
- * genuinely stops billing compute while idle (storage and backups still bill). The reason the
- * staffed-hours floor is NOT zero is latency, not money - a cluster resuming from zero answers the
- * first statement with `DatabaseResumingException` and takes a handful of seconds to come back. That
- * is acceptable at 03:00 and is not acceptable when a PM opens a project list.
- *
- * The window below is NOT office hours, and the naming is deliberate. Official hours are 09:00-18:00
- * (Q11), but project managers arrive as early as 06:30 and work as late as 23:00, so a floor that
- * tracks the official day stalls real people on both ends of it - and a stall is indistinguishable
- * from a broken system to the person waiting. `staffedHours` is therefore the ENVELOPE of when any
- * human might be working, 06:00-00:00 every day, which costs ~$55/month of compute against ~$73 for
- * a flat floor and ~$20 for the 09:00-18:00 Mon-Fri window it replaces. The $35 is buying the
- * absence of a support call nobody can reproduce.
- *
- * See NeotmsAcuScheduler: EventBridge moves the floor between these two numbers.
+ * Unlike every other block in this file, most of these values are NOT this repo's decisions - they
+ * are assigned by Supabase when the project is created, which is why they are on the context
+ * override list below alongside the OIDC client. In particular the pooler hostname cannot be
+ * computed: the leading index in `aws-0-...` is assigned per project, and Supabase's own
+ * documentation says to copy the host out of the dashboard's Connect dialog. Guessing `aws-0` and
+ * deploying produces an ENOTFOUND from inside the connection pool, several frames away from the
+ * setting that caused it.
  */
-export interface NeotmsCapacityConfig {
-  /** ACU floor while anyone might be working. 0.5 is the smallest non-zero step. */
-  readonly staffedHoursMinAcu: number;
-  /** ACU floor outside those hours. 0 lets the cluster pause. */
-  readonly offHoursMinAcu: number;
-  /** Ceiling. Reached only by reporting queries; the floor is what drives the bill. */
-  readonly maxAcu: number;
+export interface NeotmsSupabaseConfig {
   /**
-   * Idle seconds before a cluster at a zero floor actually pauses. Only meaningful while the floor
-   * is 0; Aurora requires 300-86400.
+   * The project reference, the 20-character string in the dashboard URL.
    *
-   * Left at 15 minutes rather than the 300-second minimum even though the zero-floor window is now
-   * only six hours long. Shortening it would save well under a dollar a month, and it would cost a
-   * resume stall to exactly the person least able to absorb one - someone working at 02:00 against a
-   * deadline, whose ten-minute gap between saves would no longer keep the cluster warm.
+   * Not a secret - it is in the project's public API URL - but it is the one value everything else
+   * is keyed on, including the pooler username (`postgres.<ref>`) and the secret's name.
    */
-  readonly secondsUntilAutoPause: number;
-  /** Cron hour (KST) at which the floor is raised. 6, i.e. ahead of the earliest arrival (06:30). */
-  readonly staffedHoursStartHourKst: number;
+  readonly projectRef: string;
   /**
-   * Cron hour (KST) at which the floor is dropped back to `offHoursMinAcu`.
-   *
-   * 0, meaning midnight - so the window wraps the date boundary and the two cron expressions are
-   * `0 6 * * ? *` and `0 0 * * ? *`. It cannot be written as `24`: EventBridge cron hours are 0-23
-   * and the schedule would be rejected at deploy time.
+   * The Supavisor host, e.g. `aws-0-ap-northeast-2.pooler.supabase.com`. Copy it from the
+   * dashboard; see the note above on why it cannot be derived.
    */
-  readonly staffedHoursEndHourKst: number;
+  readonly poolerHost: string;
+  /**
+   * 6543, the transaction-mode port.
+   *
+   * A repo decision rather than an override, because it is not really a free choice. Session mode
+   * (5432 on the pooler) holds a server connection for the whole life of a client connection, and a
+   * Lambda whose reserved concurrency exceeds the project's connection limit would exhaust the pool
+   * under load; the direct endpoint, also 5432, resolves to IPv6 only without the paid add-on and a
+   * Lambda outside a VPC has no IPv6 egress. Transaction mode is the only option that works here,
+   * and the price is paid in PostgresUtils.ts: no prepared statements, no session state.
+   */
+  readonly poolerPort: number;
+  /** `postgres`. Supabase does not create a per-application database; schemas separate concerns. */
+  readonly databaseName: string;
+  /**
+   * PEM of the project CA, to pin TLS. Empty means TLS without certificate verification.
+   *
+   * Empty is the default because it is what Supabase's own copy-paste connection strings do, and
+   * because an expired or rotated CA pinned here fails as a total outage. Download the certificate
+   * from the dashboard and paste it in once someone is willing to own that rotation.
+   */
+  readonly caCertPem: string;
+}
+
+/**
+ * The pooler username for a project ref.
+ *
+ * `postgres.<ref>`, not the bare `postgres`: Supavisor routes on the tenant encoded in the
+ * username, so the bare name is only valid against the direct endpoint. Returns empty for an empty
+ * ref so that `isDatabaseConfigComplete()` in the Lambda fails closed rather than the function
+ * attempting to log in as the literal user `postgres.`.
+ */
+export function poolerUser(projectRef: string): string {
+  return projectRef ? `postgres.${projectRef}` : "";
 }
 
 export interface NeotmsAuthConfig {
@@ -94,6 +105,20 @@ export interface NeotmsAuthConfig {
    * or which rows, which is decided from the staff row's role and view scope (see §6.2 and Q9).
    */
   readonly appAuthorityId: string;
+  /**
+   * The LPX authority that may let itself in and provision the first NEOTMS staff row.
+   *
+   * NEOTMS ships with an empty database, and an empty database cannot be signed into: the guard
+   * refuses an identity that has no `staff` row, and no API route creates one. This authority is
+   * the way in - a holder gets a staff row minted with the 시스템관리자 (NEOTMS_SYSADMIN) role on
+   * first sign-in. See db/006_bootstrap.sql.
+   *
+   * SET IT TO `""` TO REMOVE THE BACK DOOR once real administrators exist. Empty is a supported
+   * value, not a missing one: the Lambda's `isAuthConfigComplete()` does not check this field, so
+   * a blank disables the bootstrap without taking the API down. That is the whole reason it is a
+   * configured value at all rather than a constant in the Lambda.
+   */
+  readonly bootstrapAuthorityId: string;
 }
 
 export interface NeotmsMailConfig {
@@ -119,7 +144,7 @@ export interface NeotmsStageConfig {
    * synthesis. See the comment on `NeotmsSite.allowOwnOriginOnApi`.
    */
   readonly allowedOriginUrls: string[];
-  readonly capacity: NeotmsCapacityConfig;
+  readonly supabase: NeotmsSupabaseConfig;
   readonly auth: NeotmsAuthConfig;
   readonly mail: NeotmsMailConfig;
   /**
@@ -153,23 +178,42 @@ const SEOUL = "ap-northeast-2";
 const TMS_ACCESS_AUTHORITY_ID = "527c4c39-be80-4f70-8f3e-a334b809ce10";
 
 /**
- * Shared capacity profile.
+ * LPX's own global administrator authority - the account that may bootstrap NEOTMS.
  *
- * Both stages use the same shape, which is arguably wrong now and is left alone deliberately. At
- * $0.20 per ACU-hour in Seoul an 18-hour floor costs ~$55/month, and the development cluster has no
- * early-arriving PM to protect - 09:00-18:00 Mon-Fri would do, at a third of the price. The reason
- * to keep them identical is that the schedule is the thing most likely to be blamed for a
- * "production is slow" report, and a dev stack that cannot reproduce production's pause behaviour
- * cannot be used to rule it out. Split them if the dev cluster's bill ever becomes the problem.
+ * A literal string rather than a UUID, unlike the authority above, and the difference is not
+ * stylistic. LPX distinguishes SYSTEM authorities, which its own source code has to compare
+ * against and which therefore carry stable hand-written ids in the `lpx.` namespace, from TENANT
+ * authorities created through its admin API, which get a server-generated UUID precisely so that
+ * nothing can hardcode one. `lpx.admin.access` is the first kind.
+ *
+ * COPIED, NOT IMPORTED, from `LPX_AUTHORITY_ADMIN_ACCESS` in
+ * lambdas/common/layers/nodejs/configs/LpxAuthorities.ts. That file is LPX base code that NEOTMS
+ * vendors but does not own: tsconfig.app.json excludes `lambdas/common` from the typecheck
+ * entirely, because it imports Cognito and KMS SDK packages this project does not install. An
+ * import here would therefore either fail to compile or drag those dependencies into a CDK app
+ * that has no use for them. The duplication is three words long and the two files reference each
+ * other, which is the cheaper trade.
  */
-const CAPACITY: NeotmsCapacityConfig = {
-  staffedHoursMinAcu: 0.5,
-  offHoursMinAcu: 0,
-  maxAcu: 4,
-  secondsUntilAutoPause: 900,
-  staffedHoursStartHourKst: 6,
-  staffedHoursEndHourKst: 0,
-};
+const LPX_ADMIN_ACCESS_AUTHORITY_ID = "lpx.admin.access";
+
+/**
+ * The parts of the Supabase block that are the same whatever project is being pointed at.
+ *
+ * Spread into each stage below, which then fills in `projectRef` and `poolerHost` - the two values
+ * Supabase assigns. Both stages ship them EMPTY, for the same reason production's `authClientId` is
+ * empty: there is no safe guess, and an empty value makes `isDatabaseConfigComplete()` answer 500
+ * "not configured" instead of producing a DNS failure that reads as an outage. Supply them with
+ * `-c supabaseProjectRef=... -c supabasePoolerHost=...`, or commit them once the projects exist.
+ *
+ * Note that the two stages want two different SUPABASE projects, not two schemas in one. Supabase
+ * bills compute per project, and the free tier pauses a project after a week of inactivity - which
+ * is tolerable for dev and is the whole reason prod is not on it.
+ */
+const SUPABASE_COMMON = {
+  poolerPort: 6543,
+  databaseName: "postgres",
+  caCertPem: "",
+} as const satisfies Partial<NeotmsSupabaseConfig>;
 
 export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
   dev: {
@@ -177,7 +221,7 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
     resourcePrefix: "neotms-dev",
     region: SEOUL,
     allowedOriginUrls: ["http://localhost:5173"],
-    capacity: CAPACITY,
+    supabase: { ...SUPABASE_COMMON, projectRef: "", poolerHost: "" },
     auth: {
       oidcIssuer: "https://accounts.lion-korea.it.kr",
       /*
@@ -193,6 +237,7 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
       oidcRedirectUri: "http://localhost:5173/auth/callback",
       oidcPostLogoutRedirectUri: "http://localhost:5173/auth/logout",
       appAuthorityId: TMS_ACCESS_AUTHORITY_ID,
+      bootstrapAuthorityId: LPX_ADMIN_ACCESS_AUTHORITY_ID,
     },
     mail: {
       mailgunSecretName: "neotms-dev/mailgun",
@@ -211,7 +256,7 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
     // Filled in once the production hostname is decided. Deliberately left empty rather than
     // defaulted to something permissive: an empty list fails closed, a wildcard fails open.
     allowedOriginUrls: [],
-    capacity: CAPACITY,
+    supabase: { ...SUPABASE_COMMON, projectRef: "", poolerHost: "" },
     auth: {
       oidcIssuer: "https://accounts.lion-korea.it.kr",
       /*
@@ -238,6 +283,23 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
        * respect still answers 500 "not configured" - for a value nobody has to decide.
        */
       appAuthorityId: TMS_ACCESS_AUTHORITY_ID,
+      /*
+       * On in production too, which deserves a sentence rather than being noticed in review.
+       *
+       * The argument for leaving it off here is that production is where a back door costs the
+       * most. The argument that wins is that production is also where the empty-database lockout
+       * is unrecoverable: there is no API route and no screen that writes a `staff` row, so a
+       * production stack deployed against a fresh Supabase project with this blank can only be
+       * opened by someone with the database password and a psql client. That is not a safety
+       * property, it is a different and worse failure.
+       *
+       * What makes it acceptable is that this grants nothing new. A holder of lpx.admin.access can
+       * already read and rewrite LPX's authority tables, including which accounts hold
+       * appAuthorityId - so they can already grant themselves NEOTMS access. The bootstrap only
+       * saves them the step. Set it to "" once the staff table is populated; see
+       * db/006_bootstrap.sql section 5.
+       */
+      bootstrapAuthorityId: LPX_ADMIN_ACCESS_AUTHORITY_ID,
     },
     mail: {
       mailgunSecretName: "neotms/mailgun",
@@ -260,9 +322,10 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
  * The auth settings that may be overridden at synth time with `-c key=value`.
  *
  * These five are exactly the values that are REGISTERED SOMEWHERE ELSE - on the LPX server - rather
- * than chosen here. That is the criterion for being on this list, and it is why capacity, log
+ * than chosen here. That is the criterion for being on this list, and it is why the pooler port, log
  * retention and bucket names are not: those are decisions this repo owns, so changing them should be
- * a reviewed commit, not a flag somebody typed once.
+ * a reviewed commit, not a flag somebody typed once. (The Supabase project ref and pooler host meet
+ * the same criterion and have their own list below.)
  *
  * The practical case is a production deploy. Production deliberately ships `authClientId` and both
  * URIs empty, because they depend on a hostname that is not decided yet; without an override the
@@ -272,6 +335,15 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
  *
  * `satisfies` rather than a plain annotation so a typo here is a compile error against
  * `NeotmsAuthConfig` instead of a silently ignored context key.
+ *
+ * `bootstrapAuthorityId` is NOT on this list, even though it is also an id LPX owns, and the reason
+ * is in `readStringOverride` below: it REJECTS a blank value, on the stated grounds that every
+ * setting on these lists disables the API when blank. `bootstrapAuthorityId` is the one auth setting
+ * where blank is a supported mode - it means "no back door" - so `-c bootstrapAuthorityId=` could
+ * never be how the bootstrap gets turned off, and a list entry that cannot express the only
+ * operation anybody would reach for is worse than no entry. Closing the door is an edit to the stage
+ * value above, which is the reviewed commit we want for removing an administrative bypass anyway.
+ * db/006_bootstrap.sql section 5 tells the operator the same thing.
  */
 export const NEOTMS_AUTH_CONTEXT_KEYS = [
   "authClientId",
@@ -282,6 +354,23 @@ export const NEOTMS_AUTH_CONTEXT_KEYS = [
 ] as const satisfies readonly (keyof NeotmsAuthConfig)[];
 
 export type NeotmsAuthContextKey = (typeof NEOTMS_AUTH_CONTEXT_KEYS)[number];
+
+/**
+ * The Supabase settings that may be overridden, and the context key each answers to.
+ *
+ * Prefixed `supabase*` on the command line rather than reusing the field names: `-c projectRef=...`
+ * on its own would be ambiguous in a repo that also has a CDK app, an LPX client and an S3 bucket
+ * naming scheme, and context keys are a flat global namespace shared with CDK's own feature flags.
+ *
+ * `satisfies` pins the right-hand sides to real fields of `NeotmsSupabaseConfig`, so renaming a
+ * field is a compile error here rather than an override that is silently never applied.
+ */
+export const NEOTMS_SUPABASE_CONTEXT_KEYS = {
+  supabaseProjectRef: "projectRef",
+  supabasePoolerHost: "poolerHost",
+} as const satisfies Record<string, keyof NeotmsSupabaseConfig>;
+
+export type NeotmsSupabaseContextKey = keyof typeof NEOTMS_SUPABASE_CONTEXT_KEYS;
 
 /**
  * Anything that can answer a context lookup.
@@ -309,9 +398,9 @@ export interface NeotmsContextLookup {
  * `undefined` and is indistinguishable from not passing it at all - the stage default applies. That
  * is quiet, but it is also the safe direction, since the committed default is a real authority.
  */
-function readAuthOverride(
+function readStringOverride(
   context: NeotmsContextLookup | undefined,
-  key: NeotmsAuthContextKey,
+  key: NeotmsAuthContextKey | NeotmsSupabaseContextKey,
 ): string | undefined {
   const raw = context?.tryGetContext(key);
   if (raw === undefined || raw === null) return undefined;
@@ -327,7 +416,8 @@ function readAuthOverride(
   if (!trimmed) {
     throw new Error(
       `Context "${key}" was empty. Omit it entirely to use the stage default, rather than ` +
-        `passing a blank - a blank would disable authentication checks that depend on it.`,
+        `passing a blank - every setting on these lists is one the Lambda treats as "not ` +
+        `configured" when blank, so a blank deploys a stack that refuses every request.`,
     );
   }
   return trimmed;
@@ -336,14 +426,17 @@ function readAuthOverride(
 /**
  * The config for a stage, with any `-c` overrides applied to the auth block.
  *
- *   cdk deploy                                     dev, as committed
+ *   cdk deploy -c supabaseProjectRef=abcdefghijklmnopqrst \     dev, pointed at a Supabase project
+ *     -c supabasePoolerHost=aws-0-ap-northeast-2.pooler.supabase.com
  *   cdk deploy -c stage=prod \                      production, auth supplied at deploy time
  *     -c authClientId=... \
  *     -c oidcRedirectUri=https://tms.example/auth/callback \
- *     -c oidcPostLogoutRedirectUri=https://tms.example/auth/logout
+ *     -c oidcPostLogoutRedirectUri=https://tms.example/auth/logout \
+ *     -c supabaseProjectRef=... -c supabasePoolerHost=...
  *
- * Returns a COPY. `NEOTMS_CONFIGS` is module state shared by every caller including the tests, so
- * applying overrides in place would make one synth leak into the next.
+ * Returns a COPY, two levels deep. `NEOTMS_CONFIGS` is module state shared by every caller
+ * including the tests, so applying overrides in place would make one synth leak into the next - and
+ * a shallow copy is not enough, because `auth` and `supabase` are the objects being mutated.
  */
 export function resolveStageConfig(
   stage: string | undefined,
@@ -361,9 +454,20 @@ export function resolveStageConfig(
   // keyed assignment covers all of them without a cast.
   const auth: { -readonly [K in keyof NeotmsAuthConfig]: NeotmsAuthConfig[K] } = { ...config.auth };
   for (const contextKey of NEOTMS_AUTH_CONTEXT_KEYS) {
-    const override = readAuthOverride(context, contextKey);
+    const override = readStringOverride(context, contextKey);
     if (override !== undefined) auth[contextKey] = override;
   }
 
-  return { ...config, auth };
+  const supabase: { -readonly [K in keyof NeotmsSupabaseConfig]: NeotmsSupabaseConfig[K] } = {
+    ...config.supabase,
+  };
+  for (const [contextKey, field] of Object.entries(NEOTMS_SUPABASE_CONTEXT_KEYS) as [
+    NeotmsSupabaseContextKey,
+    "projectRef" | "poolerHost",
+  ][]) {
+    const override = readStringOverride(context, contextKey);
+    if (override !== undefined) supabase[field] = override;
+  }
+
+  return { ...config, auth, supabase };
 }

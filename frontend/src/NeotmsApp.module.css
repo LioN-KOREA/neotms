@@ -1,157 +1,453 @@
+/*
+ * 셸의 레이아웃 — 아이콘 레일 + 2차 메뉴 패널 + 상단바 + 경로 표시줄.
+ *
+ * ## 왜 좌측이 두 단인가
+ *
+ * 설계안의 모양이기도 하지만, 그 전에 이 앱의 메뉴가 **여덟 개**이기 때문이다. 한 줄로 세우면
+ * 매일 여는 '프로젝트' 와 한 달에 한 번 여는 '유지보수' 가 같은 무게로 보이고, 목록이 길어서
+ * 매번 처음부터 읽게 된다. 레일에 묶음 넷만 세우고 그 안을 패널에 펼치면, 지금 하는 일과
+ * 상관없는 메뉴는 아예 화면에 없다.
+ *
+ * ## 전체 높이를 셸이 들고 있다
+ *
+ * `.shell` 이 `height: 100vh` 이고 `.body` 만 스크롤한다. 문서 전체가 스크롤되는 구조였다면
+ * 긴 목록을 내릴 때 상단바와 경로 표시줄이 같이 올라가 버린다 — 이 앱에서 스크롤이 가장 긴
+ * 화면이 목록이고, 거기서 "지금 어느 메뉴인지" 가 사라지는 것이 정확히 피하려는 상황이다.
+ */
+
 .shell {
   display: flex;
-  min-height: 100%;
+  height: 100vh;
+  overflow: hidden;
 }
 
-.sidebar {
-  width: var(--ntms-sidebar-width);
+/* ── 아이콘 레일 ─────────────────────────────────────────────────────── */
+
+.rail {
+  width: var(--nt-rail-w);
   flex: none;
   display: flex;
   flex-direction: column;
-  padding: 18px 14px;
-  background: var(--ntms-sidebar);
-  color: rgba(255, 255, 255, 0.75);
-  position: sticky;
-  top: 0;
-  height: 100vh;
+  align-items: center;
+  padding: 8px 0 0;
+  background: var(--nt-grad-rail);
 }
 
-.brand {
+.brandmark {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--nt-r-md);
+  background: var(--nt-grad);
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-bottom: 14px;
-  margin-bottom: 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--ntms-text-inverse);
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  margin: 4px 0 12px;
 }
 
-/* '라이온코리아 TMS 시스템' 은 사이드바 폭보다 길다. 두 줄 로크업으로 나눠, 줄바꿈 위치를
-   브라우저가 폭에 따라 다르게 정하지 않도록 한다. */
-.brandOrg {
-  font-size: 0.74rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: rgba(255, 255, 255, 0.62);
+.railItem {
+  position: relative;
+  width: 60px;
+  flex: none;
+  padding: 8px 0 6px;
+  margin-bottom: 3px;
+  border: none;
+  border-radius: var(--nt-r-sm);
+  background: transparent;
+  color: #9a96c6;
+  font-size: 10.5px;
+  letter-spacing: -0.04em;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  display: block;
 }
 
-.brandProduct {
-  font-size: 0.92rem;
+.railItem svg {
+  display: block;
+  margin: 0 auto 3px;
+}
+
+.railItem:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #d9d5f5;
+}
+
+.railItemActive,
+.railItemActive:hover {
+  background: rgba(139, 92, 246, 0.22);
+  color: #fff;
+}
+
+/*
+ * 활성 묶음의 왼쪽 표식.
+ *
+ * 배경색만으로도 구분은 되지만, 레일은 어두운 바탕이라 반투명 보라 배경의 대비가 약하다.
+ * 밝은 선 하나를 왼쪽 끝에 붙이면 곁눈으로도 위치가 잡힌다. `left: 0` 으로 레일의 바깥
+ * 모서리에 딱 붙인다 — 항목 안쪽에 넣으면 아이콘과 간격이 좁아 글자처럼 보인다.
+ */
+.railItemActive::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 9px;
+  width: 3px;
+  height: 24px;
+  border-radius: 0 var(--nt-r-xs) var(--nt-r-xs) 0;
+  background: var(--nt-vio-l);
+}
+
+/* 레일 맨 아래의 계정. `margin-top: auto` 가 위쪽 메뉴와 떨어뜨린다. */
+.railMe {
+  margin-top: auto;
+  width: 100%;
+  padding: 9px 4px 10px;
+  text-align: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.railAvatar {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 4px;
+  border-radius: var(--nt-r-full);
+  background: linear-gradient(140deg, #8b5cf6, #5b50e8);
+  color: #fff;
+  font-size: 11px;
   font-weight: 700;
-  line-height: 1.35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
+
+.railMeName {
+  display: block;
+  color: #edebff;
+  font-size: 10.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.railMeRole {
+  display: block;
+  margin-top: 1px;
+  color: #8f8bbc;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 2차 메뉴 패널 ───────────────────────────────────────────────────── */
 
 .nav {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  width: var(--nt-nav-w);
+  flex: none;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  background: var(--nt-surface);
+  border-right: 1px solid var(--nt-line);
+}
+
+.navGroupLabel {
+  padding: 13px 14px 8px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--nt-ink);
+}
+
+.navList {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 8px;
+  overflow-y: auto;
   flex: 1;
 }
 
 .navLink {
   display: block;
-  width: 100%;
-  text-align: left;
-  padding: 8px 12px;
-  border: none;
-  border-radius: var(--ntms-radius-sm);
-  background: transparent;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 0.88rem;
+  padding: 7px 13px;
+  border-left: 3px solid transparent;
+  color: var(--nt-ink2);
   text-decoration: none;
-  cursor: pointer;
 }
 
 .navLink:hover {
-  background: var(--ntms-sidebar-hover);
-  color: var(--ntms-text-inverse);
+  background: var(--nt-tint3);
 }
 
 .navLinkActive,
 .navLinkActive:hover {
-  background: var(--ntms-primary);
-  color: var(--ntms-text-inverse);
-  font-weight: 600;
+  background: var(--nt-tint);
+  border-left-color: var(--nt-ind);
 }
 
-/* 담당 범위 안내. 숫자를 회사 전체 숫자로 착각하는 것을 막는 유일한 장치이므로,
-   사이드바에서 사라지지 않게 메뉴와 계정 사이에 고정한다. */
+.navLabel {
+  display: block;
+  font-size: 12.5px;
+  letter-spacing: -0.03em;
+}
+
+.navLinkActive .navLabel {
+  color: var(--nt-ind-d);
+  font-weight: 700;
+}
+
+/*
+ * 메뉴 이름 아래의 한 줄 설명.
+ *
+ * '프로젝트 / 작업 / 발주' 는 셋 다 "일" 이라 이름만으로는 구분되지 않는다(permissions.ts 의
+ * `hint` 주석). 활성 항목에서는 색을 한 단계 올려, 지금 보고 있는 화면이 무엇인지가 패널에
+ * 그대로 적혀 있게 한다.
+ */
+.navHint {
+  display: block;
+  margin-top: 1px;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--nt-ink3);
+  letter-spacing: -0.02em;
+}
+
+.navLinkActive .navHint {
+  color: #7d74c8;
+}
+
+/*
+ * 담당 범위 안내.
+ *
+ * 화면이 행을 걸러내는 것이 아니라 서버가 담당분만 보낸다. 그래서 이 안내가 없으면 담당자는
+ * 자기 화면의 합계를 회사 전체 합계로 읽는다 — 보고서에서 가장 비싼 착각이다. 패널 맨 아래에
+ * 고정해, 메뉴가 늘어도 스크롤 밖으로 밀려나지 않게 한다.
+ */
 .scopeHint {
-  margin: 10px 2px 0;
-  padding: 7px 9px;
-  border-radius: var(--ntms-radius-sm);
-  background: rgba(255, 255, 255, 0.07);
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 0.72rem;
+  flex: none;
+  margin: 0;
+  padding: 9px 11px;
+  border-top: 1px solid var(--nt-line);
+  background: var(--nt-tint3);
+  color: var(--nt-ink2);
+  font-size: 10.5px;
   line-height: 1.5;
+  letter-spacing: -0.02em;
 }
 
-.account {
-  padding-top: 14px;
-  margin-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
-  font-size: 0.8rem;
+.scopeHint b {
+  display: block;
+  color: var(--nt-ind-d);
+  font-size: 10px;
+  letter-spacing: 0.02em;
 }
 
-.accountName {
-  color: var(--ntms-text-inverse);
-  font-weight: 600;
-}
+/* ── 본문 기둥 ───────────────────────────────────────────────────────── */
 
-.accountRole {
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 0.75rem;
-}
-
-.accountEmail {
-  color: rgba(255, 255, 255, 0.55);
-  font-size: 0.75rem;
-  word-break: break-all;
-  margin-bottom: 8px;
-}
-
-.logout {
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: var(--ntms-radius-sm);
-  background: transparent;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.logout:hover {
-  background: var(--ntms-sidebar-hover);
-  color: var(--ntms-text-inverse);
-}
-
-.main {
+.mainCol {
   flex: 1;
   min-width: 0;
-  padding: 26px 28px 48px;
+  display: flex;
+  flex-direction: column;
+  background: var(--nt-bg);
 }
 
-@media (max-width: 720px) {
+.top {
+  height: var(--nt-top-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  background: var(--nt-grad);
+  color: #fff;
+}
+
+.topBrand {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* 제품명 옆의 조직명. 같은 줄에 두되 무게를 낮춰, 읽히기는 하고 읽으라고 하지는 않는다. */
+.topBrand em {
+  font-style: normal;
+  font-weight: 400;
+  opacity: 0.72;
+  margin-left: 6px;
+}
+
+.topRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+.topWho {
+  opacity: 0.95;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topWho b {
+  font-weight: 700;
+}
+
+.topPill {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: var(--nt-r-sm);
+  background: rgba(255, 255, 255, 0.17);
+  font-size: 10.5px;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.topBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: var(--nt-r-sm);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.topBtn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* ── 경로 표시줄 ─────────────────────────────────────────────────────── */
+
+/*
+ * 큰 제목을 대신한다.
+ *
+ * 화면마다 20px 짜리 제목을 세우면 세로 공간이 그만큼 사라지는데, 그 제목이 말해 주는 것은
+ * 좌측 패널에서 이미 강조되어 있는 메뉴 이름뿐이다. 같은 사실을 두 번 적는 대신 32px 짜리
+ * 한 줄로 경로를 보여 주고, 본문은 그만큼 위로 올린다.
+ */
+.crumb {
+  height: var(--nt-crumb-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  background: var(--nt-surface);
+  border-bottom: 1px solid var(--nt-line);
+  font-size: 11px;
+  color: var(--nt-ink3);
+  letter-spacing: -0.02em;
+}
+
+.crumbCurrent {
+  color: var(--nt-ind-d);
+  font-weight: 700;
+}
+
+.crumbSep {
+  color: #cfcde4;
+  display: flex;
+  align-items: center;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 24px;
+}
+
+/* ── 좁은 화면 ───────────────────────────────────────────────────────────
+ *
+ * 레일과 패널을 가로로 눕힌다. 숨기지 않는 이유는, 이 앱에 햄버거 메뉴를 열 자리가 마땅치
+ * 않고 — 상단바는 이미 계정 정보로 차 있다 — 메뉴를 토글 뒤에 감추면 권한에 따라 메뉴가
+ * 다르다는 사실이 더 안 보이기 때문이다. 태블릿 가로 이하에서만 해당한다. */
+@media (max-width: 880px) {
   .shell {
     flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
   }
 
-  .sidebar {
+  .rail {
     width: 100%;
-    height: auto;
-    position: static;
+    flex-direction: row;
+    align-items: center;
+    padding: 6px 8px;
+    overflow-x: auto;
+  }
+
+  .brandmark {
+    margin: 0 10px 0 0;
+  }
+
+  .railItem {
+    width: auto;
+    min-width: 58px;
+    margin: 0 3px 0 0;
+  }
+
+  .railItemActive::before {
+    display: none;
+  }
+
+  .railMe {
+    margin-top: 0;
+    margin-left: auto;
+    width: auto;
+    padding: 0 4px;
+    border-top: none;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .railAvatar {
+    margin: 0;
   }
 
   .nav {
-    flex-direction: row;
-    flex-wrap: wrap;
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--nt-line);
   }
 
-  .main {
-    padding: 18px 16px 32px;
+  .navList {
+    display: flex;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .navLink {
+    border-left: none;
+    border-bottom: 3px solid transparent;
+  }
+
+  .navLinkActive {
+    border-left-color: transparent;
+    border-bottom-color: var(--nt-ind);
+  }
+
+  .body {
+    overflow: visible;
+    padding: 12px 12px 24px;
   }
 }

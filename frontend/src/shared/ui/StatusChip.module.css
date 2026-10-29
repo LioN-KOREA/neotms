@@ -1,0 +1,142 @@
+/*
+ * 상태 표식의 옷.
+ *
+ * ## 왜 `ui.module.css` 의 `.badge` 와 따로인가
+ *
+ * `.badge` 는 "작은 표식" 이라는 **모양**이고(건수, 'CAT', '나'), 여기 있는 것은 **상태**다.
+ * 둘을 한 클래스로 두면 색을 고르는 책임이 쓰는 쪽에 남는다 — 실제로 그랬고, 그래서 같은
+ * '정산완료' 가 프로젝트 목록에서는 초록이고 발주 목록에서는 회색인 상태가 생겼다. 색은
+ * StatusChip.tsx 의 표 하나가 정하고, 이 파일은 그 표가 고른 색을 그린다.
+ *
+ * ## 모서리
+ *
+ * 설계안의 상태 칩은 알약(radius 20px)이다. 여기서는 `--nt-r-xs` 다 — 표는 직각으로 맞물린
+ * 칸의 격자이고, 그 안에서 알약만 둥글면 칩이 칸 위에 얹힌 스티커처럼 보인다.
+ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 5px;
+  border: 1px solid var(--nt-line);
+  border-radius: var(--nt-r-xs);
+  background: var(--nt-bg);
+  color: var(--nt-ink2);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+/*
+ * 글자 앞의 점.
+ *
+ * 색만으로 구분하면 적록색약인 사용자에게 '완료'(초록)와 '미정산'(주황)이 같은 톤이 된다.
+ * 점이 있으면 **채워진 점 / 테두리만 있는 점**이라는 두 번째 축이 생기고, 그 축은 색과
+ * 무관하다 — 끝난 상태는 채우고, 아직 할 일이 남은 상태는 비운다.
+ */
+.dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: var(--nt-r-full);
+  border: 1px solid currentColor;
+  background: currentColor;
+}
+
+/* 아직 끝나지 않은 상태 — 점을 비운다. */
+.dotOpen {
+  background: transparent;
+}
+
+/* ── 색 ───────────────────────────────────────────────────────────────── */
+
+/* 지금 돌고 있는 일. 이 앱에서 가장 자주 찾는 상태라 강조색을 쓴다. */
+.prog {
+  background: var(--nt-tint);
+  border-color: #cfc9fb;
+  color: var(--nt-ind-d);
+}
+
+/* 끝난 일 — 완료, 정산완료, 발행, 납품. */
+.ok {
+  background: var(--ntms-success-soft);
+  border-color: #b4e3cf;
+  color: #07704d;
+}
+
+/* 흘러가는 중이지만 아직 '진행' 은 아닌 것 — 견적, 대기, 발주, 수락, 검수. */
+.info {
+  background: #e8f4fc;
+  border-color: #bfdff4;
+  color: #10688f;
+}
+
+/* 멈춰 있는 것 — 보류, 미발행. 중립색이다. 멈춤 자체는 문제가 아니다. */
+.wait {
+  background: var(--nt-surface);
+  border-color: var(--nt-line2);
+  color: var(--nt-ink2);
+}
+
+/*
+ * 돈이 아직 안 들어온 것 — 미정산, 부분정산.
+ *
+ * 이 시스템에서 가장 늦게 끝나는 단계이고, 끝나지 않은 채로 잊히는 것이 실제로 손실이 되는
+ * 유일한 상태다. 그래서 '보류' 와 달리 색을 쓴다.
+ */
+.warn {
+  background: var(--ntms-warning-soft);
+  border-color: #f0dca8;
+  color: #9a6b00;
+}
+
+/*
+ * 취소.
+ *
+ * 색을 빼고 글자를 흐리게 한다. 취소된 행은 목록에 남아 있어야 하지만(왜 취소됐는지를 보는
+ * 일이 있다) 눈이 먼저 갈 필요는 없다. 빨강을 쓰지 않은 이유는 그게 실패를 알리는 색이기
+ * 때문이다 — 취소는 담당자가 **의도한** 결과다.
+ */
+.off {
+  background: transparent;
+  border-color: var(--nt-line);
+  color: #a9abc0;
+}
+
+/*
+ * 값이 비어 있을 때.
+ *
+ * 칩을 그리지 않고 흐린 선 하나만 둔다. 빈 칩을 그리면 "상태가 있는데 이름이 없다" 로 읽히고,
+ * 실제로는 상태 자체가 안 적힌 행이다 — 레거시 데이터에 그런 행이 많다.
+ */
+.none {
+  color: var(--nt-ink3);
+}
+
+/* ── 작업 종류 태그 ───────────────────────────────────────────────────────
+ *
+ * 상태가 아니라 **분류**다. 그래서 점이 없고 색이 옅다 — 한 행에 상태 칩 세 개와 종류 태그가
+ * 같이 서는데, 넷이 같은 무게면 무엇을 봐야 하는지 알 수 없다. 작업 종류는 걸러낼 때 쓰는
+ * 값이고 훑을 때 쓰는 값이 아니다. */
+
+.kind {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--nt-line);
+  border-radius: var(--nt-r-xs);
+  background: var(--nt-tint3);
+  color: var(--nt-ink2);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+/* 번역 — 이 시스템의 기본 업무. 다른 종류와 구분되게 보라 계열만 쓴다. */
+.kindMain {
+  background: var(--nt-tint);
+  border-color: #d9d4fc;
+  color: var(--nt-ind-d);
+}

@@ -47,7 +47,7 @@ if (!account) {
 new NeotmsStack(app, config.stage === "prod" ? "NeotmsStack" : `NeotmsStack-${config.stage}`, {
   config,
   env: { account, region: config.region },
-  description: `NEOTMS (${config.stage}) - Aurora Serverless v2 + Data API, Lambda outside the VPC`,
+  description: `NEOTMS (${config.stage}) - Supabase Postgres via the Supavisor pooler, Lambda outside any VPC`,
   // Tags on the stack rather than only on resources, so Cost Explorer can answer "what does NEOTMS
   // cost" without every construct having remembered to tag itself.
   tags: { Project: "NEOTMS", Stage: config.stage },

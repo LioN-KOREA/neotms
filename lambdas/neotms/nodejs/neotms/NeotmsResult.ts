@@ -4,7 +4,7 @@
 //
 // Every domain manager in this folder is a function from a request to a `ResponseData`, and every
 // one of them touches the database. Without something like this module each would need its own
-// try/catch around `rdsQuery`, and the five copies would disagree - which is how a cold cluster
+// try/catch around `pgQuery`, and the five copies would disagree - which is how a cold cluster
 // comes to be reported as a 500 on four screens and a 503 on the fifth.
 //
 // The distinction being protected is the one the legacy system never made: a request that FAILED is
@@ -13,7 +13,7 @@
 // tell a deploy problem from a cold database from a genuine permission refusal.
 
 import type { ResponseData } from "../reqres/RequestResponse.js";
-import { exceptionToErrorResponse } from "../utils/RdsDataUtils.js";
+import { exceptionToErrorResponse } from "../utils/PostgresUtils.js";
 import * as v from "valibot";
 
 /* -------------------------------------------------------------------------- */
@@ -25,7 +25,7 @@ import * as v from "valibot";
  *
  * `cursor` absent means this is the last page - that is how the client knows to stop. There is
  * deliberately no `total`: a count over a filtered, row-level-scoped table costs about as much as
- * the page itself, and no screen in this system needs one. See `paginate` in RdsDataUtils.
+ * the page itself, and no screen in this system needs one. See `paginate` in PostgresUtils.
  */
 export type ListPage<T> = {
   items: T[];
@@ -84,11 +84,14 @@ export function parseBody<S extends v.GenericSchema>(schema: S, body: unknown): 
  * `label` is what goes in the log line, so it should name the operation rather than the table -
  * "list projects" tells an operator which screen is broken; "SELECT project" does not.
  *
- * The 503 path matters more than it looks: the cluster pauses outside business hours by design
- * (that choice is most of the cost saving), so the first request of the morning CAN arrive while it
- * is still resuming even after `withResumeRetry` has spent its budget. `Retry-After` tells the
- * browser to come back rather than show the user an error, which is the difference between the cost
- * model being invisible and being a daily complaint.
+ * The 503 path matters more than it looks. Nothing pauses any more - Supabase compute runs
+ * continuously - but the function now holds its own connections, and the failures that come with
+ * that are ordinary rather than rare: the Supavisor pooler refuses a connection when its client
+ * limit is reached, a pooled connection can be closed under the function between two invocations,
+ * and a password rotation makes every held connection fail authentication at once. All of those are
+ * retried in `withTransientRetry`, and a 503 means the retries ran out. `Retry-After` tells the
+ * browser to come back instead of showing the user an error, which is what keeps a five-second
+ * connection blip from reading as a broken screen.
  *
  * The type parameter is the whole response rather than its body. A manager's work typically has
  * several exits - `ok(row)`, `notFound(...)`, a 409 with a sentence - so what it returns is a UNION
@@ -104,9 +107,9 @@ export async function runDb<R extends ResponseData<unknown>>(
     return await work();
   } catch (err) {
     const detail = exceptionToErrorResponse(err);
-    // Logged at error level even for a 503, because a resume that gets this far is worth seeing in
-    // the aggregate - a sudden rise in them means the ACU schedule no longer matches when people
-    // actually work.
+    // Logged at error level even for a 503, because a transient failure that outlives the retries
+    // is worth seeing in the aggregate - a sudden rise in them means the function is competing with
+    // itself for Supavisor connections, and the fix is a pool or concurrency setting, not a retry.
     console.error(`[neotms] ${label} failed : ${detail.status} ${detail.name} ${detail.message}`);
     return {
       status: detail.status,

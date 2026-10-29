@@ -9,8 +9,8 @@
  * 기다리면 된다"는 뜻이다:
  *
  *   - 다른 탭이 토큰 갱신 리스를 잡고 있다(Retry-After: 1).
- *   - Aurora 클러스터가 절전에서 깨어나는 중이다(Retry-After: 2). 업무시간 외에는 ACU 바닥이
- *     0 이므로 아침 첫 요청이나 야간 접속에서 정상적으로 발생한다. 오류로 취급하면 안 된다.
+ *   - DB 커넥션 풀(Supavisor)이 연결을 내주지 못했다(Retry-After: 2). 동시 접속이 몰릴 때나
+ *     DB 비밀번호를 교체한 직후에 정상적으로 발생한다. 오류로 취급하면 안 된다.
  */
 export class NeotmsApiException extends Error {
   readonly status: number

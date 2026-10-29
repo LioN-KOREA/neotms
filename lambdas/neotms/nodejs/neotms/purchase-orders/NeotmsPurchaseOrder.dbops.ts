@@ -28,7 +28,7 @@ import {
   type SortTarget,
   type SqlOps,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { PO_CODE, codeExpression } from "../NeotmsCodes.js";
 import {
@@ -273,7 +273,7 @@ export const PO_SORT_ALIASES: Record<PoSortKey, string> = {
   paid: "po_money_day",
 };
 
-/** `po.po_name` and `po.po_tran_name` are bigm-indexed, as are the job and project names. */
+/** `po.po_name` and `po.po_tran_name` carry PGroonga indexes, as do the job and project names. */
 const PO_SEARCH_COLUMNS = [
   "po.po_name",
   "po.po_tran_name",

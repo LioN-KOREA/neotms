@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useCreateCustomer, useUpdateCustomer } from '@/apis/queries/neotms.mutation'
-import { codeOptions, COIN_CODES } from '@/apis/neotms.codes'
+import { CODE_DOMAIN, codeOptions, COIN_CODES } from '@/apis/neotms.codes'
 import type { CustomerInput, CustomerRow } from '@/apis/neotms.types'
+import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import { toDecimalInput } from '@/shared/utils/money'
@@ -33,7 +34,6 @@ export function CustomerFormModal({ customer, onClose, onSaved }: Props) {
     cusPhone: customer?.cusPhone ?? '',
     cusNation: customer?.cusNation ?? '',
     cusCoin: customer?.cusCoin ?? 'KRW',
-    cusUpro: customer?.cusUpro ?? '',
     cusMincost: customer?.cusMincost ?? '',
     cusField: customer?.cusField ?? '',
     cusZip: customer?.cusZip ?? '',
@@ -64,9 +64,8 @@ export function CustomerFormModal({ customer, onClose, onSaved }: Props) {
       cusPhone: form.cusPhone.trim() || null,
       cusNation: form.cusNation.trim() || null,
       cusCoin: form.cusCoin.trim() || null,
-      // 등급·분야는 코드값이므로 다듬지 않고 그대로 보낸다. 금액은 최소 수주 금액 하나뿐이다.
-      cusUpro: form.cusUpro.trim() || null,
       cusMincost: toDecimalInput(form.cusMincost),
+      // 분야는 코드값. 드롭다운이 고른 값을 그대로 보낸다.
       cusField: form.cusField.trim() || null,
       cusZip: form.cusZip.trim() || null,
       cusAddr: form.cusAddr.trim() || null,
@@ -185,27 +184,17 @@ export function CustomerFormModal({ customer, onClose, onSaved }: Props) {
         </div>
 
         {/*
-         * 등급(UPRO)은 금액이 아니다.
+         * 여기에 "등급(UPRO)" 입력란이 있었고, 두 가지가 틀렸었다.
          *
-         * 레거시 컬럼명 때문에 "단가" 로 읽히지만 `sys_code` 를 참조하는 코드값이고, 그 코드가
-         * 기본 단가 밴드를 고른다(db/002_tables.sql 의 COMMENT). 금액 입력란으로 만들면
-         * 담당자가 `35000` 을 넣고 저장이 409 로 실패한다.
+         * 1. 등급이 아니었다. `CUS_UPRO` 의 UPRO 는 **사용 프로그램** — 이 고객사가 주로 쓰는
+         *    번역 프로그램(Trados 등)이다. 002_tables.sql 의 COMMENT 가 "등급/단가 밴드" 라고
+         *    적어 둔 것이 틀렸고, 지금 고쳤다.
+         * 2. 물어볼 필요가 없는 질문이었다. 이 회사 고객사 전부가 번역을 맡기지는 않는다.
          *
-         * 코드 목록을 주는 엔드포인트가 아직 없어서 자유 입력이다. 그래서 안내 문구가 필수다 —
-         * 없으면 틀린 값을 넣는 쪽이 자연스럽다.
+         * 그래서 입력란을 지웠다. 컬럼은 ETL 의 착지점으로 남아 있고 읽기도 되지만 쓰지 않는다
+         * (NeotmsCustomer.dbops.ts 의 CUSTOMER_FIELDS). "어떤 CAT 툴을 쓰는가" 는 번역가에게
+         * 물어야 의미가 있는 질문이고, 그쪽은 `tranUpro` 로 남아 있다.
          */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="cus-upro">
-            등급
-          </label>
-          <input
-            id="cus-upro"
-            className={ui.input}
-            value={form.cusUpro}
-            onChange={(e) => set('cusUpro', e.target.value)}
-          />
-          <span className={ui.hint}>등록된 코드값만 저장됩니다. 금액이 아닙니다.</span>
-        </div>
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="cus-mincost">
@@ -224,13 +213,19 @@ export function CustomerFormModal({ customer, onClose, onSaved }: Props) {
           <label className={ui.label} htmlFor="cus-field">
             분야
           </label>
-          <input
+          {/*
+           * 자유 입력란이었다. 그게 고객사를 등록할 수 없던 원인이다 — `customer.cus_field` 는
+           * `sys_code (code)` 를 참조하는 외래키이므로, 목록에 없는 값을 입력하면 저장이 23503
+           * 으로 거절되고 오류 메시지는 제약 이름만 말한다. 코드를 외워야 하는 입력란은
+           * 외우지 못하면 쓸 수 없는 입력란이다.
+           */}
+          <CodeSelect
             id="cus-field"
-            className={ui.input}
+            domain={CODE_DOMAIN.FIELD}
             value={form.cusField}
-            onChange={(e) => set('cusField', e.target.value)}
+            onChange={(v) => set('cusField', v)}
+            hint="이 고객사가 주로 의뢰하는 분야입니다. 비워 둘 수 있습니다."
           />
-          <span className={ui.hint}>등록된 코드값만 저장됩니다.</span>
         </div>
 
         <div className={ui.field}>

@@ -11,7 +11,7 @@
 // `menu_id` - and the ids in `NeotmsMenus.ts` are still UNCONFIRMED against the legacy SY_MENU rows
 // - shows up as a menu the UI renders with no rights rather than as a menu that vanishes.
 
-import { readInt, readText, type SqlOps, type SqlRow } from "../../utils/RdsDataUtils.js";
+import { readInt, readText, type SqlOps, type SqlRow } from "../../utils/PostgresUtils.js";
 
 export type MenuNode = {
   menuId: string;

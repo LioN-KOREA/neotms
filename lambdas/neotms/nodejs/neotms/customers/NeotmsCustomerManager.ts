@@ -9,10 +9,10 @@
 
 import {
   paginate,
-  rdsExecute,
-  rdsQuery,
+  pgExecute,
+  pgQuery,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { ResponseData } from "../../reqres/RequestResponse.js";
 import { readListQuery, sortAlias } from "../NeotmsQuery.js";
 import { created, notFound, ok, runDb, type ListPage } from "../NeotmsResult.js";
@@ -36,7 +36,7 @@ export async function listCustomers(
 ): Promise<ResponseData<ListPage<CustomerRow> | string>> {
   const query = readListQuery(request, CUSTOMER_SORTS, "created");
   return runDb("list customers", async () => {
-    const rows: SqlRow[] = (await rdsQuery(CustomerListOps(query))).data;
+    const rows: SqlRow[] = (await pgQuery(CustomerListOps(query))).data;
     /*
      * The cursor is built from the ALIAS of the sort column, not the qualified name: the row
      * arrived keyed by alias. `sortAlias` derives one from the other so the allow-list stays the
@@ -51,7 +51,7 @@ export async function listCustomers(
 
 export async function getCustomer(id: string): Promise<ResponseData<CustomerRow | string>> {
   return runDb("get customer", async () => {
-    const row = (await rdsQuery(CustomerGetOps(id))).data;
+    const row = (await pgQuery(CustomerGetOps(id))).data;
     return row ? ok(row) : notFound("customer");
   });
 }
@@ -61,7 +61,7 @@ export async function createCustomer(
   ctx: WriteContext,
 ): Promise<ResponseData<CustomerRow | string>> {
   return runDb("create customer", async () => {
-    const row = (await rdsExecute(CustomerCreateOps(input, ctx))).data;
+    const row = (await pgExecute(CustomerCreateOps(input, ctx))).data;
     // Unreachable in practice: an INSERT that violated a constraint would have thrown, and
     // RETURNING always produces the inserted row. Reported as a 500 rather than coerced into a
     // success, because "created something and cannot say what" is not a 201.
@@ -85,7 +85,7 @@ export async function updateCustomer(
     return { status: 400, body: "No editable field was supplied" };
   }
   return runDb("update customer", async () => {
-    const row = (await rdsExecute(CustomerUpdateOps(id, input, ctx))).data;
+    const row = (await pgExecute(CustomerUpdateOps(id, input, ctx))).data;
     return row ? ok(row) : notFound("customer");
   });
 }
@@ -109,14 +109,14 @@ export async function deleteCustomer(
   ctx: WriteContext,
 ): Promise<ResponseData<{ id: string } | string>> {
   return runDb("delete customer", async () => {
-    const liveProjects = (await rdsQuery(CustomerLiveProjectCountOps(id))).data;
+    const liveProjects = (await pgQuery(CustomerLiveProjectCountOps(id))).data;
     if (liveProjects > 0) {
       return {
         status: 409,
         body: `This customer still has ${liveProjects} live project(s). Close or reassign them first.`,
       };
     }
-    const deletedId = (await rdsExecute(CustomerSoftDeleteOps(id, ctx))).data;
+    const deletedId = (await pgExecute(CustomerSoftDeleteOps(id, ctx))).data;
     return deletedId ? ok({ id: deletedId }) : notFound("customer");
   });
 }

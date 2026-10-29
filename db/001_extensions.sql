@@ -1,67 +1,167 @@
 -- =====================================================================
 -- NEOTMS :: 001_extensions.sql
--- Target: Aurora Serverless v2, PostgreSQL 16, accessed via RDS Data API.
--- Run once per cluster, before 002_tables.sql.
+-- Target: Supabase Postgres, accessed over the Supavisor pooler (6543).
+-- Run once per project, before 002_tables.sql.
 -- =====================================================================
 --
+-- HOW TO RUN THIS
+--   psql, not the Data API. The Aurora variant could not run this file at
+--   all without a bastion or a custom resource, because the RDS Data API
+--   rejects a payload containing more than one statement and the cluster
+--   sat in an isolated subnet. Here it is:
+--
+--     export NEOTMS_DB_PASSWORD=...      # from Secrets Manager
+--     PGPASSWORD=$NEOTMS_DB_PASSWORD psql \
+--       -h aws-0-ap-northeast-2.pooler.supabase.com -p 6543 \
+--       -U postgres.<project-ref> -d postgres -f db/001_extensions.sql
+--
+--   Use the exact host from the dashboard's Connect dialog; it is not
+--   derivable from the region (the leading index is assigned per project).
+--
 -- PRE-BUILD CHECK (blocking):
---   pg_bigm availability MUST be confirmed on the exact pinned Aurora
---   PostgreSQL engine version before anything is built on top of it.
---   pg_bigm is not in the default Aurora/RDS extension set on every
---   minor version. Verify with:
---       SELECT * FROM pg_available_extensions WHERE name = 'pg_bigm';
---   and confirm 'pg_bigm' appears in the cluster parameter group's
---   shared_preload_libraries / rds.extensions allow-list.
---   If pg_bigm is NOT available on the pinned version, STOP: the Korean
---   search strategy in 003_indexes.sql has no fallback that works at two
---   characters, and the index plan must be redesigned (the realistic
---   alternatives are a self-managed 2-gram tokeniser in a side table, or
---   OpenSearch). Do not silently substitute pg_trgm -- see below.
+--   PGroonga availability MUST be confirmed on the project before anything
+--   is built on top of it:
+--       SELECT * FROM pg_available_extensions WHERE name = 'pgroonga';
+--   PGroonga is a first-class Supabase extension, so this is a check rather
+--   than a risk - but it is NOT available on vanilla RDS/Aurora, which is
+--   precisely why this file differs from its counterpart on the other
+--   branch. If it is ever missing, STOP: the Korean search strategy in
+--   003_indexes.sql has no fallback that works at two characters.
+--   Do not silently substitute pg_trgm -- see below.
 --
 -- =====================================================================
 
--- 2-gram index support. REQUIRED for Korean text search.
+-- ---------------------------------------------------------------------
+-- The `extensions` schema, and why it matters here
+-- ---------------------------------------------------------------------
+-- Supabase keeps extensions out of `public` by convention, and its own
+-- documentation installs PGroonga with `WITH SCHEMA extensions`. Doing the
+-- same keeps `public` holding only this application's tables.
+--
+-- The consequence is a search_path dependency: the operators PGroonga
+-- defines (`&@~`, `%%`) and the operator CLASSES the indexes in
+-- 003_indexes.sql name all live in that schema, not in `public`.
+--
+-- 003_indexes.sql therefore SCHEMA-QUALIFIES every operator class
+-- (`extensions.pgroonga_text_regexp_ops_v2`). This is not defensive
+-- styling; applying these files to a PGroonga-enabled Postgres whose role
+-- search_path did not include `extensions` failed on the very first index
+-- with:
+--
+--   ERROR: operator class "pgroonga_text_regexp_ops_v2" does not exist
+--          for access method "pgroonga"
+--
+-- which reads as "PGroonga is broken" and mentions nothing about the
+-- search_path. Qualifying removes the dependency rather than documenting
+-- it, and matters especially over the pooler, where a session-level
+-- `SET search_path` is not guaranteed to survive to the next statement.
+--
+-- The OPERATORS are a separate matter and are NOT qualified anywhere,
+-- because nothing in this project names one: the application emits plain
+-- `LIKE` and PGroonga rewrites it internally (see below), so there is no
+-- `%%` or `&@~` token for the parser to resolve. If a future query ever
+-- spells an operator out by hand, it needs `extensions` on the search_path
+-- or an OPERATOR(extensions.%%) form.
+CREATE SCHEMA IF NOT EXISTS extensions;
+
+-- ---------------------------------------------------------------------
+-- PGroonga. REQUIRED for Korean text search.
+-- ---------------------------------------------------------------------
 -- Korean search terms in LKTMS are very frequently exactly 2 characters
 -- (삼성, 번역, 계약 ...). pg_trgm's GIN operator class cannot index a
 -- pattern shorter than 3 characters: the LIKE '%ab%' predicate produces no
 -- indexable trigram key, the index is skipped, and the planner falls back
 -- to a sequential scan WITHOUT raising any error. That silent fallback is
--- exactly the legacy performance defect we are here to remove, so pg_bigm
--- is not optional and not interchangeable with pg_trgm.
-CREATE EXTENSION IF NOT EXISTS pg_bigm;
-
--- 3-gram index support. Used only for ASCII identifier/contact columns
--- (po_code, prj_code, job_code, phone, email) where terms are always
--- longer than 3 characters. Trigram indexes are materially smaller than
--- bigram indexes on the same column, and pg_trgm additionally gives us
--- similarity() for fuzzy ranking, which pg_bigm does not.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
--- Bulk COPY to/from S3.
--- Needed because the RDS Data API caps a single result set at 1 MiB; any
--- report export, ETL extract or reconciliation dump larger than that must
--- bypass the Data API entirely and stream via aws_s3.query_export_to_s3().
+-- exactly the legacy performance defect we are here to remove.
 --
--- aws_s3 has two prerequisites beyond CREATE EXTENSION:
---   1. An IAM role attached to the Aurora cluster (aws_rds_role /
---      s3Export + s3Import feature roles) granting s3:GetObject,
---      s3:PutObject and s3:ListBucket on the target prefix.
---   2. The bucket MUST use SSE-KMS, not SSE-S3. With SSE-S3 the export
---      call fails at write time, and the KMS key policy must additionally
---      grant kms:GenerateDataKey + kms:Decrypt to that same cluster role.
-CREATE EXTENSION IF NOT EXISTS aws_s3;
-
--- aws_s3 depends on aws_commons; CREATE EXTENSION aws_s3 normally pulls it
--- in, but declare it explicitly so a partial/manual install still works.
-CREATE EXTENSION IF NOT EXISTS aws_commons;
+-- PGroonga rather than pg_bigm, which is what the Aurora variant used:
+-- pg_bigm needs an entry in shared_preload_libraries, which on a managed
+-- Supabase project is not ours to set. PGroonga needs no preload, is
+-- shipped and supported by Supabase, and is a strictly stronger tool - it
+-- tokenises CJK text properly instead of taking every 2-character window,
+-- so the index is smaller and the recheck cheaper.
+--
+-- The property this project depends on is PGroonga's LIKE rewrite: it
+-- converts `column LIKE '%KEYWORD%'` into `column %% 'KEYWORD'`
+-- internally, which means the search layer in NeotmsQuery.ts keeps
+-- emitting ordinary LIKE and the ~20 dbops modules are untouched.
+-- Two conditions on that, both load-bearing:
+--
+--   1. THE COLUMN MUST BE `text`, NOT `varchar`. LIKE on a varchar column
+--      is ALWAYS a sequential search - silently, with the index sitting
+--      there unused. Every searched column in 002_tables.sql is `text` for
+--      this reason, and a test parses the schema to keep it that way.
+--
+--      The mechanism, since "PGroonga cannot index varchar" invites the
+--      reasonable-sounding fix of using a varchar operator class instead:
+--      PGroonga DOES ship `pgroonga_varchar_regexp_ops_v2`, and an index
+--      built with it on a varchar column is created without complaint. It
+--      still is not used, because PostgreSQL resolves `LIKE` on varchar by
+--      casting first - the plan reads
+--
+--        Seq Scan on t
+--          Filter: ((name)::text ~~ '%삼성%'::text)
+--
+--      and that `(name)::text` is an expression, not the indexed column, so
+--      there is nothing for the rewrite to attach to. Measured, not
+--      inferred: 30,000 rows, index present, ANALYZEd, Seq Scan anyway.
+--      Changing a column to varchar(n) re-creates the legacy defect, and no
+--      choice of operator class rescues it.
+--   2. The index must use a LIKE-capable operator class
+--      (`pgroonga_text_regexp_ops_v2` here; see 003_indexes.sql).
+--      The default class does not serve LIKE.
+CREATE EXTENSION IF NOT EXISTS pgroonga WITH SCHEMA extensions;
 
 -- ---------------------------------------------------------------------
--- Post-install verification. Expect 4 rows.
+-- pg_trgm. ASCII identifier and contact columns only.
+-- ---------------------------------------------------------------------
+-- po_code, prj_code, job_code, phone, email - terms always longer than 3
+-- characters. Trigram indexes are materially smaller than the equivalent
+-- full-text index on the same column, and pg_trgm gives us similarity()
+-- for fuzzy ranking.
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
+
+-- ---------------------------------------------------------------------
+-- What is deliberately NOT here: aws_s3 / aws_commons
+-- ---------------------------------------------------------------------
+-- The Aurora variant installed both, for one reason: the RDS Data API
+-- caps a single result set at 1 MiB, so any report export larger than
+-- that had to leave the database through aws_s3.query_export_to_s3() and
+-- be collected from an SSE-KMS bucket. That dragged in an IAM role on the
+-- cluster, a KMS key, and a key policy - all of it machinery to work
+-- around a transport limit.
+--
+-- Over a socket there is no such cap, and these extensions do not exist
+-- outside RDS anyway. A large report is now rendered by the Lambda and, if
+-- it exceeds the 6MB response payload, written to the export bucket by the
+-- FUNCTION and handed back as a presigned URL. No database involvement.
+
+-- ---------------------------------------------------------------------
+-- Statement timeout, set on the ROLE rather than per session
+-- ---------------------------------------------------------------------
+-- A runaway query is the legacy system's signature failure, and the
+-- backstop against it has to be set here rather than in the application.
+-- In transaction mode the pooler returns the server connection to the
+-- pool at COMMIT, so session-level state does not survive: a `SET
+-- statement_timeout` issued by the function applies to that transaction
+-- and is then lost, and a `SET` outside a transaction may not even land on
+-- the connection the next statement gets. ALTER ROLE persists in the
+-- catalogue, so every backend picks it up at login regardless.
+--
+-- 30 seconds, matched to the function's own 29-second timeout: a statement
+-- the caller can no longer receive should not keep burning database CPU.
+-- Run as a superuser/owner; harmless to re-run.
+ALTER ROLE postgres SET statement_timeout = '30s';
+
+-- ---------------------------------------------------------------------
+-- Post-install verification. Expect 2 rows.
 -- ---------------------------------------------------------------------
 -- SELECT extname, extversion FROM pg_extension
---  WHERE extname IN ('pg_bigm','pg_trgm','aws_s3','aws_commons')
+--  WHERE extname IN ('pgroonga','pg_trgm')
 --  ORDER BY extname;
 --
--- Smoke-test that pg_bigm really indexes a 2-character Korean term
--- (run AFTER 003_indexes.sql; the plan must be a Bitmap Index Scan, not Seq Scan):
+-- Smoke-test that PGroonga really indexes a 2-character Korean term.
+-- Run AFTER 003_indexes.sql. The plan MUST be a Bitmap Index Scan with a
+-- Recheck, not a Seq Scan -- see db/004_verify_search.sql, which asserts
+-- this and fails loudly rather than leaving it to be read by eye:
 -- EXPLAIN ANALYZE SELECT id FROM project WHERE prj_name LIKE '%삼성%';

@@ -40,6 +40,34 @@ export const NeotmsMenu = {
    * figure in this system.
    */
   REPORT: "REPORT",
+  /**
+   * 유지보수 - the code tables.
+   *
+   * `sys_code` is where 분야, 작업 종류, 단가 단위, 언어 and 사용 프로그램 live, and twenty-two
+   * columns across the schema FK to it with ON DELETE RESTRICT. That is why it needs a screen at
+   * all: until db/007_codes.sql seeded it, every save that carried a code failed with a foreign key
+   * violation, and the only way to add a missing code was to open a SQL console.
+   *
+   * Gated on its own menu rather than folded into an existing one, because editing a code list is a
+   * different authority from using it. Every PM reads these codes all day through
+   * `GET /api/v0/codes`, which is `anyStaff`; deciding what the company's 분야 taxonomy IS belongs
+   * to whoever runs the system.
+   */
+  MAINTENANCE: "MAINTENANCE",
+  /**
+   * 사용자 관리 - the staff list and role assignment.
+   *
+   * The most dangerous menu in the application, and the only one whose writes change what other
+   * menus permit: `staff.role_id` is the column every permission in this system is resolved from,
+   * and `staff.view_scope` decides whether somebody sees their own rows or everybody's. A role
+   * granted here is a role granted everywhere.
+   *
+   * Which is also why it is a menu and not a hardcoded "superuser may do this" check. The right to
+   * assign roles is itself a grant in `sys_role_auth`, so it can be given, taken away, and audited
+   * by the same mechanism as everything else - rather than being an implicit property of a role code
+   * that nothing enumerates.
+   */
+  STAFF: "STAFF",
 } as const;
 
 export type NeotmsMenuId = (typeof NeotmsMenu)[keyof typeof NeotmsMenu];

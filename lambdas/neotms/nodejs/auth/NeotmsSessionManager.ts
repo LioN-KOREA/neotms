@@ -37,7 +37,7 @@ import {
   dynamoDBUpdate,
   isConditionalCheckFailure,
 } from "../utils/DynamoDBUtils.js";
-import { lookupAccount } from "./NeotmsAuthGuard.js";
+import { lookupAccount, mayOpenNeotms } from "./NeotmsAuthGuard.js";
 import { verifyAccessToken } from "./NeotmsTokenVerifier.js";
 import {
   NeotmsSessionDeleteOps,
@@ -168,6 +168,12 @@ export type SessionView = {
      * Decides nothing: it is here so the browser can show "you do not have access to this system"
      * instead of a blank screen. Every request is checked again on its own (NeotmsAuthGuard), and
      * what the user may actually *do* comes from /api/v0/me.
+     *
+     * Because it decides nothing, the only way it can be WRONG is by disagreeing with the guard -
+     * and it is computed by calling the guard's own `mayOpenNeotms` so that it cannot. Saying "no
+     * access" to an account the API would admit is the worse direction of the two: it is what the
+     * browser would have shown an LPX administrator arriving at an empty NEOTMS, which is the one
+     * account that could have fixed it.
      */
     canAccess: boolean;
   };
@@ -182,7 +188,7 @@ async function toView(accessToken: string, sub: string, expiresAt: number): Prom
       sub,
       email: account.email,
       name: account.name,
-      canAccess: account.authorities.includes(NeotmsEnv.NEOTMS_APP_AUTHORITY_ID),
+      canAccess: mayOpenNeotms(account),
     },
   };
 }

@@ -29,7 +29,7 @@ import {
   type SqlOps,
   type SqlParameter,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { mergeClauses, rangeClause, scopeClause, type SqlClause } from "../NeotmsQuery.js";
 import type { ReportQuery } from "../neotms.schemas.js";

@@ -12,7 +12,7 @@
 //   * `Set-Cookie` goes in the payload-format-2.0 `cookies` array, NOT in `headers`. A header map
 //     cannot hold two values for one name, so a response that clears the flow cookie and sets the
 //     session cookie would silently lose one of them.
-//   * The JSON replacer stringifies `bigint`. Ids arrive from the Data API as strings and stay
+//   * The JSON replacer stringifies `bigint`. Ids arrive from the database as strings and stay
 //     strings, but `JSON.stringify` throws on a bigint rather than skipping it, and a throw here
 //     would turn a correct response into a 500.
 

@@ -9,7 +9,9 @@
 //   2. May this LPX account open NEOTMS at all?
 //      -> the coarse tier. The access token does not carry the authority list, so it is read from
 //         /lpx/auth/userInfo and cached briefly. Holding the authority means "may open NEOTMS"; it
-//         says nothing about which menus or which rows.
+//         says nothing about which menus or which rows. Two authorities pass - the app authority,
+//         and `lpx.admin.access`, which exists only so that a NEOTMS whose `staff` table is still
+//         empty has a way in. See `mayOpenNeotms` and `bootstrapSuperuser`.
 //
 //   3. Who is this person inside NEOTMS, and what may they do?
 //      -> the fine tier, and the one the legacy system got wrong. The staff row gives the role, the
@@ -23,10 +25,11 @@
 
 import { NeotmsEnv, isAuthConfigComplete } from "../env/NeotmsEnv.js";
 import type { ResponseData } from "../reqres/RequestResponse.js";
-import { exceptionToErrorResponse, rdsQuery } from "../utils/RdsDataUtils.js";
+import { exceptionToErrorResponse, pgQuery } from "../utils/PostgresUtils.js";
 import { _resetTokenVerifier, verifyAccessToken } from "./NeotmsTokenVerifier.js";
 import {
   RoleMenuPermissionsOps,
+  StaffBootstrapSuperuserOps,
   StaffByLpxSubOps,
   StaffClaimOps,
   StaffUnclaimedByEmailOps,
@@ -82,6 +85,17 @@ export type NeotmsCaller = {
   name: string;
   email: string;
   corpCode: string | null;
+  /**
+   * `staff.role_id`, or null for a staff row awaiting approval.
+   *
+   * Carried as well as `roleCode` because null here is a STATE the UI has to name, not just a
+   * missing label: a self-registered row starts with no role, and "signed in, waiting to be
+   * approved" has to be distinguishable from "approved into a role whose grants are empty". The
+   * two look identical through `permissions` alone - both are an empty matrix - and telling the
+   * second person to wait for an approval that already happened is the kind of answer that sends
+   * them to a colleague instead of to the right screen.
+   */
+  roleId: string | null;
   roleCode: string | null;
   roleName: string | null;
   /** menu_id -> the five action flags. Absent from the map means no rights on that menu. */
@@ -153,6 +167,50 @@ export async function lookupAccount(accessToken: string, sub: string): Promise<A
   }
 }
 
+/**
+ * Does this account hold the authority that may bootstrap an empty NEOTMS?
+ *
+ * That authority is `lpx.admin.access`, LPX's own superuser, supplied as
+ * `NEOTMS_BOOTSTRAP_AUTHORITY_ID`. BLANK MEANS NO, for every account - that is how the bootstrap is
+ * switched off, and it is the setting production should carry once real administrators exist. So the
+ * blank check comes first and is not an error: an unset value here is a deliberate configuration,
+ * unlike every other auth setting, which is why `isAuthConfigComplete` ignores it.
+ *
+ * Holding it does not grant any menu or any row. All it does is make the caller eligible for
+ * `bootstrapSuperuser` below, which provisions a real staff row with a real role - so the
+ * permissions that follow are read back out of the database like everyone else's.
+ */
+function holdsBootstrapAuthority(account: AccountInfo): boolean {
+  const authority = NeotmsEnv.NEOTMS_BOOTSTRAP_AUTHORITY_ID.trim();
+  if (!authority) return false;
+  return account.authorities.includes(authority);
+}
+
+/**
+ * May this LPX account open NEOTMS at all? The coarse tier, and nothing more.
+ *
+ * Exported because the session manager has to answer the same question for the browser, and the two
+ * answers MUST agree. They did not have to agree before this function existed, and the failure that
+ * would follow is a bad one: the SPA would render "you do not have access to this system" for an
+ * administrator the API is perfectly willing to admit and bootstrap, so the one account that could
+ * fix an empty database would be the one told it had no access.
+ *
+ * Two ways to pass, and the second is strictly a recovery path:
+ *
+ *   * the app authority - the normal answer for everybody;
+ *   * the bootstrap authority - `lpx.admin.access`, which exists so that a NEOTMS with an empty
+ *     `staff` table has a way in. See `bootstrapSuperuser`.
+ *
+ * This decides nothing beyond "may be let as far as the staff lookup". Every request is still
+ * checked on its own, and what the caller may DO comes from their role.
+ */
+export function mayOpenNeotms(account: AccountInfo): boolean {
+  return (
+    account.authorities.includes(NeotmsEnv.NEOTMS_APP_AUTHORITY_ID) ||
+    holdsBootstrapAuthority(account)
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* The staff row and the role matrix (fine tier)                              */
 /* -------------------------------------------------------------------------- */
@@ -186,6 +244,7 @@ const toCaller = (
   name: staff.name ?? account.name,
   email: staff.email ?? account.email,
   corpCode: staff.corpCode,
+  roleId: staff.roleId,
   roleCode: staff.roleCode,
   roleName: staff.roleName,
   permissions,
@@ -202,7 +261,7 @@ const toCaller = (
  * the sign-in loop, which succeeds, which refuses again, forever.
  */
 async function resolveStaff(sub: string, account: AccountInfo): Promise<StaffRow | null> {
-  const existing = (await rdsQuery(StaffByLpxSubOps(sub))).data;
+  const existing = (await pgQuery(StaffByLpxSubOps(sub))).data;
   if (existing) return existing;
 
   // Just-in-time linking (Q20): the legacy staff accounts and the LPX accounts have virtually no
@@ -213,45 +272,184 @@ async function resolveStaff(sub: string, account: AccountInfo): Promise<StaffRow
     return null;
   }
 
-  const candidate = (await rdsQuery(StaffUnclaimedByEmailOps(account.email))).data;
+  const candidate = (await pgQuery(StaffUnclaimedByEmailOps(account.email))).data;
   if (!candidate) {
     console.warn(`No unclaimed staff row matches ${account.email} (${sub}).`);
     return null;
   }
 
-  const claimed = (await rdsQuery(StaffClaimOps(candidate.staffId, sub))).data;
+  const claimed = (await pgQuery(StaffClaimOps(candidate.staffId, sub))).data;
   if (!claimed) {
     // Another sign-in claimed it between the two statements. One of them is this same person
     // arriving twice - a double-clicked login, or two tabs - so read back by sub before giving up.
     console.warn(`The staff row ${candidate.staffId} was claimed by someone else; re-reading.`);
-    return (await rdsQuery(StaffByLpxSubOps(sub))).data;
+    return (await pgQuery(StaffByLpxSubOps(sub))).data;
   }
 
   console.info(`Linked staff row ${claimed.staffId} (${claimed.mgrId}) to the identity ${sub}.`);
   return claimed;
 }
 
-async function resolveCaller(sub: string, account: AccountInfo): Promise<NeotmsCaller | null> {
-  const cached = callerCache.get(sub);
-  if (cached && cached.expiresAt > Date.now()) return cached.caller;
-
-  const staff = await resolveStaff(sub, account);
-  if (!staff) return null;
+/**
+ * Why a staff row cannot be used to administer NEOTMS, or null if it can.
+ *
+ * Three states, and the point of grouping them is that they are indistinguishable to the person
+ * affected - all three produce a NEOTMS nobody can do anything in:
+ *
+ *   * "missing"  - no row at all. What `db/002..005` leaves behind: the schema applies, the deploy
+ *                  succeeds, and the first sign-in is refused as "not registered as NEOTMS staff".
+ *   * "inactive" - a row exists and carries this subject, but `active = false`. Note this case can
+ *                  only be reached HERE and not through `resolveStaff`'s just-in-time link, which
+ *                  requires `active = true` to adopt a candidate at all.
+ *   * "no role"  - active, linked, and `role_id IS NULL`, so the permission matrix comes back empty
+ *                  and every menu is refused. Just as locked out as "missing", only it looks like a
+ *                  working login into an application with no features.
+ */
+function whyUnusable(staff: StaffRow | null): "missing" | "inactive" | "no role" | null {
+  if (!staff) return "missing";
   // `active` is the "may currently sign in" flag. A departed employee's row is kept because every
   // historical project references it, so the flag is the only thing standing between a kept row
   // and a working login.
-  if (!staff.active) {
-    console.warn(`The staff row ${staff.staffId} is inactive; refusing ${sub}.`);
+  if (!staff.active) return "inactive";
+  if (!staff.roleId) return "no role";
+  return null;
+}
+
+/**
+ * Provision or repair the staff row of an LPX administrator, so an empty NEOTMS has a way in.
+ *
+ * THE PROBLEM THIS SOLVES. Immediately after the schema is applied, `staff`, `sys_role` and
+ * `sys_menu` are empty. Every sign-in is then refused for want of a staff row - including the
+ * sign-in of the person who would have created the staff rows - and NEOTMS has no route that writes
+ * one, because staff administration is itself behind the guard. Without this branch the only
+ * recovery is the database password and a psql client, which is a worse thing to require than this
+ * is to allow.
+ *
+ * WHY THE AUTHORITY AND NOT AN EMPTY-TABLE TEST. "Allow this while `staff` has no rows" sounds
+ * tighter and is worse: the ETL loads the legacy staff rows, the table stops being empty, and the
+ * administrators are silently locked out again at the exact moment they are needed - mid-migration,
+ * with a half-loaded database. Keying on the authority means the capability is revoked by revoking
+ * the authority, which is a deliberate act somebody can see.
+ *
+ * WHY THIS GRANTS NOTHING NEW. A holder of `lpx.admin.access` can already read and rewrite LPX's
+ * authority tables, including which accounts hold the NEOTMS app authority - so they could already
+ * grant themselves NEOTMS access and then be adopted by the ordinary path. This only saves the step.
+ * The honest consequence, stated here and in db/006_bootstrap.sql section 4: SUCH A HOLDER CANNOT BE
+ * LOCKED OUT OF NEOTMS FROM INSIDE NEOTMS. Revocation is on LPX, or by blanking
+ * `NEOTMS_BOOTSTRAP_AUTHORITY_ID`.
+ *
+ * All of the decision is in the SQL function - one statement, therefore atomic under the pooler's
+ * transaction mode, therefore immune to two administrators signing in at once and ending up with two
+ * staff rows for one person. See StaffBootstrapSuperuserOps. It returns the id only, so the row is
+ * re-read: a volatile function and a join in the same statement would read the pre-call snapshot.
+ *
+ * Returns null rather than throwing on a surprise - a bootstrap that did not take is a 403, same as
+ * any other unusable row, and the log says what happened.
+ */
+async function bootstrapSuperuser(
+  sub: string,
+  account: AccountInfo,
+  reason: "missing" | "inactive" | "no role",
+): Promise<StaffRow | null> {
+  const email = account.email.trim() || null;
+  const name = account.name.trim() || null;
+
+  // NULL, not "", when userInfo omitted them: the function distinguishes "no email to adopt by"
+  // from an email, and '' stored in `mgr_email` would break every IS NULL test on that column.
+  await pgQuery(StaffBootstrapSuperuserOps(sub, email, name));
+  const staff = (await pgQuery(StaffByLpxSubOps(sub))).data;
+
+  const stillUnusable = whyUnusable(staff);
+  if (!staff || stillUnusable) {
+    // Should not happen: the function either returns a usable id or raises. Worth its own message
+    // because "it ran and the row is still wrong" and "it failed" need different investigations.
+    console.error(
+      `The bootstrap ran for ${sub} but the staff row is still unusable (${stillUnusable}).`,
+    );
     return null;
   }
 
+  /*
+   * THE AUDIT RECORD, and for one case it is the only one that exists.
+   *
+   * db/006_bootstrap.sql section 5 has a review query over the database, but it cannot see
+   * everything: a row that was ADOPTED rather than minted keeps its original `created_by`, and one
+   * that already carried an explicit role was reactivated rather than escalated - so it leaves no
+   * trace in `staff` distinguishable from ordinary use. This line is therefore the authoritative
+   * record, and it carries everything an auditor needs to reconstruct the event: who, which
+   * identity, what was wrong before, and what they hold now.
+   *
+   * `console.warn` and not `info`, so it survives a log level raised to quiet the request log. This
+   * should be a rare line - a handful at go-live and then never - and a reader who finds a fresh one
+   * months later should feel the same prickle as they would at a sudo entry.
+   */
+  console.warn(
+    `NEOTMS BOOTSTRAP: the authority ${NeotmsEnv.NEOTMS_BOOTSTRAP_AUTHORITY_ID} provisioned ` +
+      `staff ${staff.staffId} (${staff.mgrId}, ${staff.email ?? "no email"}) for the identity ` +
+      `${sub}; the row was "${reason}" before, and now holds the role ` +
+      `${staff.roleCode ?? "none"} with view scope ${staff.viewScope ?? "none"}.`,
+  );
+  return staff;
+}
+
+/**
+ * What the staff lookup found, for a caller we have already authenticated as an LPX account.
+ *
+ * Three outcomes rather than `NeotmsCaller | null`, because the three need three different answers
+ * from the API and the old null conflated two of them:
+ *
+ *   * `ok`           - a usable staff row. Note this INCLUDES a row with no role: that person is
+ *                      signed in and can do nothing, which is a real state the UI has to describe
+ *                      (see `NeotmsCaller.roleId`), not a refusal.
+ *   * `unregistered` - no staff row for this identity, and none to link to. Until self-registration
+ *                      existed this was simply a 403; now it is the one state a user can get
+ *                      themselves out of, so it has to be reportable rather than only refusable.
+ *   * `inactive`     - a row exists and carries this subject, but `active = false`. A refusal, and
+ *                      deliberately NOT offered the sign-up form: minting a second row for somebody
+ *                      an administrator switched off would hand back the access that was removed,
+ *                      and it would split their project history across two `mgr_id`s.
+ */
+export type CallerState =
+  | { kind: "ok"; caller: NeotmsCaller }
+  | { kind: "unregistered" }
+  | { kind: "inactive" };
+
+async function resolveCallerState(sub: string, account: AccountInfo): Promise<CallerState> {
+  const cached = callerCache.get(sub);
+  if (cached && cached.expiresAt > Date.now()) return { kind: "ok", caller: cached.caller };
+
+  let staff = await resolveStaff(sub, account);
+
+  /*
+   * The bootstrap sits HERE, and not inside `resolveStaff`, for a reason that is easy to get wrong:
+   * `resolveStaff` returns a row it found whether or not that row is usable. An `active = false` row
+   * carrying this subject is FOUND - `StaffByLpxSubOps` filters only on `deleted` - so an inactive
+   * administrator never reaches a null return and a bootstrap hidden behind one would never fire for
+   * them. The eligibility test has to see the row, not the absence of one.
+   */
+  const unusable = whyUnusable(staff);
+  if (unusable && holdsBootstrapAuthority(account)) {
+    // Only on success, so a bootstrap that did not take leaves the caller exactly where they would
+    // have been without it. The "no role" case is the one that matters: that row is active, and
+    // overwriting it with a null would turn a session with no permissions into no session at all -
+    // a recovery path making things worse than not running.
+    const bootstrapped = await bootstrapSuperuser(sub, account, unusable);
+    if (bootstrapped) staff = bootstrapped;
+  }
+
+  if (!staff) return { kind: "unregistered" };
+  if (!staff.active) {
+    console.warn(`The staff row ${staff.staffId} is inactive; refusing ${sub}.`);
+    return { kind: "inactive" };
+  }
+
   const permissions = staff.roleId
-    ? (await rdsQuery(RoleMenuPermissionsOps(staff.roleId))).data
+    ? (await pgQuery(RoleMenuPermissionsOps(staff.roleId))).data
     : new Map<string, MenuPermissions>();
 
   const caller = toCaller(sub, staff, account, permissions);
   callerCache.set(sub, { caller, expiresAt: Date.now() + CALLER_TTL_MS });
-  return caller;
+  return { kind: "ok", caller };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -268,27 +466,47 @@ function bearerToken(headers: Record<string, string> | undefined): string | null
 
 const UNAUTHENTICATED: ResponseData<string> = { status: 401, body: "Unauthenticated" };
 
+/* -------------------------------------------------------------------------- */
+/* Tier two on its own: a verified account, no staff row required             */
+/* -------------------------------------------------------------------------- */
+
+/** A caller we know the identity of, before asking who they are inside NEOTMS. */
+export type LpxIdentity = {
+  /** The OIDC subject. */
+  sub: string;
+  /** What the account system says about them - including the name and email a sign-up prefills. */
+  account: AccountInfo;
+};
+
+export type IdentityResult =
+  | { ok: true; identity: LpxIdentity }
+  | { ok: false; response: ResponseData<string> };
+
 /**
- * Let the request through only for a verified LPX account that holds the app authority and has a
- * usable NEOTMS staff row.
+ * Steps 1 and 2 of the three at the top of this file: a genuine token for this app, held by an
+ * account that may open NEOTMS. Step 3 - who they are inside NEOTMS - is not asked.
  *
- * Returns the response to send on refusal rather than throwing, so the caller stays a plain
- * handler. The status codes are chosen to be distinguishable, because an operator looking at a
- * refusal needs to know which of four different things went wrong:
+ * TWO ROUTES AND ONLY TWO MAY USE THIS, and both exist because of the same chicken-and-egg:
  *
- *   500 - a setting is missing, or the database could not be read. An operator error or an outage,
- *         never the caller's fault. It must not read as "not allowed", or a misconfigured deploy
- *         would look exactly like a correctly refused request.
- *   401 - we cannot tell who this is. Signing in again is the right response.
- *   403 - we can tell, and they may not. Signing in again will not help, and an administrator has
- *         to act. This covers both "no NEOTMS authority" and "no staff row".
- *   503 - the cluster is resuming. Try again in a moment; see RdsDataUtils.
+ *   * `GET /api/v0/me` - has to be able to answer "you have no staff row, here is the form". Behind
+ *     `requireNeotmsAccess` that answer is a 403 with no body the SPA can act on, so the person who
+ *     could register gets the one screen that does not mention registering.
+ *   * `POST /api/v0/registration` - creates the staff row. It cannot require one.
+ *
+ * Nothing else should take this tier, and the reason is worth stating because the flag is one word
+ * in a route table: an endpoint on this tier is reachable by EVERY employee with the NEOTMS app
+ * authority, approved or not. That is the correct audience for "tell me my own status" and "put me
+ * in the queue" and for nothing else. The two handlers that use it must therefore treat the account
+ * as an identity only - never as a permission - and neither reads or writes a business table.
+ *
+ * Statuses match `requireNeotmsAccess` exactly, minus the ones that come from the staff lookup:
+ * 500 for a missing setting, 401 for an identity we cannot establish, 403 for an account refused by
+ * the coarse tier.
  */
-export async function requireNeotmsAccess(
+export async function requireLpxAccountOnly(
   headers: Record<string, string> | undefined,
-): Promise<GuardResult> {
+): Promise<IdentityResult> {
   if (!isAuthConfigComplete()) {
-    // Refusing is the only safe answer, and 500 is the only honest status.
     console.error("The authentication settings are incomplete; refusing every request.");
     return {
       ok: false,
@@ -303,19 +521,65 @@ export async function requireNeotmsAccess(
   try {
     sub = (await verifyAccessToken(token)).sub;
   } catch (err) {
-    // Any failure here - bad signature, wrong issuer, wrong client, expired - is a 401.
     console.error(`An access token was rejected : ${err}`);
     return { ok: false, response: UNAUTHENTICATED };
   }
 
   const account = await lookupAccount(token, sub);
-  if (!account.authorities.includes(NeotmsEnv.NEOTMS_APP_AUTHORITY_ID)) {
+  if (!mayOpenNeotms(account)) {
+    // The same 403 the full guard gives, and for the same reason: this account may not open NEOTMS
+    // at all, so offering it a sign-up form would be offering a queue it can never be let out of.
     return { ok: false, response: { status: 403, body: "Not permitted" } };
   }
 
-  let caller: NeotmsCaller | null;
+  return { ok: true, identity: { sub, account } };
+}
+
+/**
+ * Who this identity is inside NEOTMS, for a caller `requireLpxAccountOnly` has already admitted.
+ *
+ * Exported for `GET /api/v0/me`, which is the one endpoint that has to describe all three outcomes
+ * rather than refuse two of them. Throws on a database failure rather than inventing a state - the
+ * caller wraps it in `runDb`, which is the same translation `requireNeotmsAccess` does inline.
+ */
+export async function resolveRegistration(identity: LpxIdentity): Promise<CallerState> {
+  return resolveCallerState(identity.sub, identity.account);
+}
+
+/* -------------------------------------------------------------------------- */
+/* The full guard                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Let the request through only for a verified LPX account that holds the app authority and has a
+ * usable NEOTMS staff row.
+ *
+ * Returns the response to send on refusal rather than throwing, so the caller stays a plain
+ * handler. The status codes are chosen to be distinguishable, because an operator looking at a
+ * refusal needs to know which of four different things went wrong:
+ *
+ *   500 - a setting is missing, or the database could not be read. An operator error or an outage,
+ *         never the caller's fault. It must not read as "not allowed", or a misconfigured deploy
+ *         would look exactly like a correctly refused request.
+ *   401 - we cannot tell who this is. Signing in again is the right response.
+ *   403 - we can tell, and they may not. Signing in again will not help, and an administrator has
+ *         to act. This covers both "no NEOTMS authority" and "no staff row".
+ *   503 - a transient database failure that outlived the retries: the pooler refused a connection,
+ *         or the connection dropped mid-statement. Try again in a moment; see PostgresUtils.
+ */
+export async function requireNeotmsAccess(
+  headers: Record<string, string> | undefined,
+): Promise<GuardResult> {
+  // Steps 1 and 2, shared with the account-only tier above so the two cannot drift apart. A
+  // difference between them would be the worst kind: one endpoint admitting a token the next
+  // refuses, with nothing in either log saying why.
+  const identity = await requireLpxAccountOnly(headers);
+  if (!identity.ok) return { ok: false, response: identity.response };
+  const { sub, account } = identity.identity;
+
+  let state: CallerState;
   try {
-    caller = await resolveCaller(sub, account);
+    state = await resolveCallerState(sub, account);
   } catch (err) {
     // A database failure is not a permission decision. Reporting it as one would be the legacy
     // system's defining mistake repeated: nobody could tell a deployment problem from a refusal.
@@ -334,7 +598,16 @@ export async function requireNeotmsAccess(
     };
   }
 
-  if (!caller) {
+  if (state.kind !== "ok") {
+    /*
+     * One 403 for both refusals, and the wording is unchanged from before self-registration existed.
+     *
+     * It is tempting to say "register yourself at /signup" here. Don't: this body is what an API
+     * client sees, and the SPA never shows it - it asks `GET /api/v0/me`, which reports the state
+     * properly and renders either the sign-up form or the waiting notice. Naming the two cases
+     * differently in this string would also tell an unauthorized caller whether a given LPX account
+     * has a NEOTMS staff row, which is a fact worth nobody's while.
+     */
     return {
       ok: false,
       response: {
@@ -344,7 +617,7 @@ export async function requireNeotmsAccess(
     };
   }
 
-  return { ok: true, caller };
+  return { ok: true, caller: state.caller };
 }
 
 /* -------------------------------------------------------------------------- */

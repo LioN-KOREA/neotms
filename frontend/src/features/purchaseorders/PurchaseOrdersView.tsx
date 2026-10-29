@@ -9,6 +9,8 @@ import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
 import { mayDo } from '@/shared/permissions'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
+import { Icon } from '@/shared/ui/Icon'
+import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import { decimalSum } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
@@ -87,19 +89,18 @@ export function PurchaseOrdersView() {
 
   return (
     <div className={ui.page}>
-      <div className={ui.pageHead}>
-        <div>
-          <h1 className={ui.pageTitle}>발주</h1>
-          <p className={ui.pageHint}>
-            작업을 번역가에게 맡긴 건입니다. 원화 환산 합계가 이 시스템의 원가입니다.
-          </p>
-        </div>
+      {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
+      <div className={ui.pageBar}>
+        <p className={ui.pageNote}>
+          작업을 번역가에게 맡긴 건입니다. 원화 환산 합계가 이 시스템의 <b>원가</b>입니다.
+        </p>
         {mayCreate ? (
           <button
             type="button"
             className={`${ui.btn} ${ui.btnPrimary}`}
             onClick={() => setEditing(null)}
           >
+            <Icon name="plus" size={13} />
             발주 등록
           </button>
         ) : null}
@@ -272,22 +273,10 @@ export function PurchaseOrdersView() {
                     {row.poEdayTime ? <div>{row.poEdayTime}</div> : null}
                   </td>
                   <td>
-                    <span className={`${ui.badge} ${row.poState === '진행' ? ui.badgePrimary : ''}`}>
-                      {row.poState || '-'}
-                    </span>
+                    <StatusChip value={row.poState} />
                   </td>
                   <td>
-                    <span
-                      className={`${ui.badge} ${
-                        row.poMoneyState === '정산완료'
-                          ? ui.badgeSuccess
-                          : row.poMoneyState === '미정산'
-                            ? ui.badgeWarn
-                            : ''
-                      }`}
-                    >
-                      {row.poMoneyState || '-'}
-                    </span>
+                    <StatusChip value={row.poMoneyState} />
                     {row.poMoneyDay ? (
                       <div className={ui.cellMuted}>{formatDate(row.poMoneyDay)}</div>
                     ) : null}

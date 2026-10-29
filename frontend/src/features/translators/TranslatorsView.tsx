@@ -1,12 +1,15 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useProfile, useTranslators } from '@/apis/queries/neotms.query'
 import { useDeleteTranslator } from '@/apis/queries/neotms.mutation'
-import { codeOptions, COIN_CODES } from '@/apis/neotms.codes'
+import { CODE_DOMAIN, codeOptions, COIN_CODES } from '@/apis/neotms.codes'
 import type { TranslatorRow } from '@/apis/neotms.types'
 import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
 import { mayDo } from '@/shared/permissions'
+import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
+import { Icon } from '@/shared/ui/Icon'
+import { ActiveChip } from '@/shared/ui/StatusChip'
 import ui from '@/shared/ui/ui.module.css'
 import { TranslatorFormModal } from './TranslatorFormModal'
 
@@ -16,12 +19,16 @@ import { TranslatorFormModal } from './TranslatorFormModal'
  * ## 이 화면의 용도는 "검색" 이다
  *
  * 다른 목록은 "최근 것부터 훑어본다" 가 기본 동작이지만, 번역가 목록은 거의 항상 **배정할
- * 사람을 찾기 위해** 열린다 — 이 분야를 할 수 있고, 이 등급이고, 이 통화로 정산하는 사람.
+ * 사람을 찾기 위해** 열린다 — 이 분야를 할 수 있고, 이 프로그램을 쓰고, 이 통화로 정산하는 사람.
  * 그래서 서버의 facet 필터(`field`·`upro`·`coin`·`workCon`)를 그대로 필터 바로 올린다. 이 네
  * 컬럼에는 복합 인덱스가 있다(db/003_indexes.sql 의 `ix_tran_facet`).
  *
- * 분야·등급은 `sys_code` 코드값이고 코드 목록 엔드포인트가 아직 없으므로 자유 입력이다. 검색
- * 조건이므로 틀린 값을 넣어도 결과가 비는 것뿐이고, 저장과 달리 위험하지 않다.
+ * 분야·사용 프로그램은 `sys_code` 코드값이고, 코드 목록 엔드포인트(`GET /api/v0/codes`)가
+ * 생겼으므로 `CodeSelect` 드롭다운으로 고른다. 한때 이 주석은 '등급' 이라고 적고 "검색 조건이니
+ * 틀린 값을 넣어도 결과가 비는 것뿐" 이라고 변명하고 있었는데, 둘 다 틀렸다. `upro` 는 등급이
+ * 아니라 번역가가 쓰는 번역 프로그램이고, 조건이 틀렸을 때 비는 결과는 안전한 게 아니라 **가장
+ * 위험한 실패**다 — 화면은 오류 없이 "0건" 을 보여 주고, 배정할 사람을 찾던 사람은 그런 번역가가
+ * 없다고 결론 낸다.
  */
 
 const FILTER_KEYS = ['q', 'field', 'upro', 'coin'] as const
@@ -77,19 +84,18 @@ export function TranslatorsView() {
 
   return (
     <div className={ui.page}>
-      <div className={ui.pageHead}>
-        <div>
-          <h1 className={ui.pageTitle}>번역가</h1>
-          <p className={ui.pageHint}>
-            발주의 상대방입니다. 발주 원가는 여기 등록된 정산 통화와 지급 방법을 따릅니다.
-          </p>
-        </div>
+      {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
+      <div className={ui.pageBar}>
+        <p className={ui.pageNote}>
+          발주의 상대방입니다. 발주 <b>원가</b>는 여기 등록된 정산 통화와 지급 방법을 따릅니다.
+        </p>
         {mayCreate ? (
           <button
             type="button"
             className={`${ui.btn} ${ui.btnPrimary}`}
             onClick={() => setEditing(null)}
           >
+            <Icon name="plus" size={13} />
             번역가 등록
           </button>
         ) : null}
@@ -120,27 +126,35 @@ export function TranslatorsView() {
             />
           </div>
 
+          {/* 필터에서도 드롭다운이어야 한다. 서버는 이 값을 `=` 로 비교하므로 자유 입력은
+              오타 하나에 조용히 0건을 돌려주고, 찾는 사람은 "그런 번역가가 없다" 고 결론 낸다.
+              `silent` 는 필터 바가 가로 배치라서 경고 문구가 입력칸 옆으로 밀려 나기 때문이다 —
+              코드가 비어 있다는 안내는 등록 화면(TranslatorFormModal)에서 받는다. */}
           <div className={ui.filterField}>
             <label className={ui.label} htmlFor="tf-field">
               가능 분야
             </label>
-            <input
+            <CodeSelect
               id="tf-field"
-              className={ui.input}
+              domain={CODE_DOMAIN.FIELD}
               value={draft.field}
-              onChange={(e) => setDraft((p) => ({ ...p, field: e.target.value }))}
+              onChange={(v) => setDraft((p) => ({ ...p, field: v }))}
+              placeholder="전체"
+              silent
             />
           </div>
 
           <div className={ui.filterField}>
             <label className={ui.label} htmlFor="tf-upro">
-              등급
+              사용 프로그램
             </label>
-            <input
+            <CodeSelect
               id="tf-upro"
-              className={ui.input}
+              domain={CODE_DOMAIN.UPRO}
               value={draft.upro}
-              onChange={(e) => setDraft((p) => ({ ...p, upro: e.target.value }))}
+              onChange={(v) => setDraft((p) => ({ ...p, upro: v }))}
+              placeholder="전체"
+              silent
             />
           </div>
 
@@ -182,7 +196,7 @@ export function TranslatorsView() {
                 <th>코드</th>
                 <th>번역가명</th>
                 <th>연락처</th>
-                <th>등급 · 조건</th>
+                <th>사용 프로그램 · 조건</th>
                 <th>가능 분야</th>
                 <th>불가 분야</th>
                 <th>정산</th>
@@ -197,7 +211,7 @@ export function TranslatorsView() {
                 isEmpty={rows.length === 0}
                 emptyText={
                   activeCount > 0
-                    ? '조건에 맞는 번역가가 없습니다. 분야·등급은 등록된 코드값과 정확히 같아야 합니다.'
+                    ? '조건에 맞는 번역가가 없습니다. 조건을 줄여서 다시 조회해 보십시오.'
                     : '등록된 번역가가 없습니다.'
                 }
                 colSpan={9}
@@ -241,11 +255,7 @@ export function TranslatorsView() {
                     ) : null}
                   </td>
                   <td>
-                    {row.active ? (
-                      <span className={`${ui.badge} ${ui.badgeSuccess}`}>거래 중</span>
-                    ) : (
-                      <span className={ui.badge}>거래 종료</span>
-                    )}
+                    <ActiveChip active={row.active} on="거래 중" off="거래 종료" />
                   </td>
                   <td>
                     <div className={ui.rowActions}>

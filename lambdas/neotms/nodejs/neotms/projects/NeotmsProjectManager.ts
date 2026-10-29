@@ -9,10 +9,10 @@
 
 import {
   paginate,
-  rdsExecute,
-  rdsQuery,
+  pgExecute,
+  pgQuery,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { CustomerNameOps } from "../customers/NeotmsCustomer.dbops.js";
@@ -61,7 +61,7 @@ export async function listProjects(
   const query = readListQuery(request, PROJECT_SORTS, "created");
   const filters = readFilters(request);
   return runDb("list projects", async () => {
-    const rows: SqlRow[] = (await rdsQuery(ProjectListOps(caller, query, filters))).data;
+    const rows: SqlRow[] = (await pgQuery(ProjectListOps(caller, query, filters))).data;
     const page = paginate(
       rows,
       query.limit,
@@ -90,9 +90,9 @@ export async function getProject(
   id: string,
 ): Promise<ResponseData<(ProjectRow & { totals: { revenue: string; cost: string; margin: string } }) | string>> {
   return runDb("get project", async () => {
-    const row = (await rdsQuery(ProjectGetOps(caller, id))).data;
+    const row = (await pgQuery(ProjectGetOps(caller, id))).data;
     if (!row) return notFound("project");
-    const totals = (await rdsQuery(ProjectTotalsOps(id))).data;
+    const totals = (await pgQuery(ProjectTotalsOps(id))).data;
     return ok({ ...row, totals });
   });
 }
@@ -123,11 +123,11 @@ export async function createProject(
   const assigned: ProjectCreate =
     input.prjPmId || input.prjMgrId ? input : { ...input, prjPmId: caller.staffId };
   return runDb("create project", async () => {
-    const customerName = (await rdsQuery(CustomerNameOps(assigned.customerId))).data;
+    const customerName = (await pgQuery(CustomerNameOps(assigned.customerId))).data;
     if (customerName === null) {
       return { status: 400, body: "That customer does not exist or has been deleted" };
     }
-    const row = (await rdsExecute(ProjectCreateOps(assigned, ctx))).data;
+    const row = (await pgExecute(ProjectCreateOps(assigned, ctx))).data;
     return row ? created(row) : { status: 500, body: "The project was not created" };
   });
 }
@@ -145,12 +145,12 @@ export async function updateProject(
     // Only when the customer is being CHANGED, for the same reason as on create. A PATCH that does
     // not mention the customer must not pay for this check.
     if (input.customerId) {
-      const customerName = (await rdsQuery(CustomerNameOps(input.customerId))).data;
+      const customerName = (await pgQuery(CustomerNameOps(input.customerId))).data;
       if (customerName === null) {
         return { status: 400, body: "That customer does not exist or has been deleted" };
       }
     }
-    const row = (await rdsExecute(ProjectUpdateOps(caller, id, input, ctx))).data;
+    const row = (await pgExecute(ProjectUpdateOps(caller, id, input, ctx))).data;
     return row ? ok(row) : notFound("project");
   });
 }
@@ -169,14 +169,14 @@ export async function deleteProject(
   ctx: WriteContext,
 ): Promise<ResponseData<{ id: string } | string>> {
   return runDb("delete project", async () => {
-    const liveJobs = (await rdsQuery(ProjectLiveJobCountOps(id))).data;
+    const liveJobs = (await pgQuery(ProjectLiveJobCountOps(id))).data;
     if (liveJobs > 0) {
       return {
         status: 409,
         body: `This project still has ${liveJobs} live job(s). Delete or move them first.`,
       };
     }
-    const deletedId = (await rdsExecute(ProjectSoftDeleteOps(caller, id, ctx))).data;
+    const deletedId = (await pgExecute(ProjectSoftDeleteOps(caller, id, ctx))).data;
     return deletedId ? ok({ id: deletedId }) : notFound("project");
   });
 }

@@ -30,9 +30,10 @@
 //
 // ## Not in the VPC
 //
-// `vpc` is deliberately absent below. See NeotmsDatabase's header for the full reasoning - the
-// short version is that adding it would pull in a NAT Gateway at ~$43/month, which is most of the
-// difference between hitting and missing the budget.
+// `vpc` is deliberately absent below, and on this variant there is no VPC in the stack to join: the
+// database is a Supabase project reached over TLS on the public internet. See NeotmsSupabase's
+// header. Adding a VPC here would pull in a NAT Gateway at ~$43/month to restore the function's
+// internet egress - which it needs both for the pooler and for the LPX OIDC endpoints.
 
 import * as cdk from "aws-cdk-lib/core";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
@@ -44,12 +45,12 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as path from "node:path";
 import { Construct } from "constructs";
 import { NeotmsStageConfig } from "../config/NeotmsConfig.js";
-import { NeotmsDatabase } from "./NeotmsDatabase.js";
 import { NeotmsStorage } from "./NeotmsStorage.js";
+import { NeotmsSupabase } from "./NeotmsSupabase.js";
 
 export interface NeotmsApiProps {
   readonly config: NeotmsStageConfig;
-  readonly database: NeotmsDatabase;
+  readonly database: NeotmsSupabase;
   readonly storage: NeotmsStorage;
 }
 
@@ -104,9 +105,21 @@ export class NeotmsApi extends Construct {
       timeout: cdk.Duration.seconds(29),
       environment: {
         NEOTMS_STAGE: config.stage,
-        NEOTMS_DB_CLUSTER_ARN: database.cluster.clusterArn,
-        NEOTMS_DB_SECRET_ARN: database.secret.secretArn,
+        /*
+         * Host, port, user, database name - and the ARN of the secret holding the password.
+         *
+         * The password itself is NOT here, and that is the one rule this block exists to state. A
+         * Lambda environment variable is readable by anyone with `lambda:GetFunction`, it appears
+         * in the CloudFormation template, and changing it means a redeploy - so a credential in
+         * one cannot be rotated faster than a release cycle. PostgresUtils reads the secret at
+         * first use and re-reads it when PostgreSQL answers 28P01.
+         */
+        NEOTMS_DB_HOST: database.host,
+        NEOTMS_DB_PORT: String(database.port),
+        NEOTMS_DB_USER: database.user,
         NEOTMS_DB_NAME: database.databaseName,
+        NEOTMS_DB_SECRET_ARN: database.secret.secretArn,
+        NEOTMS_DB_CA_CERT: database.caCertPem,
         NEOTMS_SESSION_TABLE_NAME: storage.sessionTable.tableName,
         NEOTMS_ATTACHMENT_BUCKET_NAME: storage.attachmentBucket.bucketName,
         NEOTMS_EXPORT_BUCKET_NAME: storage.exportBucket.bucketName,
@@ -116,6 +129,15 @@ export class NeotmsApi extends Construct {
         NEOTMS_OIDC_REDIRECT_URI: config.auth.oidcRedirectUri,
         NEOTMS_OIDC_POST_LOGOUT_REDIRECT_URI: config.auth.oidcPostLogoutRedirectUri,
         NEOTMS_APP_AUTHORITY_ID: config.auth.appAuthorityId,
+        /*
+         * The authority that may bootstrap an empty NEOTMS - `lpx.admin.access`.
+         *
+         * Unlike every other value in this block, BLANK IS A SUPPORTED SETTING here: it removes the
+         * bootstrap path entirely and is what production should carry once real administrators
+         * exist. So this is not part of `isAuthConfigComplete()` in NeotmsEnv, and a blank value
+         * must not be read as a half-finished deploy.
+         */
+        NEOTMS_BOOTSTRAP_AUTHORITY_ID: config.auth.bootstrapAuthorityId,
         NEOTMS_MG_SECRET_NAME: config.mail.mailgunSecretName,
         NEOTMS_MG_EMAIL_DOMAIN: config.mail.mailgunEmailDomain,
         NEOTMS_MAIL_FROM_ADDRESS: config.mail.mailFromAddress,
@@ -154,27 +176,38 @@ export class NeotmsApi extends Construct {
         removalPolicy: config.protectData ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
       }),
       /*
-       * One reserved-concurrency slot short of unlimited is not the point here - the point is a
-       * ceiling at all. The cluster's max ACU is 4; a few hundred concurrent Lambdas would open more
-       * Data API work than it can serve and turn a traffic spike into a database brownout. 20 is
-       * well above what a few dozen staff generate and well below what the cluster chokes on.
+       * A concurrency ceiling, and on this variant it is a hard requirement rather than prudence.
+       *
+       * The database is behind Supavisor, which has a finite client-connection limit per project.
+       * Each warm container holds a pool of up to 2 clients (see `max` in PostgresUtils), so this
+       * number multiplied by 2 is the worst-case client count this stack can present. Unbounded
+       * Lambda concurrency would let a traffic spike - or one runaway retry loop - exhaust the
+       * pooler, at which point Supavisor answers "max client connections reached" and EVERY
+       * request fails, including the ones that would have succeeded. That is a far worse failure
+       * than queueing, which is what a reserved ceiling produces instead.
+       *
+       * 20 x 2 = 40 clients, comfortably inside the pooler's allowance on the Pro plan and well
+       * above what a few dozen staff generate. Raise it only together with `max`, and only after
+       * checking the project's pooler limit in the dashboard.
        */
       reservedConcurrentExecutions: 20,
     });
 
     // --- Permissions -------------------------------------------------------
     //
-    // Both halves of the Data API grant are needed: the `rds-data:*` actions authorise the call, and
-    // reading the secret authorises the `secretArn` named inside it. `grantDataApiAccess` does both.
-    database.grantDataApi(this.fn);
+    // One database grant, not two. The Aurora variant needed `rds-data:*` to authorise the call AND
+    // `GetSecretValue` to authorise the secret named inside it; here IAM has no say in whether the
+    // connection is allowed - the password is the only thing standing in front of the database - so
+    // all that is granted is the read of that password.
+    database.grantReadCredential(this.fn);
     storage.sessionTable.grantReadWriteData(this.fn);
     // Read-write rather than put-only: the presign flow needs to HEAD the object on confirm, and a
     // delete needs to remove it.
     storage.attachmentBucket.grantReadWrite(this.fn);
-    // The function reads what the CLUSTER wrote (see aws_s3.query_export_to_s3) and writes the
-    // rendered XLSX back, so it needs both verbs and the KMS key.
+    // Spill target for a rendered report too large for Lambda's 6MB response payload. The function
+    // both writes it and presigns a read of it. No KMS grant: with the Data API's 1 MiB cap gone,
+    // nothing inside PostgreSQL writes here, so the bucket no longer needs SSE-KMS.
     storage.exportBucket.grantReadWrite(this.fn);
-    storage.exportKey.grantEncryptDecrypt(this.fn);
 
     /*
      * CORS is NOT configured on the HTTP API.

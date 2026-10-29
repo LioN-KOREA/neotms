@@ -7,7 +7,7 @@
 //
 // One thing is specific to this table: it is the most heavily searched in the application. A PM
 // assigning work searches by name, by romanisation, and by the duplicate-check field, and does it
-// several times per PO. That is what `ix_tran_name_bigm` is for, and it is the reason the search
+// several times per PO. That is what `ix_tran_name_pgrn` is for, and it is the reason the search
 // column list here is the longest in the codebase.
 
 import {
@@ -18,7 +18,7 @@ import {
   type SortTarget,
   type SqlOps,
   type SqlRow,
-} from "../../utils/RdsDataUtils.js";
+} from "../../utils/PostgresUtils.js";
 import { TRANSLATOR_CODE, codeExpression } from "../NeotmsCodes.js";
 import {
   EMPTY_CLAUSE,
