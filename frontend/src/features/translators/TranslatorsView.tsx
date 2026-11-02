@@ -77,7 +77,7 @@ export function TranslatorsView() {
 
   const onDelete = async (row: TranslatorRow) => {
     const label = row.tranName || row.tranCode
-    if (!window.confirm(`${label} 번역가를 삭제할까요?\n이 화면에서는 되돌릴 수 없습니다.`)) return
+    if (!window.confirm(`${label} 번역가를 삭제할까요?\n삭제 후에는 되돌릴 수 없습니다.`)) return
     await deleteTranslator.mutateAsync(row.id)
     setNotice(`${label} 번역가를 삭제했습니다.`)
   }
@@ -87,7 +87,7 @@ export function TranslatorsView() {
       {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
       <div className={ui.pageBar}>
         <p className={ui.pageNote}>
-          발주의 상대방입니다. 발주 <b>원가</b>는 여기 등록된 정산 통화와 지급 방법을 따릅니다.
+          번역 업무를 수행하는 번역가의 목록입니다.
         </p>
         {mayCreate ? (
           <button

@@ -14,7 +14,7 @@
 
 /** 화면에 노출되는 서비스 이름. 프로젝트 코드네임(NEOTMS)은 UI 에 쓰지 않는다. */
 export const SERVICE_ORG_NAME = '라이온코리아'
-export const SERVICE_PRODUCT_NAME = 'TMS 시스템'
+export const SERVICE_PRODUCT_NAME = 'neoTMS'
 export const SERVICE_FULL_NAME = `${SERVICE_ORG_NAME} ${SERVICE_PRODUCT_NAME}`
 
 /**

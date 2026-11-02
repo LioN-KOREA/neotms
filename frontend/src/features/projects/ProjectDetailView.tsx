@@ -290,7 +290,7 @@ export function ProjectDetailView() {
 
       <div className={ui.card}>
         <div className={ui.cardHeader}>
-          <span>작업 {jobs.length}건 — 매출</span>
+          <span>작업 {jobs.length}건</span>
           <span className={ui.spacer} />
           {mayCreateJob ? (
             <button
@@ -313,15 +313,15 @@ export function ProjectDetailView() {
               <table className={ui.table}>
                 <thead>
                   <tr>
-                    <th>코드</th>
+                    <th>JOB코드</th>
                     <th>작업명</th>
-                    <th>언어쌍</th>
+                    <th>언어 페어</th>
                     <th>물량 · 단가</th>
                     <th>매출(원화)</th>
                     <th>발주</th>
                     <th>납기</th>
                     <th>상태</th>
-                    <th />
+                    <th>수정</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -423,7 +423,7 @@ export function ProjectDetailView() {
 
       <div className={ui.card}>
         <div className={ui.cardHeader}>
-          <span>발주 {pos.length}건 — 원가</span>
+          <span>PO {pos.length}건</span>
         </div>
 
         {!mayReadPo ? (
@@ -436,7 +436,7 @@ export function ProjectDetailView() {
               <table className={ui.table}>
                 <thead>
                   <tr>
-                    <th>코드</th>
+                    <th>PO코드</th>
                     <th>발주명</th>
                     <th>작업</th>
                     <th>번역가</th>

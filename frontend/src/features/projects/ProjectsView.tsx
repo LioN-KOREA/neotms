@@ -108,7 +108,7 @@ export function ProjectsView() {
        */}
       <div className={ui.pageBar}>
         <p className={ui.pageNote}>
-          고객사로부터 받은 일 한 건입니다. 매출은 이 아래의 작업에 쌓입니다.
+          프로젝트를 조회, 등록 및 확인합니다.
         </p>
         {mayCreate ? (
           <button
@@ -226,7 +226,7 @@ export function ProjectsView() {
                 <th>진행</th>
                 <th>계산서</th>
                 <th>입금</th>
-                <th />
+                <th>수정</th>
               </tr>
             </thead>
             <tbody>

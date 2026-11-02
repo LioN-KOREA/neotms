@@ -574,7 +574,7 @@
 .rowActions {
   display: flex;
   gap: 4px;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 /* ── 돈 ───────────────────────────────────────────────────────────────── */

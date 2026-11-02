@@ -19,7 +19,7 @@ import type { IconName } from '@/shared/ui/Icon'
  * 매일 여는 업무 화면, 거래처 정보, 가끔 보는 집계, 한 달에 한 번 쓰는 관리. 여덟 개를 한 줄로
  * 세우면 그 차이가 사라지고, 담당자는 매번 같은 목록을 처음부터 훑는다.
  */
-export type NeotmsNavGroupId = 'work' | 'party' | 'insight' | 'admin'
+export type NeotmsNavGroupId = 'work' | 'party' | 'insight' | 'admin' | 'trn'
 
 /** 사이드바 메뉴. `menuId` 는 서버가 권한을 부여하는 단위이고, `path` 는 라우터의 경로다. */
 export interface NeotmsNavItem {
@@ -45,9 +45,10 @@ export interface NeotmsNavGroup {
 
 export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
   { id: 'work', label: '업무', icon: 'folder' },
-  { id: 'party', label: '거래처', icon: 'users' },
-  { id: 'insight', label: '집계', icon: 'chart' },
-  { id: 'admin', label: '관리', icon: 'gear' },
+  { id: 'party', label: '고객', icon: 'users' },
+  { id: 'trn', label: '번역가', icon: 'globe' },
+  { id: 'insight', label: '리포트', icon: 'chart' },
+  { id: 'admin', label: '운영관리', icon: 'gear' },
 ]
 
 /*
@@ -64,28 +65,28 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     menuId: NeotmsMenuId.PROJECT,
     path: '/projects',
     label: '프로젝트',
-    hint: '고객사에서 받은 일',
+    hint: '번역·MICE 등 프로젝트 관리',
     group: 'work',
   },
   {
     menuId: NeotmsMenuId.JOB,
     path: '/jobs',
     label: '작업',
-    hint: '매출이 쌓이는 단위',
+    hint: '프로젝트 작업(JOB)목록',
     group: 'work',
   },
   {
     menuId: NeotmsMenuId.PURCHASE_ORDER,
     path: '/purchase-orders',
-    label: '발주',
-    hint: '번역가에게 내보낸 일',
+    label: 'PO',
+    hint: 'PO목록 조회',
     group: 'work',
   },
   {
     menuId: NeotmsMenuId.CUSTOMER,
     path: '/customers',
     label: '고객사',
-    hint: '거래처와 단가',
+    hint: '고객사 목록 및 정보 조회',
     group: 'party',
   },
   {
@@ -93,7 +94,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     path: '/translators',
     label: '번역가',
     hint: '언어·분야·단가',
-    group: 'party',
+    group: 'trn',
   },
   {
     menuId: NeotmsMenuId.REPORT,
@@ -113,15 +114,15 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   {
     menuId: NeotmsMenuId.MAINTENANCE,
     path: '/maintenance',
-    label: '유지보수',
-    hint: '분야·언어 등 코드',
+    label: '각종 코드 및 변수 관리',
+    hint: '분야·언어 등',
     group: 'admin',
   },
   {
     menuId: NeotmsMenuId.STAFF,
     path: '/staff',
     label: '사용자 관리',
-    hint: '가입 승인과 역할',
+    hint: '가입 승인·권한 관리',
     group: 'admin',
   },
 ]

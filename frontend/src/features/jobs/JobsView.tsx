@@ -99,7 +99,7 @@ export function JobsView() {
       {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
       <div className={ui.pageBar}>
         <p className={ui.pageNote}>
-          프로젝트를 쪼갠 실제 일감입니다. 원화 환산 합계가 이 시스템의 <b>매출</b>입니다.
+          프로젝트에 속한 작업(JOB)들의 목록입니다.
         </p>
         {mayCreate ? (
           <button
@@ -121,7 +121,7 @@ export function JobsView() {
           <span>{rows.length}건 표시</span>
           <span className={ui.spacer} />
           <span className={ui.hint}>
-            표시된 {revenue.counted}건 매출 합계{' '}
+            총 {revenue.counted}건 매출 합계{' '}
             <Amount value={revenue.total} kind="revenue" />
             {revenue.skipped > 0 ? ` · 금액 미입력 ${revenue.skipped}건 제외` : ''}
           </span>
@@ -239,12 +239,12 @@ export function JobsView() {
                  * 자기가 무엇을 보고 있는지 걸러내기 칸을 다시 봐야 확인할 수 있었다.
                  */}
                 <th>종류</th>
-                <th>언어쌍</th>
+                <th>언어 페어</th>
                 <th>물량 · 단가</th>
                 <th>매출(원화)</th>
                 <th>납기</th>
                 <th>상태</th>
-                <th />
+                <th>수정</th>
               </tr>
             </thead>
             <tbody>
