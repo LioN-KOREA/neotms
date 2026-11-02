@@ -284,7 +284,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="prj-eday">
-            납기
+            마감일
           </label>
           <div className={ui.inputRow}>
             <input
@@ -297,7 +297,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             <input
               className={ui.input}
               type="time"
-              aria-label="납기 시각"
+              aria-label="마감시각"
               value={form.prjEdayTime}
               onChange={(e) => set('prjEdayTime', e.target.value)}
             />

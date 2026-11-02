@@ -267,21 +267,21 @@ export function ReportsView() {
          * 작업의 납품일이다 — 그 차이가 "정산까지 끝난 프로젝트가 리포트에 없다" 로 나타난다.
          */}
         <p className={ui.pageNote}>
-          <b>매출</b>은 작업의 원화 환산 합계, <b>원가</b>는 발주의 원화 환산 합계입니다. 마진은 그
-          차액입니다. 기준 날짜는 <b>작업의 납품일</b>이며, 숫자는 조회한 순간의 값입니다.
+          <b>매출</b>은 작업의 원화 환산 합계, <b>원가</b>는 PO의 원화 환산 합계입니다. 수익은 그
+          차액입니다. 기준 날짜는 <b>작업의 마감일</b>이며, 숫자는 조회한 순간의 값입니다.
         </p>
       </div>
 
       {/* 마감 임박. 집계와 달리 자동으로 읽는다 — 위 주석 참고. */}
       <div className={ui.statGrid}>
         <div className={ui.stat}>
-          <span className={ui.statLabel}>7일 내 납기 작업</span>
+          <span className={ui.statLabel}>7일 내 마감되는 작업</span>
           <span className={ui.statValue}>
             {workloadQuery.data ? `${workloadQuery.data.jobsDue}건` : '…'}
           </span>
         </div>
         <div className={ui.stat}>
-          <span className={ui.statLabel}>7일 내 납기 발주</span>
+          <span className={ui.statLabel}>7일 내 마감되는 PO</span>
           <span className={ui.statValue}>
             {workloadQuery.data ? `${workloadQuery.data.posDue}건` : '…'}
           </span>
@@ -293,7 +293,7 @@ export function ReportsView() {
            * 그 작업의 마진은 매출과 같게 나오므로, 이 숫자가 클 때 모든 집계의 마진이 실제보다
            * 좋아 보인다. 리포트 화면에서 이 사실을 먼저 보여 주는 이유다.
            */}
-          <span className={ui.statLabel}>발주 없는 작업</span>
+          <span className={ui.statLabel}>PO 없는 작업</span>
           <span className={ui.statValue}>
             {workloadQuery.data ? `${workloadQuery.data.jobsWithoutPo}건` : '…'}
           </span>

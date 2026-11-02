@@ -61,7 +61,7 @@ const FILTER_KEYS = ['q', 'state', 'invoiceState', 'moneyState', 'basis', 'from'
  */
 const PERIOD_BASES = [
   { value: 'start', label: '시작일' },
-  { value: 'due', label: '납기일' },
+  { value: 'due', label: '마감일' },
 ] as const
 
 export function ProjectsView() {

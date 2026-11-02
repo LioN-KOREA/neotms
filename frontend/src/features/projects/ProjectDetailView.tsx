@@ -31,7 +31,7 @@ import { ProjectFormModal } from './ProjectFormModal'
  *
  * ## 마진을 여기서 계산한다
  *
- * 서버에 '프로젝트 마진' 엔드포인트가 없다. 매출은 작업에, 원가는 발주에 있으므로 두 목록을
+ * 서버에 '프로젝트 마진' 엔드포인트가 없다. 매출은 작업에, 원가는 PO에 있으므로 두 목록을
  * 읽어 합산한다. 합산은 `BigInt` 10진 연산으로 한다 — `Number` 로 더하면 0.1+0.2 문제가 그대로
  * 금액에 남고, 그 1원은 정산할 때 발견된다.
  *
@@ -39,10 +39,10 @@ import { ProjectFormModal } from './ProjectFormModal'
  * 전체가 아니고, 그때 화면은 합계 옆에 그 사실을 명시한다. 금액이 틀린 화면은 금액이 없는
  * 화면보다 나쁘다.
  *
- * ## 발주가 없는 작업을 드러낸다
+ * ## PO가 없는 작업을 드러낸다
  *
  * 원가가 비어 있는 작업은 마진이 100% 로 보인다. 그건 이 시스템이 만들어 내는 가장 비싼
- * 착각이므로, 작업 표에서 발주 건수를 함께 보여 주고 0건이면 표시를 남긴다.
+ * 착각이므로, 작업 표에서 PO 건수를 함께 보여 주고 0건이면 표시를 남긴다.
  */
 export function ProjectDetailView() {
   const { id = '' } = useParams()
@@ -55,7 +55,7 @@ export function ProjectDetailView() {
   const [editingProject, setEditingProject] = useState(false)
   const [editingJob, setEditingJob] = useState<JobRow | null | undefined>(undefined)
   const [editingPo, setEditingPo] = useState<PurchaseOrderRow | null | undefined>(undefined)
-  /** '발주 추가' 를 누른 작업. 발주는 작업에 달리므로 어느 작업인지가 먼저 정해져야 한다. */
+  /** 'PO 추가' 를 누른 작업. PO는 작업에 달리므로 어느 작업인지가 먼저 정해져야 한다. */
   const [poForJob, setPoForJob] = useState<PickerOption | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -67,7 +67,7 @@ export function ProjectDetailView() {
   const cost = useMemo(() => decimalSum(pos.map((p) => p.poPriceKsum)), [pos])
   const margin = useMemo(() => decimalSubtract(revenue.total, cost.total), [revenue, cost])
 
-  /** 작업별 발주 건수. 위 주석의 "발주 없는 작업" 을 세우기 위한 것이다. */
+  /** 작업별 PO 건수. 위 주석의 "PO 없는 작업" 을 세우기 위한 것이다. */
   const poCountByJob = useMemo(() => {
     const out = new Map<string, number>()
     for (const po of pos) out.set(po.jobId, (out.get(po.jobId) ?? 0) + 1)
@@ -196,8 +196,8 @@ export function ProjectDetailView() {
        */}
       {revenue.skipped > 0 || cost.skipped > 0 ? (
         <InfoNotice>
-          금액이 입력되지 않은 행이 있습니다 — 작업 {revenue.skipped}건, 발주 {cost.skipped}건.
-          위 합계에서 제외되었으므로 마진은 실제와 다릅니다.
+          금액이 입력되지 않은 PO가 있습니다 — 작업 {revenue.skipped}건, PO {cost.skipped}건.
+          위 합계에서 제외되었으므로 위에 표시되는 수익은 실제와 다를 수 있습니다.
         </InfoNotice>
       ) : null}
 
@@ -248,7 +248,7 @@ export function ProjectDetailView() {
               </span>
             </div>
             <div className={ui.detailItem}>
-              <span className={ui.detailLabel}>납기</span>
+              <span className={ui.detailLabel}>마감일</span>
               <span className={`${ui.detailValue} ${overdue ? ui.amountNeg : ''}`.trim()}>
                 {formatDate(project.prjEday)}
                 {project.prjEdayTime ? ` ${project.prjEdayTime}` : ''}
@@ -318,8 +318,8 @@ export function ProjectDetailView() {
                     <th>언어 페어</th>
                     <th>물량 · 단가</th>
                     <th>매출(원화)</th>
-                    <th>발주</th>
-                    <th>납기</th>
+                    <th>PO</th>
+                    <th>마감일</th>
                     <th>상태</th>
                     <th>수정</th>
                   </tr>
@@ -398,7 +398,7 @@ export function ProjectDetailView() {
                                   setEditingPo(null)
                                 }}
                               >
-                                발주 추가
+                                PO 추가
                               </button>
                             ) : null}
                           </div>
@@ -419,7 +419,7 @@ export function ProjectDetailView() {
         )}
       </div>
 
-      {/* ── 발주 ─────────────────────────────────────────────────────────── */}
+      {/* ── PO ─────────────────────────────────────────────────────────── */}
 
       <div className={ui.card}>
         <div className={ui.cardHeader}>
@@ -428,7 +428,7 @@ export function ProjectDetailView() {
 
         {!mayReadPo ? (
           <div className={ui.cardBody}>
-            <p className={ui.hint}>발주 조회 권한이 없어 이 프로젝트의 원가를 볼 수 없습니다.</p>
+            <p className={ui.hint}>PO 조회 권한이 없어 이 프로젝트의 원가를 볼 수 없습니다.</p>
           </div>
         ) : (
           <>
@@ -437,7 +437,7 @@ export function ProjectDetailView() {
                 <thead>
                   <tr>
                     <th>PO코드</th>
-                    <th>발주명</th>
+                    <th>PO명</th>
                     <th>작업</th>
                     <th>번역가</th>
                     <th>원가(원화)</th>
@@ -452,7 +452,7 @@ export function ProjectDetailView() {
                     isLoading={posQuery.isLoading}
                     error={posQuery.error}
                     isEmpty={pos.length === 0}
-                    emptyText="이 프로젝트에는 발주가 없습니다. 원가가 비어 있으므로 위 마진은 매출과 같습니다."
+                    emptyText="이 프로젝트에는 PO가 없습니다. 원가가 0이므로, 수익과 매출은 동일합니다."
                     colSpan={9}
                   />
                   {pos.map((po) => (
@@ -480,7 +480,7 @@ export function ProjectDetailView() {
                         {formatDate(po.poEday)}
                       </td>
                       {/* 색을 고르는 삼항 연산자 세 개가 여기 있었다. 같은 '정산완료' 가 이
-                          화면과 발주 목록에서 다른 색으로 나오던 원인이다 — StatusChip.tsx 의
+                          화면과 PO 목록에서 다른 색으로 나오던 원인이다 — StatusChip.tsx 의
                           `TONES` 표가 그 판단을 들고 있다. */}
                       <td>
                         <StatusChip value={po.poState} />
