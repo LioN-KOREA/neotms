@@ -187,9 +187,14 @@ CREATE INDEX ix_tran_email_trgm     ON translator        USING gin (tran_email  
 CREATE INDEX ix_prj_sday ON project (prj_sday) WHERE NOT deleted;
 CREATE INDEX ix_prj_eday ON project (prj_eday) WHERE NOT deleted;
 
--- Job schedule. job_eday is the delivery date and the business date used
--- for revenue recognition in report_daily_rollup, so it is also the driver
--- for the nightly recompute's single-date filter.
+-- Job schedule. job_eday is the delivery date AND the business date the
+-- reports recognise revenue on, which makes this the most load-bearing
+-- index in the schema: every report is a range scan on it. The reports
+-- aggregate job + purchase_order live on each request -- there is no
+-- rollup, see 004_rollup.sql -- and that is affordable only because
+-- ReportQuerySchema requires both ends of the range and this index turns
+-- the range into a bitmap index scan. Drop it and the reports degrade
+-- into the legacy system's slowest screen.
 CREATE INDEX ix_job_eday ON job (job_eday) WHERE NOT deleted;
 -- NOT indexed: job.job_sday. The job list screen filters on the delivery
 -- date, and the project-level start date (ix_prj_sday) covers the "work
@@ -225,6 +230,11 @@ CREATE INDEX ix_po_created  ON purchase_order (created_at DESC) WHERE NOT delete
 -- =====================================================================
 
 CREATE INDEX ix_job_prj ON job            (project_id) WHERE NOT deleted;
+-- ix_po_job is the second half of every report, after ix_job_eday. Cost is
+-- collapsed to one value per job by a LEFT JOIN LATERAL, which runs this
+-- index once per job already selected by the date range -- so a one-month
+-- report touches only that month's POs. Without it the lateral degrades to
+-- a sequential scan per job.
 CREATE INDEX ix_po_job  ON purchase_order (job_id)     WHERE NOT deleted;
 CREATE INDEX ix_po_prj  ON purchase_order (project_id) WHERE NOT deleted;
 CREATE INDEX ix_prj_cus ON project        (customer_id) WHERE NOT deleted;

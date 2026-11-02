@@ -282,7 +282,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `001_extensions.sql` | `pgroonga`, `pg_trgm` |
 | `002_tables.sql` | schema |
 | `003_indexes.sql` | 16 PGroonga indexes plus the trigram ones |
-| `004_rollup.sql` | the `report_daily_rollup` table and `report_rollup_recompute(date)` — see below |
+| `004_rollup.sql` | **tears the old reporting rollup down** and records why the reports aggregate live — see below |
 | `004_verify_search.sql` | **asserts the search plan and fails loudly** — see below |
 | `005_code_sequences.sql` | code sequences |
 | `006_bootstrap.sql` | the six business menus, the 시스템관리자 superuser role, and the way back into an empty NEOTMS — **required, see §6.1** |
@@ -642,9 +642,11 @@ docker rm -f neotms-sqlcheck
 This is not a formality either. Doing it found three defects that the unit tests could not see and
 that would each have stopped a real bootstrap dead: the unqualified operator classes described above,
 an `E'…'` string continuation in `004_verify_search.sql` that PostgreSQL rejects (only the *first*
-literal of an implicit concatenation may carry the `E` prefix), and the `:business_date` placeholder
-in `004_rollup.sql`. The schema is not large enough for any of these to be slow to find — the
-expensive part was not knowing they were there.
+literal of an implicit concatenation may carry the `E` prefix), and a `:business_date` placeholder in
+the rollup recompute that `004_rollup.sql` used to define (the recompute is gone, but the rule it
+taught is the one restated at the top of that file and pointed at from `006`, `008` and `009`). The
+schema is not large enough for any of these to be slow to find — the expensive part was not knowing
+they were there.
 
 **For the PL/pgSQL files — `006` and `009` — this is the only place the function bodies are ever
 executed before production.** The jest suite reads them as text: it can assert that
@@ -754,44 +756,44 @@ needed. (Case 4 failing is a warning rather than an error: `PostgresUtils` never
 query, so production always gets custom plans. It would mean that *naming* a searching query — to
 make a hot path cheaper — would silently destroy its performance from the fifth execution onward.)
 
-### `004_rollup.sql`, and the recompute it does *not* run
+### `004_rollup.sql`, and the rollup that is no longer there
 
-Applying the file creates the `report_daily_rollup` table, its indexes and the function
-`report_rollup_recompute(date)`. It does not populate anything, and on a fresh project there is
-nothing to populate — the report screens will show zeros until the ETL has loaded `job` and
-`purchase_order` and the rollup has been built.
+**The reports aggregate live.** Every report request sums `job` and `purchase_order` over the
+requested date range at the moment it is asked. There is no pre-aggregated table, no recompute and
+nothing to schedule: applying `004_rollup.sql` now *drops* `report_daily_rollup`, its six indexes
+and `report_rollup_recompute(date)`. On a fresh database the `DROP … IF EXISTS` statements do
+nothing; on one bootstrapped before this change they remove an empty table nothing reads.
 
-The rollup is derived data: revenue is `SUM(job.job_price_ksum)`, cost is
-`SUM(purchase_order.po_price_ksum)`, margin is `revenue - cost` computed on read and never stored.
-Nothing in the application writes the table — `NeotmsReport.dbops.ts` only reads it — so this
-function is the single definition of revenue for reporting. **Do not copy the aggregation into a
-scheduled job**; call the function.
+The file is kept at that number deliberately — `005` says "run after `004_rollup.sql`", `006`, `008`
+and `009` cite the `:name` note it carries, and it is where a reader who went looking for the rollup
+will arrive. It holds the full decision record; the short version is that a nightly rollup answered
+the wrong question (a manager opening the report wants this morning's deliveries, and the legacy TMS
+this replaces does show them, so a midnight cut-off would have been a regression), that nothing ever
+called the recompute (so the table stayed empty and every report returned zeroes while looking
+perfectly healthy), and that its premise — the legacy yearly report's unindexed scan over nvarchar
+amounts — had stopped applying, because `job_price_ksum` is already `numeric(18,2)` and
+`ReportQuerySchema` requires both ends of the range, which makes `ix_job_eday` a bounded index scan.
 
-```sql
-SELECT report_rollup_recompute(current_date - 1);   -- yesterday
-```
+Revenue is `SUM(job.job_price_ksum)`, cost is `SUM(purchase_order.po_price_ksum)` and margin is
+`revenue - cost`, derived per query and never stored. Those definitions did not change — they moved
+intact into `NeotmsReport.dbops.ts`, which is now the single definition of revenue for reporting.
+**Do not reintroduce a second copy of the aggregation** anywhere, in SQL or in a scheduler.
 
-It is idempotent — it deletes the date before re-inserting it, so a dimension combination that
-disappeared between runs (a job reassigned to another PM, or soft-deleted) does not survive as a
-stale row inflating revenue. It returns the number of rows written, which is how a scheduler
-distinguishes "that date had no jobs" from "the job never ran". Re-run it over a trailing window to
-pick up back-dated edits:
+Cost sits one level below revenue — a job has many POs — so it is summed through a
+`LEFT JOIN LATERAL`, not a join. A plain `JOIN purchase_order` fans each job out once per PO and
+multiplies its revenue; on the benchmark database that was a 33% overstatement (1,917 rows where
+there are 1,431 jobs).
 
-```sql
-SELECT d::date, report_rollup_recompute(d::date)
-  FROM generate_series(current_date - 30, current_date - 1, interval '1 day') AS d;
-```
+Measured on 150k jobs / 200k POs / 15 years — an order of magnitude above production — a month is
+7–10 ms, a year 66 ms, and the whole fifteen years 673 ms. The live figures were reconciled against
+a rebuilt rollup over a 58-day window: zero difference in revenue and cost, and all seven dimensions
+matching key-for-key.
 
-For the initial load after the ETL, `004_rollup.sql` ends with a commented-out `DO` block that loops
-the function over every distinct `job_eday`. It is left commented deliberately: during the bootstrap
-there is no data for it to find, and after the ETL it runs for minutes — longer than both the API
-Gateway and Lambda timeouts. Paste it into `psql` when you want it, then reconcile against the
-verification anchor documented at the top of the file (expected total revenue **₩8,870,363,824**).
-
-> **Still open:** nothing schedules the nightly call yet. The intended arrangement is 23:30 KST, and
-> the function exists precisely so that whatever ends up invoking it — EventBridge plus a small
-> Lambda, or `pg_cron` inside Supabase — is a one-line call rather than a second copy of the
-> aggregation.
+After the ETL, reconcile against the legacy anchor (expected total revenue **₩8,870,363,824**) with
+the queries at the bottom of `004_rollup.sql` — they also cover the three things that usually explain
+a mismatch: orphan jobs dropped by the inner join to `project`, jobs with a NULL `job_eday` (which
+belong to no date range and so appear in no report), and `KSUM` vs `SUM` confusion on a non-KRW
+currency.
 
 ### Ad-hoc queries
 

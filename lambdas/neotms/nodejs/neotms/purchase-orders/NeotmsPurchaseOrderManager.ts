@@ -99,7 +99,8 @@ export async function getPurchaseOrder(
  *   1. The job is read for its project id. That read is scoped, so it doubles as the authorization
  *      for this write - a PO has no owner of its own until it exists, so the right to add cost to a
  *      job is the right to see that job. The project id is then written from the job rather than
- *      from the request, which is what keeps a PO's revenue and cost on the same rollup row.
+ *      from the request, which is what keeps this cost on the same report line as the revenue it
+ *      was incurred against.
  *   2. The translator is checked, when one is named. The foreign key catches an id that does not
  *      exist but not one that has been soft-deleted, and a PO issued to a translator nobody can
  *      open is a payment with no payee.

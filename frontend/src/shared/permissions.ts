@@ -47,6 +47,7 @@ export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
   { id: 'work', label: '업무', icon: 'folder' },
   { id: 'party', label: '고객', icon: 'users' },
   { id: 'trn', label: '번역가', icon: 'globe' },
+//  { id: 'payment', label: '결제', icon: 'cart' },
   { id: 'insight', label: '리포트', icon: 'chart' },
   { id: 'admin', label: '운영관리', icon: 'gear' },
 ]

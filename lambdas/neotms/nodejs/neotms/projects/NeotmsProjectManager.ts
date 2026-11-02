@@ -160,10 +160,12 @@ export async function updateProject(
 /**
  * Soft-delete a project, unless live jobs still hang off it.
  *
- * Refusing while jobs exist is more than a courtesy here. A project's revenue lives on its jobs, and
- * the jobs do not become invisible when the project does - they would keep feeding the rollup while
- * the project they belong to had vanished from every screen, which is how a report comes to disagree
- * with the project list and nobody can say which is right.
+ * Refusing while jobs exist is more than a courtesy here. A project's revenue lives on its jobs, so
+ * soft-deleting the project silently removes that revenue from every report - the reports join
+ * `project` on `p.deleted = false` - while the jobs themselves remain. The month's total would drop
+ * with nothing on any screen to explain where it went, which is how a report comes to disagree with
+ * the ledger and nobody can say which is right. Refusing makes the operator deal with the jobs
+ * first, where the money is visible.
  */
 export async function deleteProject(
   caller: NeotmsCaller,

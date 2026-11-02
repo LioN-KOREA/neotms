@@ -217,8 +217,14 @@ export type JobFilters = Partial<Record<keyof typeof JOB_FILTERS, string>> & {
  * `scopeClause` ORs them, which is the intended reading - any one of the three is enough. Leaving
  * out the project's two would mean a sales manager could see a project but none of the work in it,
  * and so could not tell what they had sold.
+ *
+ * Exported only so that a test can assert `REPORT_SCOPE_COLUMNS` still equals it. A report is an
+ * aggregate of jobs, so it has to be visible over exactly the jobs its reader can list, and these
+ * two lists drifting apart is silent in both directions: a column here and not there hides revenue
+ * from someone who can open every job behind it, and a column there and not here leaks an aggregate
+ * over work they cannot see a single row of.
  */
-const JOB_SCOPE_COLUMNS = ["j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
+export const JOB_SCOPE_COLUMNS = ["j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
 
 /** The join every read shares. See the module header for why it is an INNER join. */
 const JOB_FROM = `
@@ -237,8 +243,10 @@ const JOB_FROM = `
  * soft-deleted project disappears from this list. That is deliberate: the alternative is a job
  * whose project cannot be opened, displayed next to a project name and code that lead nowhere.
  *
- * It does mean a soft-deleted project hides its jobs while they keep contributing to the rollup -
- * which is exactly why `deleteProject` refuses while live jobs exist.
+ * It does mean a soft-deleted project hides its jobs from this list, which is exactly why
+ * `deleteProject` refuses while live jobs exist. The reports agree either way: they join `project`
+ * on `p.deleted = false` too, so a soft-deleted project's revenue leaves the list and the totals at
+ * the same moment instead of lingering in one of them.
  */
 export const JobListOps: (
   caller: NeotmsCaller,

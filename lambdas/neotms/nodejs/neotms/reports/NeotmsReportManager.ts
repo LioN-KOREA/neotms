@@ -5,8 +5,9 @@
 // The report parameters arrive as query parameters rather than a body - a report is a GET, so it can
 // be bookmarked and shared - but they are validated with the same valibot schema a body would be.
 // `ReportQuerySchema` requires both ends of the date range, and this is where that requirement is
-// enforced: an unbounded report is the legacy system's slowest screen, and the rollup only helps
-// when the range is bounded.
+// enforced. The range is what makes live aggregation affordable: bounded, it is an index scan on
+// `ix_job_eday`, which is why these figures can be computed per request instead of overnight.
+// Unbounded, it is the legacy system's slowest screen rebuilt.
 
 import { pgQuery } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
@@ -16,7 +17,6 @@ import { ReportQuerySchema, type ReportQuery } from "../neotms.schemas.js";
 import {
   REPORT_LINE_CAP,
   ReportBreakdownOps,
-  ReportFreshnessOps,
   ReportTotalsOps,
   WorkloadCountsOps,
   type ReportLine,
@@ -45,16 +45,27 @@ export type ReportResult = {
    * the reader.
    */
   truncated: boolean;
-  /** When the rollup was last rebuilt. Shown so a stale report is visibly stale. */
+  /**
+   * When these figures were computed, which is now.
+   *
+   * Kept in the response even though the answer is always "this request". It used to report when the
+   * nightly rollup last ran, because a pre-aggregated table is only trustworthy if the reader can
+   * see how old it is - a batch that silently stopped three weeks ago otherwise looks exactly like a
+   * quiet three weeks. The aggregation is live now, so there is nothing stale to warn about; the
+   * stamp stays because "as of 14:32" is what tells a manager the report already includes the
+   * delivery they booked at lunchtime, which is the entire reason this stopped being a batch.
+   *
+   * The Lambda's clock, not `now()` from the database. Those agree to within the round trip, and
+   * spending a third query on the difference would be paying for precision nobody reads.
+   */
   computedAt: string | null;
 };
 
 /**
  * Run a report.
  *
- * Three queries, deliberately: the breakdown, the unbounded totals, and the freshness stamp. The
- * totals are not a sum of the breakdown because the breakdown is capped - see `truncated` - and the
- * freshness stamp is one row from an aggregate nobody filters.
+ * Two queries, deliberately: the breakdown and the unbounded totals. The totals are not a sum of
+ * the breakdown because the breakdown is capped - see `truncated`.
  */
 export async function runReport(
   caller: NeotmsCaller,
@@ -82,7 +93,7 @@ export async function runReport(
   return runDb("run report", async () => {
     const lines = (await pgQuery(ReportBreakdownOps(caller, query))).data;
     const totals = (await pgQuery(ReportTotalsOps(caller, query))).data;
-    const computedAt = (await pgQuery(ReportFreshnessOps())).data;
+    const computedAt = new Date().toISOString();
     return ok({
       query,
       totals,

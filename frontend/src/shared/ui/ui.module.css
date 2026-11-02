@@ -807,10 +807,26 @@
  *    CSS 는 `width: 37.42%` 라는 **문자열**을 받으므로 규칙을 깰 필요가 없다.
  * 3. 필요한 것이 막대뿐이다. 축, 툴팁, 애니메이션, 범례 자동 배치는 쓰지 않는다.
  *
- * 색은 금액 글자색과 **같은 토큰**을 쓴다(`--nt-ind` = 수익, `--ntms-cost` = 원가,
- * `--nt-dan` = 손실). 막대 색과 표 안 숫자 색이 다르면 둘을 눈으로 맞춰 읽을 수 없고, 같은
- * 화면에서 '원가' 가 두 가지 색으로 나온다.
+ * ## 네 가지 색과, 그 색이 두 그림에서 같다는 것
+ *
+ *   매출 `--ntms-revenue` · 원가 `--ntms-cost` · 수익 `--nt-ok` · 손실 `--nt-dan`
+ *
+ * 매출과 원가는 표 안 금액 글자와 **같은 토큰**이다(`.amountRevenue` / `.amountCost`). 막대
+ * 색과 숫자 색이 다르면 둘을 눈으로 맞춰 읽을 수 없고, 같은 화면에서 '원가' 가 두 가지 색으로
+ * 나온다.
+ *
+ * 수익만 예외다. 표의 마진 열은 **검정**이고, 그건 의도된 선택이다 — 전부 색이면 강조가
+ * 사라지므로 음수일 때만 빨갛게 둔다(Amount.tsx). 하지만 막대 그래프의 계열 색은 검정일 수
+ * 없다: 검정 막대는 세 계열 중 하나가 아니라 '합계' 나 '기타' 로 읽힌다. 그래서 수익 계열에만
+ * `--nt-ok` 를 쓴다. 손실(`--nt-dan`)과 짝이 맞는 색이고, 표에서 빨간 마진을 보고 그래프를
+ * 보면 그 줄만 초록이 빨강으로 바뀌어 있다 — 두 그림이 같은 사실을 말한다.
+ *
+ * 세로 막대 그래프와 아래 비중 막대가 **같은 네 색**을 쓴다는 점이 중요하다. 한 화면에 그림이
+ * 둘인데 수익이 위에서는 초록이고 아래에서는 남색이면, 둘은 서로 다른 두 가지를 재는 그림으로
+ * 읽힌다. 실제로는 같은 숫자를 다르게 자른 것이다.
  */
+
+/* ── 수익/원가 비중 막대 ──────────────────────────────────────────────── */
 
 .shareWrap {
   display: flex;
@@ -819,100 +835,16 @@
 }
 
 /*
- * 범례를 막대 **안**이 아니라 위에 둔다.
+ * 총수주금액을 막대 **위 가운데**에 둔다.
  *
- * 막대 안에 글자를 넣으면 비중이 작은 쪽의 글자가 잘린다. 그리고 잘리는 쪽은 거의 항상
- * 수익이다 — 마진율이 3% 인 기간이 이 리포트에서 가장 중요한 기간인데, 바로 그 숫자가
- * `overflow: hidden` 에 먹혀 사라진다. 글자를 밖으로 내면 비중과 무관하게 항상 읽힌다.
+ * 이 줄은 아래 두 퍼센트의 분모다. 왼쪽에 붙여 두면 '수익' 쪽 머리말처럼 보이는데, 실제로는
+ * 막대 전체가 이 금액이다. 가운데에 세우면 어느 조각에도 속하지 않는 값이라는 것이 위치로
+ * 드러난다.
  */
-.shareLegend {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.shareItem {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--nt-ink2);
-}
-
-.shareDot {
-  width: 9px;
-  height: 9px;
-  border-radius: var(--nt-r-xs);
-  /* `flex: 0 0 auto` 가 없으면 범례 줄이 좁아질 때 점이 먼저 찌그러진다 — 글자보다 점이
-     줄어들 이유가 없다. */
-  flex: 0 0 auto;
-}
-
-/*
- * 범례 점의 색만 바꾸는 클래스 세 개.
- *
- * `.shareSegMargin` 등을 점에 같이 걸면 안 된다 — 그쪽은 막대 조각용이라 `flex: 1 1 auto` 를
- * 들고 있고, CSS 파일에서 `.shareDot` 보다 **아래**에 있으므로 같은 우선순위에서 뒤에 쓴
- * 쪽이 이겨 점이 가로로 늘어난다. 색만 필요한 자리에 레이아웃이 딸려 오는 클래스를 재사용하면
- * 이런 식으로 깨지므로, 색만 들고 있는 클래스를 따로 둔다.
- */
-.shareDotMargin {
-  background: var(--nt-ind);
-}
-
-.shareDotCost {
-  background: var(--ntms-cost);
-}
-
-.shareDotLoss {
-  background: var(--nt-dan);
-}
-
-.sharePct {
-  font-size: 13px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
-  color: var(--nt-ink);
-}
-
-.shareBar {
-  display: flex;
-  height: 22px;
-  border-radius: var(--nt-r-sm);
-  overflow: hidden;
-  background: var(--nt-line);
-}
-
-/*
- * 왼쪽(수익)만 너비를 받고 오른쪽(원가)은 **남는 자리를 채운다.**
- *
- * 두 조각에 각각 퍼센트를 주면 안 된다. 59.995% 와 40.005% 는 각각 59.99% / 40.01% 로
- * 반올림되는데, 두 값의 합이 100 에서 벗어나는 순간 막대 끝에 배경색 실선이 비치거나
- * 마지막 조각이 깎인다. 한쪽을 `flex: 1 1 auto` 로 두면 합은 **항상 정확히** 100% 다.
- */
-.shareSegMargin {
-  background: var(--nt-ind);
-  min-width: 0;
-}
-
-.shareSegCost {
-  background: var(--ntms-cost);
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-/* 원가가 수주액을 넘긴 기간 — 막대를 쪼개지 않고 통째로 손실색으로 칠한다. 아래 주석 참고. */
-.shareSegLoss {
-  background: var(--nt-dan);
-  flex: 1 1 auto;
-}
-
 .shareTotal {
   display: flex;
   align-items: baseline;
+  justify-content: center;
   gap: 9px;
   flex-wrap: wrap;
 }
@@ -926,74 +858,374 @@
   word-break: break-all;
 }
 
-/* ── 막대 그래프(집계 기준별) ─────────────────────────────────────────── */
-
-.chart {
+/*
+ * `overflow: hidden` 이 없다. 모서리는 조각들이 각자 둥글게 만든다.
+ *
+ * 숨기면 좁은 조각의 퍼센트가 잘리기 때문이다. 그리고 잘리는 쪽은 거의 항상 수익이다 —
+ * 마진율이 3% 인 기간이 이 리포트에서 가장 중요한 기간인데, 바로 그 숫자가 사라진다. 대신
+ * 좁은 조각은 숫자를 조각 **밖**으로 내보낸다(`.sharePctOut*`). 배경은 조각이 못 채우는
+ * 경우의 바닥색이다 — 원가 조각이 `flex: 1 1 auto` 라 실제로는 늘 가려진다.
+ */
+.shareBar {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  height: 26px;
+  border-radius: var(--nt-r-sm);
+  background: var(--nt-line);
 }
 
 /*
- * 한 줄 = 라벨 + 막대 + 금액. `grid` 다.
+ * 왼쪽(수익)만 너비를 받고 오른쪽(원가)은 **남는 자리를 채운다.**
  *
- * flex 가 아니라 grid 인 이유는 **줄끼리 가로로 맞아야** 하기 때문이다. flex 로 짜면 각 줄의
- * 라벨 폭이 그 줄의 글자 길이대로 정해져서, 고객사명이 '한국전자' 인 줄과 '주식회사 대한번역
- * 서비스' 인 줄의 막대 시작점이 어긋난다. 막대 그래프에서 시작점이 어긋나면 길이를 비교할 수
- * 없으므로 그래프가 아니게 된다. grid 는 열 폭을 그리드 전체가 공유한다.
+ * 두 조각에 각각 퍼센트를 주면 안 된다. 59.995% 와 40.005% 는 각각 59.99% / 40.01% 로
+ * 반올림되는데, 두 값의 합이 100 에서 벗어나는 순간 막대 끝에 배경색 실선이 비치거나
+ * 마지막 조각이 깎인다. 한쪽을 `flex: 1 1 auto` 로 두면 합은 **항상 정확히** 100% 다.
+ *
+ * `position: relative` 는 조각 밖으로 내보낸 퍼센트의 기준점이다. 너비가 0 인 조각에도
+ * 적용된다 — 0% 인 수익 조각의 숫자는 막대 왼쪽 끝 바로 안쪽에 선다.
  */
-.chartRow {
-  display: grid;
-  grid-template-columns: minmax(72px, 148px) 1fr minmax(92px, auto);
-  align-items: center;
-  gap: 10px;
-}
-
-.chartLabel {
-  font-size: 11.5px;
-  color: var(--nt-ink2);
-  /* 긴 이름은 한 줄로 자른다. 두 줄이 되면 그 줄만 키가 커져 막대 간격이 들쭉날쭉해진다. */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chartTrack {
-  height: 14px;
-  border-radius: var(--nt-r-xs);
-  background: var(--nt-tint3);
-  overflow: hidden;
-}
-
-.chartBar {
-  display: flex;
-  height: 100%;
-  overflow: hidden;
-}
-
-.chartSegMargin {
-  background: var(--nt-ind);
+.shareSegMargin {
+  background: var(--nt-ok);
   min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--nt-r-sm) 0 0 var(--nt-r-sm);
 }
 
-.chartSegCost {
+.shareSegCost {
   background: var(--ntms-cost);
   flex: 1 1 auto;
   min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0 var(--nt-r-sm) var(--nt-r-sm) 0;
 }
 
-.chartSegLoss {
+/* 원가가 수주액을 넘긴 기간 — 막대를 쪼개지 않고 통째로 손실색으로 칠한다. 아래 주석 참고. */
+.shareSegLoss {
   background: var(--nt-dan);
   flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--nt-r-sm);
 }
 
-.chartValue {
-  font-size: 11.5px;
-  text-align: right;
+/*
+ * 막대 안의 퍼센트. 흰 글씨다 — 네 색 모두 흰 글씨가 읽히는 명도이고, 조각 밖으로 밀려난
+ * 숫자도 **옆 조각 위**에 떨어지므로 역시 흰 바탕이 아니다.
+ */
+.sharePct {
+  font-size: 12.5px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
-  color: var(--nt-ink);
+  color: #fff;
   white-space: nowrap;
+}
+
+/* 수익 조각이 좁을 때. 자기 조각의 오른쪽 끝에서 시작해 원가 조각 위로 올라간다. */
+.sharePctOutRight {
+  position: absolute;
+  left: 100%;
+  margin-left: 7px;
+}
+
+/* 원가 조각이 좁을 때. 반대쪽으로 — 수익 조각 위로 올라간다. */
+.sharePctOutLeft {
+  position: absolute;
+  right: 100%;
+  margin-right: 7px;
+}
+
+/*
+ * 막대 아래 양 끝의 금액. 왼쪽이 수익, 오른쪽이 원가 — 막대 조각의 좌우와 같은 순서다.
+ *
+ * 퍼센트는 막대 안에 있고 금액은 막대 밖에 있다. 둘을 한자리에 모으면 네 개의 숫자가 붙어
+ * 서서 어느 퍼센트가 어느 금액의 것인지 다시 읽어야 하는데, 위치로 묶어 두면 읽을 필요가 없다.
+ */
+.shareEnds {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.shareEnd {
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.shareEndMargin {
+  color: var(--nt-ok);
+}
+
+.shareEndCost {
+  color: var(--ntms-cost);
+}
+
+.shareEndLoss {
+  color: var(--nt-dan);
+}
+
+/* ── 세로 막대 그래프(집계 기준별) ─────────────────────────────────────
+ *
+ * 한 집계 단위(고객사 하나, 하루 하나)마다 **세 개**의 막대가 선다: 매출 · 원가 · 수익.
+ *
+ * 가로 막대 하나를 수익/원가로 쪼개 그리던 때가 있었는데, 그 그림은 비율만 보여 주고 크기를
+ * 보여 주지 못했다. 매출 1억에 수익 10%인 고객사와 매출 100만에 수익 10%인 고객사의 막대가
+ * 같은 모양이고, 길이 차이만 남는다. 세 막대를 나란히 세우면 **각 금액의 크기와 셋 사이의
+ * 관계가 한 그림에 들어온다** — 회색 원가 막대가 주황 매출 막대에 거의 닿은 줄이 남지 않는
+ * 거래이고, 그건 길이 하나짜리 그래프로는 볼 수 없다.
+ *
+ * ## 높이를 두 군데서 정하지 않는다
+ *
+ * `--chart-h` 를 눈금 칸과 막대 칸이 **같이** 쓴다. 둘이 다른 높이가 되는 순간 눈금선과
+ * 막대 바닥이 어긋나고, 그러면 "3,000,000 선을 넘었나" 라는 이 그래프의 유일한 질문에
+ * 답할 수 없다. 숫자를 한 곳에만 적어 두면 어긋날 방법이 없다.
+ *
+ * ## 막대가 가늘어지는 대신 가로로 스크롤한다
+ *
+ * 표시 개수가 30 이면 막대가 90 개다. 폭을 나눠 갖게 두면 한 개가 2px 이 되어 세 계열이
+ * 구분되지 않고, 가로축 라벨은 글자 하나도 못 쓴다. `--chart-slot` 으로 한 묶음의 최소 폭을
+ * 잡고 넘치면 스크롤한다 — 가늘어진 그래프는 읽을 수 없지만, 스크롤하는 그래프는 읽을 수 있다.
+ *
+ * 세로축 눈금은 스크롤 영역 **밖**에 있어서 같이 밀려나지 않는다. 그래서 `.chartTicks` 는
+ * `align-self: start` 다: 스크롤바가 생기면 스크롤 칸만 그만큼 높아지는데, 눈금 칸이 그
+ * 높이에 맞춰 늘어나면 눈금 위치가 스크롤바 높이만큼 전부 틀어진다.
+ */
+
+.chart {
+  --chart-h: 268px;
+  /* 한 묶음(= 막대 세 개)의 최소 폭. 가로축 라벨도 같은 값을 써야 라벨이 제 막대 아래에 선다. */
+  --chart-slot: 58px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chartTitle {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--nt-ink);
+}
+
+.chartMain {
+  display: grid;
+  /* 세로축 제목 | 눈금 금액 | 플롯(남는 자리 전부). `minmax(0, 1fr)` 이라야 스크롤 칸이
+     내용 폭만큼 부풀지 않고 제 자리에서 스크롤한다. */
+  grid-template-columns: auto auto minmax(0, 1fr);
+  column-gap: 6px;
+}
+
+/*
+ * 세로축 제목. `rotate(180deg)` 까지 해야 글자가 아래에서 위로 읽힌다 — 세로축 제목의 관례다.
+ *
+ * **가운데 정렬이 `justify-content` 다.** `writing-mode: vertical-rl` 은 이 요소의 축을 돌려
+ * 놓으므로, flex 의 주축이 위에서 아래가 된다. 즉 세로 가운데로 보내는 속성은 `align-items`
+ * 가 아니라 `justify-content` 다 — `align-items: center` 로 적으면 글자가 가로로만 가운데에
+ * 서고 세로로는 위에 붙은 채 남는다(실제로 그렇게 적었다가 제목이 축 아래로 내려갔다).
+ */
+.chartYTitle {
+  height: var(--chart-h);
+  align-self: start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 10.5px;
+  color: var(--nt-ink3);
+}
+
+.chartTicks {
+  position: relative;
+  height: var(--chart-h);
+  align-self: start;
+  width: 94px;
+}
+
+/*
+ * 눈금 금액. `translateY(50%)` 가 글자의 가운데를 눈금선에 맞춘다 — `bottom` 만 주면 글자의
+ * **아랫변**이 선에 맞아 반 줄씩 위로 뜬다.
+ */
+.chartTickLabel {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--nt-ink3);
+  white-space: nowrap;
+}
+
+.chartScroll {
+  overflow-x: auto;
+  align-self: start;
+  /* 스크롤 칸이 그리드 열보다 넓어지지 않게. 없으면 내용이 열을 밀어 눈금 칸이 화면 밖으로 간다. */
+  min-width: 0;
+  width: 100%;
+}
+
+/*
+ * 스크롤되는 **내용 전체**(플롯 + 가로축 라벨). 폭을 정하는 자리가 여기 한 곳이다.
+ *
+ * `--chart-cols` 는 React 가 인라인으로 넘기는 묶음 수다. 폭 계산을 CSS 가 하면 한 묶음의
+ * 최소 폭(`--chart-slot`)을 JS 가 알 필요가 없다 — 그 숫자가 두 파일에 적혀 있으면, 한쪽만
+ * 고친 날 라벨이 제 막대 아래에서 벗어난다.
+ *
+ * `min-width: 100%` 가 짝이다. 묶음이 적으면 계산된 폭보다 칸이 넓으므로 100% 로 늘어나
+ * 카드를 채우고(묶음들은 `flex: 1 1 0` 으로 자리를 나눠 갖는다), 많으면 계산된 폭이 이겨
+ * 넘치고 스크롤된다.
+ *
+ * 폭을 `.chartArea` 에 걸 수 없는 이유: 막대들은 `position: absolute` 라 부모의 폭을 밀지
+ * 못한다. 즉 플롯은 스스로 넓어질 방법이 없고, 누군가 폭을 정해 줘야 한다.
+ */
+.chartCanvas {
+  width: calc(var(--chart-slot) * var(--chart-cols));
+  min-width: 100%;
+}
+
+.chartArea {
+  position: relative;
+  height: var(--chart-h);
+}
+
+/* 눈금선. 플롯을 가로지르고, 막대보다 **뒤**에 있다(막대가 뒤에 선언되어 있다). */
+.chartRule {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--nt-grid);
+}
+
+/* 0 선만 진하다. 양수와 음수를 가르는 선이므로 다른 눈금과 같은 무게면 안 된다. */
+.chartRuleZero {
+  border-top-color: var(--nt-line2);
+}
+
+.chartCols {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.chartGroup {
+  flex: 1 1 0;
+  min-width: var(--chart-slot);
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 5px;
+}
+
+/*
+ * 막대 한 개가 설 자리. `position: relative` 로 둬서 막대가 **0 선 기준**으로 붙는다.
+ *
+ * 막대를 absolute 로 띄우는 이유는 음수 때문이다. 보통의 세로 막대는 바닥에서 자라므로
+ * `align-self: flex-end` 면 되지만, 마진이 음수인 줄은 0 선 **아래로** 자라야 한다. 두 방향을
+ * 같은 방식으로 다루려면 0 선을 좌표로 들고 있어야 한다.
+ */
+.chartSlot {
+  position: relative;
+  flex: 1 1 0;
+  max-width: 16px;
+}
+
+.chartCol {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 1px 1px 0 0;
+}
+
+/* 0 선 아래로 자라는 막대 — 둥근 쪽이 반대다. */
+.chartColDown {
+  border-radius: 0 0 1px 1px;
+}
+
+.chartColRevenue {
+  background: var(--ntms-revenue);
+}
+
+.chartColCost {
+  background: var(--ntms-cost);
+}
+
+.chartColMargin {
+  background: var(--nt-ok);
+}
+
+.chartColLoss {
+  background: var(--nt-dan);
+}
+
+.chartXLabels {
+  display: flex;
+  margin-top: 7px;
+}
+
+/*
+ * 가로축 라벨. `.chartGroup` 과 **같은** `flex: 1 1 0` + `min-width` 라야 제 막대 아래에 선다.
+ *
+ * 두 줄에서 자른다. 긴 고객사명은 세 줄 네 줄로 늘어나는데, 라벨 줄 높이가 들쭉날쭉해지면
+ * 그래프 전체가 기울어 보인다. 잘린 이름은 `title` 로 전체가 뜬다.
+ */
+.chartXLabel {
+  flex: 1 1 0;
+  min-width: var(--chart-slot);
+  padding: 0 3px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: var(--nt-ink2);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 범례를 그래프 **아래 가운데**에 둔다 — 그림을 다 본 뒤에 색을 확인하는 순서다. */
+.chartLegend {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.chartLegendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--nt-ink2);
+}
+
+/*
+ * 범례 표식. 막대 그래프이므로 점이 아니라 **작은 막대**다.
+ *
+ * `flex: 0 0 auto` 가 없으면 범례 줄이 좁아질 때 표식이 먼저 찌그러진다 — 글자보다 표식이
+ * 줄어들 이유가 없다.
+ */
+.chartSwatch {
+  width: 13px;
+  height: 9px;
+  border-radius: var(--nt-r-xs);
+  flex: 0 0 auto;
 }
 
 /* ── 상태 표식 ────────────────────────────────────────────────────────── */

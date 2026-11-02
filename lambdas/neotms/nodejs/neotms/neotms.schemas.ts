@@ -265,7 +265,11 @@ export const JobCreateSchema = v.object({
   jobPriceKsum: settable(MoneySchema),
   jobSday: settable(DateSchema),
   jobSdayTime: settable(TimeSchema),
-  /** Delivery date. Also the business date revenue is recognised on, in the rollup. */
+  /**
+   * Delivery date, and the business date the reports recognise this job's revenue on. Leaving it
+   * blank keeps the job out of every report, for any range: a report is a date range, and an
+   * undated job belongs in none of them.
+   */
   jobEday: settable(DateSchema),
   jobEdayTime: settable(TimeSchema),
   jobMemo: settable(text(5000)),
@@ -291,7 +295,7 @@ export const JobUpdateSchema = v.partial(v.omit(JobCreateSchema, ["projectId"]))
  *
  * `jobId` is required and `projectId` is not accepted: the PO's project is derived from the job, so
  * accepting both would allow a PO whose project disagrees with its job's - a disagreement that
- * shows up as revenue and cost landing on different rollup rows, i.e. as a wrong margin on two
+ * shows up as revenue and cost landing on different report lines, i.e. as a wrong margin on two
  * reports at once.
  */
 export const PurchaseOrderCreateSchema = v.object({
@@ -390,10 +394,11 @@ export const ReportTopNSchema = v.pipe(
 /**
  * A report query.
  *
- * The date range is required, both of it. An unbounded report over the full history is the legacy
- * system's slowest screen - it aggregates everything on every page view - and the whole point of
- * `report_daily_rollup` is that a bounded range is an index scan. Making the bound mandatory is
- * what stops the new system growing the old problem back.
+ * The date range is required, both ends of it, and that requirement is what makes the report
+ * affordable to compute per request. Bounded, the aggregate is an index scan on `ix_job_eday` -
+ * single-digit milliseconds for a month. Unbounded, it is the legacy system's slowest screen,
+ * which aggregates the full history on every page view. Making the bound mandatory is what stops
+ * the new system growing the old problem back.
  */
 export const ReportQuerySchema = v.object({
   from: DateSchema,

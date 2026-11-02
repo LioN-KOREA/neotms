@@ -301,9 +301,11 @@ export function rangeClause(
  *     someone can compute from a request parameter; a caller can only come from the guard.
  *   * It is applied to the list query itself rather than filtering results afterwards. Filtering
  *     after the fact breaks pagination (a page of 50 becomes a page of 3) and leaks the total.
- *   * There is no "scope off" switch. Reporting endpoints that legitimately aggregate across
- *     everyone read the rollup table, which is a different query with its own permission check -
- *     not this one with the predicate omitted.
+ *   * There is no "scope off" switch, and the reporting endpoints are not an exception to it. They
+ *     aggregate the same `job` and `project` rows the list screens page through, so they call this
+ *     with the same ownership columns - see `REPORT_SCOPE_COLUMNS`. A report is the easiest place
+ *     to forget the predicate and the most damaging place to omit it, because one unscoped
+ *     aggregate hands over company-wide margin in a single response.
  */
 export function scopeClause(caller: NeotmsCaller, columns: string[]): SqlClause {
   if (caller.seesEveryRow || columns.length === 0) return EMPTY_CLAUSE;

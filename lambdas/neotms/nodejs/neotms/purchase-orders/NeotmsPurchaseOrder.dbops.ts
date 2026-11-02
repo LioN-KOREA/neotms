@@ -8,10 +8,15 @@
 //
 // ## `project_id` is derived, never accepted
 //
-// The column exists - the legacy table carries it and the reports read it - but it is written from
-// the PO's job rather than from the request. Accepting both would allow a PO whose project
-// disagrees with its job's project, which puts the revenue and the cost on different rollup rows.
-// The manager reads the job's project id (see `JobProjectOps`) and passes it in as context.
+// The column exists, because the legacy table carries it, but it is written from the PO's job
+// rather than from the request. Accepting both would allow a PO whose project disagrees with its
+// job's project, which would put the cost on a different report line from the revenue it was
+// incurred against. The manager reads the job's project id (see `JobProjectOps`) and passes it in
+// as context.
+//
+// The reports do not read this column at all - they reach cost through `job_id` - so a disagreement
+// would not show up as a wrong report so much as a PO that two screens attribute differently. Keep
+// the column honest anyway: it is what the project-level PO list filters on.
 //
 // ## The scope reaches two tables up
 //

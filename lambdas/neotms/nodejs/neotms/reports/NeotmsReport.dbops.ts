@@ -1,26 +1,69 @@
 // SPDX-License-Identifier: MIT
 //
-// The reports, read from `report_daily_rollup`.
+// The reports, aggregated from `job`, `project` and `purchase_order` on every request.
 //
-// Nothing here aggregates `job` or `purchase_order` directly, and that is the entire point of the
-// rollup. The legacy yearly report aggregates the full history on every page view, converting
-// nvarchar amounts per row, and it is the slowest screen in the system. These queries read a
-// pre-aggregated table over a bounded date range, which is an index scan on the composite primary
-// key.
+// ## Why this is computed live and not read from a rollup
 //
-// ## Margin is derived, never stored
+// It used to read `report_daily_rollup`, a daily pre-aggregated fact table rebuilt by a nightly
+// job. That was replaced, and the reasoning is worth keeping because the rollup is the obvious
+// design and it was wrong here for three separate reasons:
 //
-// `revenue - cost`, computed in SQL, in every query in this file. The rollup deliberately does not
-// store a margin column so that there is exactly one definition of it - a stored margin that
-// disagreed with its own revenue and cost would be unanswerable.
+//   1. A nightly rollup cannot answer the question being asked. A manager opens this screen to see
+//      what has happened, including this morning's deliveries and the invoice somebody corrected an
+//      hour ago. Data up to midnight is not a slower answer, it is a different and wrong one - and
+//      the legacy system this replaces does show today's work, so shipping a report that does not
+//      would be a regression dressed up as an optimisation.
+//   2. Nothing owned the recompute. No Lambda, no schedule, no application code ever called
+//      `report_rollup_recompute`, so the table was created empty and stayed empty: every report
+//      returned zeroes while looking perfectly healthy - an empty chart over a valid date range
+//      reads as "a quiet quarter", not as "the pipeline does not exist". A cache with no writer is
+//      strictly worse than no cache.
+//   3. Its premise no longer holds. The rollup was justified by the legacy yearly report, which
+//      aggregates the whole history on every page view and parses nvarchar amounts per row. Neither
+//      applies to this schema: `job_price_ksum` and `po_price_ksum` are already `numeric(18,2)`, so
+//      there is nothing to parse, and `ReportQuerySchema` *requires* both ends of the date range,
+//      so `ix_job_eday` turns every report into a bounded index scan. Measured on a database an
+//      order of magnitude larger than production (150k jobs, 200k POs, 15 years): 7-10 ms for a
+//      month, 66 ms for a year, 673 ms for the entire fifteen years. The rollup's advantage over
+//      that is tens of milliseconds a manager cannot perceive, bought with a whole second system
+//      of record for revenue that can silently disagree with the first.
 //
-// ## The sentinels are translated, not joined
+// What the rollup's existence did leave behind is its *definitions*, and those were right. They are
+// preserved exactly here, so a report run today reproduces what the rollup would have computed:
 //
-// Every dimension column is NOT NULL with a sentinel (0 for ids, '' for text), because NULLs in a
-// composite primary key never match `ON CONFLICT` and the nightly recompute would insert duplicates
-// forever. The consequence for reads is that `customer_id = 0` means "unset", not "customer 0". The
-// label joins here are LEFT joins and the sentinel falls through to "(unassigned)" - which is why
-// they are LEFT and not INNER.
+//   business date  job.job_eday            - delivery is the point of revenue recognition, so a job
+//                                            created in December and delivered in January belongs
+//                                            to January. NOT created_at, NOT the project's dates.
+//   revenue        job.job_price_ksum      - booked on the JOB
+//   cost           purchase_order.po_price_ksum - booked on the PO
+//   margin         revenue - cost          - derived in SQL, never stored
+//
+// Both amounts are the KRW-converted "KSUM" totals rather than the original-currency "SUM" totals,
+// because a report row aggregates across currencies and those figures have to be comparable. The
+// KRW value was computed with the FX rate captured at transaction time (`job.coin_rate`,
+// `purchase_order.po_coin_rate`), which is what makes re-running a report from three years ago
+// reproduce the original number instead of today's exchange rate applied to history.
+//
+// ## Revenue lives one level above cost
+//
+// This is the trap the whole file is shaped around. A job has many POs, so joining `purchase_order`
+// directly would fan each job's row out once per PO and multiply its revenue by its PO count - and
+// the result does not look wrong, it just quietly overstates the company's income. Cost is
+// therefore collapsed to one value per job by `LEFT JOIN LATERAL` *before* anything is summed, so
+// every job contributes exactly one row to the aggregate no matter how it was subcontracted.
+//
+// LEFT, not INNER, in two places and both matter: a job with no POs yet is real revenue that has
+// not been subcontracted, and dropping it would overstate margin; a project whose `prj_field` holds
+// a retired code with no `sys_code` row must fall through to "(unassigned)" rather than vanish.
+//
+// ## Unset dimensions keep the rollup's sentinels
+//
+// `dim_key` reports `0` for an unset id and `?` for an unset language, where the underlying column
+// is NULL. That is inherited from the rollup, whose dimension columns were NOT NULL with sentinel
+// defaults because NULLs in a composite primary key never match `ON CONFLICT`. The reason to keep
+// it now that the table is gone is the client: `dim_key` is what a drill-down sends back as
+// `?customerId=...`, and a key of `null` is not a thing a query string can carry. So `0` still
+// means "no customer", not "customer 0" - see `dimensionFilters`, which translates it back.
 
 import {
   param,
@@ -39,7 +82,7 @@ import type { ReportQuery } from "../neotms.schemas.js";
 /* -------------------------------------------------------------------------- */
 
 export type ReportLine = {
-  /** The dimension value: a date, an id, or a language pair. '0' / '' mean unassigned. */
+  /** The dimension value: a date, an id, or a language pair. '0' / '?' mean unassigned. */
   key: string;
   /** What to print. Already resolved, including "(unassigned)" for a sentinel. */
   label: string;
@@ -53,7 +96,14 @@ export type ReportTotals = {
   revenue: string;
   cost: string;
   margin: string;
-  /** How many rollup rows were summed. A freshness/sanity signal, not a business figure. */
+  /**
+   * How many jobs the totals were summed from - not POs and not breakdown lines.
+   *
+   * A sanity signal rather than a business figure, and it is exactly the job count because the
+   * lateral cost join contributes one row per job by construction. If this ever drifts above
+   * `SELECT count(*) FROM job ...` for the same range, something has started fanning out and the
+   * money is being multiplied.
+   */
   rows: number;
 };
 
@@ -64,6 +114,63 @@ const toReportLine = (row: SqlRow): ReportLine => ({
   cost: readMoney(row, "cost") ?? "0",
   margin: readMoney(row, "margin") ?? "0",
 });
+
+/* -------------------------------------------------------------------------- */
+/* The source rows                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Every report reads this, and nothing else reads `purchase_order` for money.
+ *
+ * One `FROM` shared by the breakdown and the totals, because the two must agree: the totals are
+ * deliberately *not* a sum of the returned lines (see `ReportTotalsOps`), so the only thing keeping
+ * the grand total consistent with the chart above it is that both were computed from the same rows
+ * with the same joins. Two hand-written `FROM` clauses would be two definitions of revenue.
+ *
+ * `JOIN project` is INNER on purpose: a job with no project cannot be placed on any dimension, so
+ * there is nowhere to report it. This does mean orphan jobs are invisible here, and legacy has them
+ * - `PRJTB_JOB` had no FK to `PRJTB_MAIN` - so the ETL must reconcile them. Monitor with:
+ *
+ *     SELECT count(*), sum(job_price_ksum) FROM job j
+ *      WHERE NOT j.deleted
+ *        AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = j.project_id);
+ *
+ * `LEFT JOIN LATERAL` rather than a `GROUP BY job_id` subquery over the whole PO table, because the
+ * lateral is correlated: it runs `ix_po_job` once per job already selected by the date range, so a
+ * one-month report touches the POs of that month's jobs. The uncorrelated form has to aggregate
+ * every PO in the database before the date filter can be applied, which is what made the nightly
+ * recompute O(dates x all POs) and eventually time out. The aggregate has no `GROUP BY`, so the
+ * subquery returns exactly one row - `ON true` with an aggregate cannot drop or duplicate a job.
+ *
+ * `deleted = false` and not `NOT deleted`: `ix_job_eday` and `ix_po_job` are both partial indexes,
+ * and this is the spelling the rest of the dbops layer uses.
+ */
+const REPORT_FROM = `
+        FROM job j
+        JOIN project p ON p.id = j.project_id AND p.deleted = false
+        LEFT JOIN LATERAL (
+               SELECT sum(po.po_price_ksum) AS cost
+                 FROM purchase_order po
+                WHERE po.job_id = j.id
+                  AND po.deleted = false
+             ) poc ON true
+`;
+
+/**
+ * Revenue, cost and margin over whatever rows the surrounding query selected.
+ *
+ * Shared between the breakdown and the totals for the same reason `REPORT_FROM` is. `COALESCE` on
+ * each sum is not defensive noise: `sum()` of an empty set - or of a group whose every amount is
+ * NULL, which happens for a job priced but not yet costed - is NULL, and `NULL - NULL` would make
+ * margin NULL rather than zero. The client renders a missing margin as an explanatory note instead
+ * of a bar, so a NULL here turns a correct zero-margin line into "unknown".
+ */
+const REPORT_MEASURES = `
+               COALESCE(sum(j.job_price_ksum), 0) AS revenue,
+               COALESCE(sum(poc.cost), 0)         AS cost,
+               COALESCE(sum(j.job_price_ksum), 0)
+                 - COALESCE(sum(poc.cost), 0)     AS margin
+`;
 
 /* -------------------------------------------------------------------------- */
 /* Dimensions                                                                 */
@@ -80,9 +187,14 @@ const toReportLine = (row: SqlRow): ReportLine => ({
  * `label` is cast to text in every case because the column it comes from varies - a date, a bigint
  * id, a code string - and a single result shape is worth more to the client than preserving three
  * types across one field.
+ *
+ * Note which table each dimension comes from, because two of them are easy to transpose: the PM is
+ * the one on the JOB (`job_pm_id`), which can differ from the project's own PM, while the sales
+ * manager is the project's `prj_mgr_id`. Customer, corp and category are all project-level, so
+ * every job in a project shares them.
  */
 type Dimension = {
-  /** The grouping key expression. */
+  /** The grouping key expression, with unset values mapped to the sentinel. */
   key: string;
   /** The display label expression, with the sentinel already resolved. */
   label: string;
@@ -93,7 +205,7 @@ type Dimension = {
    *
    * Separate from `displayBy` because "which rows matter" and "what order to read them in" are not
    * the same question once there is a limit, and for the time series they are opposites. `LIMIT 10`
-   * on a `business_date ASC` ordering returns the *oldest* ten days in the range - so a user asking
+   * on a `job_eday ASC` ordering returns the *oldest* ten days in the range - so a user asking
    * for "the last 30 days, top 10" would be shown January while believing they were shown the
    * recent past. Nothing about the result looks wrong: ten rows, correct figures, ascending dates.
    */
@@ -105,6 +217,9 @@ type Dimension = {
 
 const unassigned = (expression: string): string =>
   `COALESCE(NULLIF(${expression}, ''), '(unassigned)')`;
+
+/** An id dimension's key: NULL becomes the sentinel `0`, and the whole thing becomes text. */
+const idKey = (column: string): string => `COALESCE(${column}, 0)::text`;
 
 /**
  * The ordering every revenue breakdown uses, for both picking and display.
@@ -123,61 +238,80 @@ const REPORT_DIMENSIONS = {
   /*
    * The time series, and the only dimension where picking and display disagree.
    *
-   * `dim_key` is `business_date::text`, and an ISO date string sorts identically to the date itself
+   * No sentinel and no `unassigned`: a job with a NULL `job_eday` has no business date, so the
+   * range predicate has already excluded it - `NULL >= :from` is NULL, which is not true. That is
+   * the same rule the rollup applied by skipping those jobs, and it is worth knowing about rather
+   * than papering over, because such a job is revenue that appears in no report for any range. It
+   * is a data-entry gap (a delivered job nobody dated), not a reporting one, and the place to see
+   * it is the job list, not here.
+   *
+   * `dim_key` is `job_eday::text`, and an ISO date string sorts identically to the date itself
    * (fixed width, most significant field first) - which is why ordering on the alias rather than on
-   * `r.business_date` is safe here and saves repeating the expression.
+   * `j.job_eday` is safe here and saves repeating the expression.
    */
   date: {
-    key: "r.business_date::text",
-    label: "r.business_date::text",
+    key: "j.job_eday::text",
+    label: "j.job_eday::text",
     join: "",
     pickBy: "dim_key DESC",
     displayBy: "dim_key ASC",
   },
   customer: {
-    key: "r.customer_id::text",
+    key: idKey("p.customer_id"),
     label: unassigned("cu.cus_name"),
-    join: "LEFT JOIN customer cu ON cu.id = r.customer_id",
+    join: "LEFT JOIN customer cu ON cu.id = p.customer_id",
     pickBy: BY_REVENUE,
     displayBy: BY_REVENUE,
   },
   pm: {
-    key: "r.pm_id::text",
+    key: idKey("j.job_pm_id"),
     label: unassigned("spm.mgr_name"),
-    join: "LEFT JOIN staff spm ON spm.id = r.pm_id",
+    join: "LEFT JOIN staff spm ON spm.id = j.job_pm_id",
     pickBy: BY_REVENUE,
     displayBy: BY_REVENUE,
   },
   salesManager: {
-    key: "r.sales_mgr_id::text",
+    key: idKey("p.prj_mgr_id"),
     label: unassigned("ssm.mgr_name"),
-    join: "LEFT JOIN staff ssm ON ssm.id = r.sales_mgr_id",
+    join: "LEFT JOIN staff ssm ON ssm.id = p.prj_mgr_id",
     pickBy: BY_REVENUE,
     displayBy: BY_REVENUE,
   },
   corp: {
-    key: "r.corp_id::text",
+    key: idKey("p.corp_id"),
     label: unassigned("co.corp_name"),
-    join: "LEFT JOIN corp co ON co.id = r.corp_id",
-    pickBy: BY_REVENUE,
-    displayBy: BY_REVENUE,
-  },
-  category: {
-    key: "r.category_id::text",
-    label: unassigned("sc.code_name"),
-    join: "LEFT JOIN sys_code sc ON sc.id = r.category_id",
+    join: "LEFT JOIN corp co ON co.id = p.corp_id",
     pickBy: BY_REVENUE,
     displayBy: BY_REVENUE,
   },
   /*
-   * The one composite dimension. Both halves are already code strings on the rollup row - the DDL
-   * keeps them as codes rather than ids precisely so this reads without a join - so the pair is
-   * concatenated for the key and the label alike. A missing half shows as the sentinel's empty
-   * string, which `unassigned` cannot catch inside a concatenation; hence the NULLIF on each half.
+   * The subject domain, resolved from the project's primary field code. `prj_field2` is deliberately
+   * not reported on: a job counted under two fields would double the revenue of any breakdown that
+   * summed the bars.
+   *
+   * Joined on `sys_code.code`, which is UNIQUE - so this cannot fan a job out across several code
+   * rows the way an unconstrained label join could. A retired code with no row at all falls through
+   * to sentinel 0, indistinguishable here from a project with no field set; to tell those two apart,
+   * query `project.prj_field` directly.
+   */
+  category: {
+    key: idKey("sc.id"),
+    label: unassigned("sc.code_name"),
+    join: "LEFT JOIN sys_code sc ON sc.code = p.prj_field",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
+  },
+  /*
+   * The one composite dimension, and the only one whose key is not an id. Both halves are code
+   * strings on the job row, so there is no join: resolving them to `sys_code.code_name` would need
+   * two more joins to print "한국어 > 영어" where the codes the whole company already speaks in are
+   * "KO > EN". A missing half shows as `?` - `unassigned` cannot catch an empty string inside a
+   * concatenation, hence the NULLIF on each half, which also covers the NULL the column may hold.
    */
   langPair: {
-    key: "(COALESCE(NULLIF(r.slang, ''), '?') || ' > ' || COALESCE(NULLIF(r.elang, ''), '?'))",
-    label: "(COALESCE(NULLIF(r.slang, ''), '?') || ' > ' || COALESCE(NULLIF(r.elang, ''), '?'))",
+    key: "(COALESCE(NULLIF(j.job_slang, ''), '?') || ' > ' || COALESCE(NULLIF(j.job_elang, ''), '?'))",
+    label:
+      "(COALESCE(NULLIF(j.job_slang, ''), '?') || ' > ' || COALESCE(NULLIF(j.job_elang, ''), '?'))",
     join: "",
     pickBy: BY_REVENUE,
     displayBy: BY_REVENUE,
@@ -200,25 +334,39 @@ export const REPORT_LINE_CAP = 1000;
 /* -------------------------------------------------------------------------- */
 
 /**
- * The dimension filters, as equality predicates on the rollup's own columns.
+ * The dimension filters, as equality predicates on the source columns.
  *
- * Written out rather than built with `filterClause` because of the sentinels: `?customerId=0` is a
- * legitimate request meaning "the rows with no customer", so an id of "0" must be kept where
- * `filterClause` would treat any value as a filter and the empty string as none. The behaviour is
- * the same; the distinction is that here "0" has meaning.
+ * Written out rather than built with `filterClause` because of the sentinels. `?customerId=0` is a
+ * legitimate request - it is what clicking the "(unassigned)" bar sends, because `dim_key` reports
+ * an unset id as `0` - and it means "the jobs whose project has no customer". The underlying column
+ * is NULL there, not 0, so the zero has to become `IS NULL` on the way in. `filterClause` has no
+ * notion of that and would emit `customer_id = 0`, which matches nothing: the bar would be
+ * clickable, return an empty report, and look like a quiet month.
+ *
+ * `IS NULL` rather than `COALESCE(column, 0) = :id` for both branches, because wrapping the column
+ * puts an expression on the indexed side and gives up `ix_prj_cus` for the common case to tidy up
+ * the rare one.
+ *
+ * The one thing this conflates is a real id of 0. `GENERATED BY DEFAULT AS IDENTITY` starts at 1,
+ * so one can only exist if the ETL inserted it explicitly - and the rollup conflated them too.
  */
 function dimensionFilters(query: ReportQuery): SqlClause {
   const parts: string[] = [];
   const parameters: SqlParameter[] = [];
   const add = (column: string, name: string, value: string | undefined): void => {
     if (value === undefined) return;
+    // `IdSchema` is `^\d{1,19}$`, so "0" can also arrive as "00" - match on the value, not the text.
+    if (/^0+$/.test(value)) {
+      parts.push(`AND ${column} IS NULL`);
+      return;
+    }
     parts.push(`AND ${column} = :${name}`);
     parameters.push(param(name, value, "id"));
   };
-  add("r.customer_id", "f_customer_id", query.customerId);
-  add("r.pm_id", "f_pm_id", query.pmId);
-  add("r.sales_mgr_id", "f_sales_mgr_id", query.salesManagerId);
-  add("r.corp_id", "f_corp_id", query.corpId);
+  add("p.customer_id", "f_customer_id", query.customerId);
+  add("j.job_pm_id", "f_pm_id", query.pmId);
+  add("p.prj_mgr_id", "f_sales_mgr_id", query.salesManagerId);
+  add("p.corp_id", "f_corp_id", query.corpId);
   return { fragment: parts.join("\n      "), parameters };
 }
 
@@ -227,18 +375,36 @@ function dimensionFilters(query: ReportQuery): SqlClause {
  *
  * A reporting endpoint with the scope predicate left off is how row-level access control is
  * actually defeated in practice: the list screens are locked down, nobody thinks of the report, and
- * company-wide margin becomes readable by anyone who can open it. The rollup carries `pm_id` and
- * `sales_mgr_id`, which are the same `staff.id` values the project and job scopes use, so the same
- * rule applies here unchanged.
+ * company-wide margin becomes readable by anyone who can open it. The menu check is NOT a
+ * substitute. REPORT is a separate menu from PROJECT for exactly this reason - holding it means
+ * "may see reports", and this predicate decides "of whose work".
  *
- * The menu check is NOT a substitute. REPORT is a separate menu from PROJECT for exactly this
- * reason - holding it means "may see reports", and this predicate decides "of whose work".
+ * All three ownership columns, identical to `JOB_SCOPE_COLUMNS` in NeotmsJob.dbops.ts, and the
+ * match is the point: a report is an aggregate of jobs, so it must be visible over exactly the jobs
+ * its reader can list. The rollup could not do this. It carried `pm_id` and `sales_mgr_id` and had
+ * no column for the project's own PM, so `prj_pm_id` was simply missing from the predicate - and a
+ * project PM who was neither the job's PM nor the sales manager could open every job in their
+ * project on the job screen and then read zero revenue for it on the report. Aggregating live means
+ * the real columns are in scope and the two screens finally agree.
+ *
+ * Written out rather than imported from NeotmsJob.dbops.ts, because the two lists are equal by
+ * REQUIREMENT, not by definition: a job list column that turned out not to be a reporting dimension
+ * would want to stay out of here. A test asserts they are equal, so the day they should differ is a
+ * deliberate decision with a failing test to record it, rather than an import somebody widened
+ * without noticing which screen they had just changed.
  */
-const REPORT_SCOPE_COLUMNS = ["r.pm_id", "r.sales_mgr_id"];
+export const REPORT_SCOPE_COLUMNS = ["j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
 
+/**
+ * The range, the filters and the scope, as one clause.
+ *
+ * The range is on `j.job_eday` - the business date, see the module header - and both ends are
+ * required by `ReportQuerySchema`, which is what keeps this an index scan on `ix_job_eday` rather
+ * than the full-history aggregation the legacy report does.
+ */
 const reportWhere = (caller: NeotmsCaller, query: ReportQuery): SqlClause =>
   mergeClauses(
-    rangeClause("range", "r.business_date", query.from, query.to),
+    rangeClause("range", "j.job_eday", query.from, query.to),
     dimensionFilters(query),
     scopeClause(caller, REPORT_SCOPE_COLUMNS),
   );
@@ -250,14 +416,14 @@ const reportWhere = (caller: NeotmsCaller, query: ReportQuery): SqlClause =>
 /**
  * One breakdown of revenue, cost and margin.
  *
- * `HAVING` is deliberately absent: a dimension value with zero revenue and zero cost would not
- * produce a rollup row at all, so there is nothing to filter out. A line with revenue and no cost
- * is real and must be kept - it is a job that has been sold but not yet subcontracted, and dropping
- * it would overstate margin.
+ * `HAVING` is deliberately absent. A line with revenue and no cost is real and must be kept - it is
+ * a job that has been sold but not yet subcontracted, and dropping it would overstate margin. A
+ * line with cost and no revenue is real too, and more interesting: it is work paid for against a
+ * job priced at nothing, which is either a data-entry error or a loss, and both want to be seen.
  *
  * Two nested queries rather than one, because the limit has to cut on one ordering and the result
  * has to arrive in another. The inner query aggregates and keeps the rows that matter (`pickBy`);
- * the outer one only re-sorts what survived (`displayBy`). For the five revenue dimensions the two
+ * the outer one only re-sorts what survived (`displayBy`). For the six revenue dimensions the two
  * orderings are the same string and the outer sort is a no-op on at most thirty rows - the cost of
  * the wrapper is nothing. For the time series they are opposites, and the wrapper is the whole
  * point: "the last 10 days" must be picked newest-first and then read oldest-first.
@@ -287,12 +453,10 @@ export const ReportBreakdownOps: (
         FROM (
               SELECT ${dimension.key}   AS dim_key,
                      ${dimension.label} AS dim_label,
-                     sum(r.revenue)                  AS revenue,
-                     sum(r.cost)                     AS cost,
-                     sum(r.revenue) - sum(r.cost)    AS margin
-                FROM report_daily_rollup r
+              ${REPORT_MEASURES}
+              ${REPORT_FROM}
                 ${dimension.join}
-               WHERE true
+               WHERE j.deleted = false
               ${where.fragment}
                GROUP BY ${dimension.key}, ${dimension.label}
                ORDER BY ${dimension.pickBy}
@@ -311,6 +475,11 @@ export const ReportBreakdownOps: (
  * A separate query rather than a sum of the returned lines, because the lines are capped: adding up
  * a truncated list would produce a grand total quietly smaller than the real one, which is the worst
  * kind of wrong number - plausible, and off by an amount nobody can account for.
+ *
+ * No `dimension.join`, because there is no dimension: the label joins exist to print a name and
+ * nothing here is grouped. Leaving them out is not just tidiness - a label join is the one place a
+ * fan-out could creep in, and omitting it makes this query's total structurally incapable of
+ * disagreeing with itself.
  */
 export const ReportTotalsOps: (
   caller: NeotmsCaller,
@@ -319,12 +488,11 @@ export const ReportTotalsOps: (
   const where = reportWhere(caller, query);
   return {
     sql: `
-      SELECT COALESCE(sum(r.revenue), 0)                      AS revenue,
-             COALESCE(sum(r.cost), 0)                         AS cost,
-             COALESCE(sum(r.revenue), 0) - COALESCE(sum(r.cost), 0) AS margin,
-             count(*)                                         AS row_count
-        FROM report_daily_rollup r
-       WHERE true
+      SELECT
+      ${REPORT_MEASURES},
+             count(*) AS row_count
+      ${REPORT_FROM}
+       WHERE j.deleted = false
       ${where.fragment}
     `,
     parameters: where.parameters,
@@ -336,19 +504,6 @@ export const ReportTotalsOps: (
     }),
   };
 };
-
-/**
- * When the rollup was last rebuilt.
- *
- * Shown on the report screens, because a pre-aggregated table is only trustworthy if the reader can
- * see how old it is. A nightly job that silently stopped three weeks ago otherwise looks exactly
- * like a quiet three weeks.
- */
-export const ReportFreshnessOps: () => SqlOps<string | null> = () => ({
-  sql: `SELECT max(r.computed_at) AS computed_at FROM report_daily_rollup r`,
-  parameters: [],
-  mapper: (rows) => (rows.length > 0 ? readText(rows[0]!, "computed_at") : null),
-});
 
 export type WorkloadCounts = {
   /** Jobs whose delivery date falls in the window. */
@@ -362,10 +517,6 @@ export type WorkloadCounts = {
 /**
  * The dashboard's workload counters, for a date window.
  *
- * Read from `job` and `purchase_order` rather than from the rollup, which is not an inconsistency:
- * the rollup is organised around money and skips any job with no delivery date, while these are
- * counts of upcoming work.
- *
  * ## Why there is no "overdue" or "in progress" counter here
  *
  * Both would need the `job_state` vocabulary, and the legacy state values are UNCONFIRMED - the
@@ -377,13 +528,16 @@ export type WorkloadCounts = {
  * `jobsWithoutPo` is the one worth watching: a job due this week with nothing subcontracted is
  * either work about to be done in-house or work nobody has started, and both are things a PM wants
  * to be asked about.
+ *
+ * These are counts of upcoming work rather than money, so they do not share `REPORT_FROM`: there is
+ * no cost to collapse, and `NOT EXISTS` answers "has no PO" more directly than a sum would.
  */
 export const WorkloadCountsOps: (
   caller: NeotmsCaller,
   from: string,
   to: string,
 ) => SqlOps<WorkloadCounts> = (caller, from, to) => {
-  const scope = scopeClause(caller, ["j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"]);
+  const scope = scopeClause(caller, REPORT_SCOPE_COLUMNS);
   return {
     sql: `
       SELECT

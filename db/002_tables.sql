@@ -838,11 +838,11 @@ COMMENT ON COLUMN project.corp_id IS
 COMMENT ON COLUMN project.coin_code IS
   'Legacy COIN_CODE. Billing currency agreed for the project. Individual jobs carry their own coin_code and captured coin_rate.';
 COMMENT ON COLUMN project.prj_mgr_id IS
-  'Legacy PRJ_MGR (held SY_MGR.MGR_ID). The SALES manager who owns the customer relationship, as distinct from prj_pm_id, the project manager who delivers the work. This is the column the reports'' "sales manager" dimension aggregates on (report_daily_rollup.sales_mgr_id). The sales-vs-delivery split is inferred from the report dimensions; if the legacy screens label PRJ_MGR differently, only the rollup comment needs changing.';
+  'Legacy PRJ_MGR (held SY_MGR.MGR_ID). The SALES manager who owns the customer relationship, as distinct from prj_pm_id, the project manager who delivers the work. This is the column the reports'' "sales manager" dimension groups on, and it is also one of the three ownership columns the reports'' row-level scope ORs together (with job.job_pm_id and prj_pm_id). The sales-vs-delivery split is inferred from the report dimensions; if the legacy screens label PRJ_MGR differently, only this comment and the dimension''s label change, not the column.';
 COMMENT ON COLUMN project.prj_mgr_name IS
   'Denormalised copy of staff.mgr_name for prj_mgr_id. Deliberate denormalisation that serves the project list screen (avoids two staff joins per row). prj_mgr_id is AUTHORITATIVE; this is a maintained copy and must be rewritten when the staff member is renamed.';
 COMMENT ON COLUMN project.prj_pm_id IS
-  'Legacy PRJ_PM. The project manager responsible for delivery. report_daily_rollup.pm_id aggregates on the job-level PM (job.job_pm_id), which can differ from the project-level PM.';
+  'Legacy PRJ_PM. The project manager responsible for delivery. NOT the reports'' "PM" dimension -- that groups on the job-level PM (job.job_pm_id), which can differ from this one. This column IS part of the reports'' row-level scope, however: a project PM sees their project''s revenue even on jobs assigned to another PM, which is what keeps the report visible over exactly the jobs its reader can list.';
 COMMENT ON COLUMN project.prj_pm_name IS
   'Denormalised copy of staff.mgr_name for prj_pm_id. prj_pm_id is authoritative; see prj_mgr_name.';
 COMMENT ON COLUMN project.customer_id IS 'Legacy CUS_CODE, resolved to customer.id by the ETL.';
@@ -853,7 +853,7 @@ COMMENT ON COLUMN project.customer_contact_id IS
 COMMENT ON COLUMN project.cus_mgr_name IS
   'Legacy CUS_MGR_NAME. Denormalised copy of customer_contact.cus_mgr_name. customer_contact_id is authoritative.';
 COMMENT ON COLUMN project.prj_field IS
-  'Legacy PRJ_FIELD. Primary subject domain (legal, medical, IT, ...). This is the column the reports'' "category" dimension resolves (report_daily_rollup.category_id).';
+  'Legacy PRJ_FIELD. Primary subject domain (legal, medical, IT, ...). This is the column the reports'' "category" dimension resolves, by LEFT JOIN to sys_code.code. prj_field2 is deliberately NOT reported on: a job counted under two fields would double the revenue of any breakdown that summed the bars. A retired code with no sys_code row falls through to "(unassigned)" rather than dropping the job, so unset and retired are indistinguishable on the report -- query this column directly to tell them apart.';
 COMMENT ON COLUMN project.prj_field2 IS
   'Legacy PRJ_FIELD2. Secondary subject domain. Legacy declared FIELD2 before FIELD in the table; the ordering here puts the primary first, which is harmless but worth knowing when diffing against the old DDL.';
 COMMENT ON COLUMN project.prj_state IS
@@ -921,7 +921,7 @@ COMMENT ON COLUMN job.project_id IS
   'Legacy PRJ_CODE. RESTRICT: a project with jobs cannot be deleted, because deleting it would silently destroy booked revenue.';
 COMMENT ON COLUMN job.work_code IS 'Service type (translation, proofreading, DTP, ...).';
 COMMENT ON COLUMN job.job_pm_id IS
-  'Legacy JOB_PM (held SY_MGR.MGR_ID). The PM accountable for this job. This is the column report_daily_rollup.pm_id aggregates on.';
+  'Legacy JOB_PM (held SY_MGR.MGR_ID). The PM accountable for this job. This is the column the reports'' "PM" dimension groups on -- the JOB-level PM, which can differ from project.prj_pm_id -- and one of the three ownership columns the reports'' row-level scope ORs together.';
 COMMENT ON COLUMN job.job_pm_name IS
   'Legacy JOB_PM_NAME. Denormalised copy of staff.mgr_name. job_pm_id is AUTHORITATIVE; this is a maintained copy for the job list screen and is covered by a 2-gram search index.';
 COMMENT ON COLUMN job.job_slang IS 'Source language.';
@@ -940,16 +940,16 @@ COMMENT ON COLUMN job.coin_rate IS
 COMMENT ON COLUMN job.job_price_sum IS
   'Total revenue for this job in the ORIGINAL currency (coin_code). Legacy JOB_PRICE_SUM, nvarchar(200) -> numeric(18,2).';
 COMMENT ON COLUMN job.job_price_ksum IS
-  'Legacy JOB_PRICE_KSUM. "KSUM" = KRW-converted total (= job_price_sum * coin_rate), as opposed to job_price_sum, the original-currency total. This is the column the reports and report_daily_rollup.revenue aggregate, because totals must be comparable across currencies.';
+  'Legacy JOB_PRICE_KSUM. "KSUM" = KRW-converted total (= job_price_sum * coin_rate), as opposed to job_price_sum, the original-currency total. This is the column the reports sum as REVENUE, because totals must be comparable across currencies. Margin is revenue minus the sum of the job''s POs'' po_price_ksum, derived per query and never stored, so that there is exactly one definition of it.';
 COMMENT ON COLUMN job.job_sday IS 'Job start date. Legacy nvarchar(30) -> date.';
 COMMENT ON COLUMN job.job_sday_time IS 'Start time; kept separate from the date because the UI edits them separately and it is often absent.';
 COMMENT ON COLUMN job.job_eday IS
-  'Job delivery/due date. Used as the business date for revenue recognition in report_daily_rollup.';
+  'Job delivery/due date, and the BUSINESS DATE of every report: delivery is when revenue is recognised, so a job is counted in the period it was delivered in, not the one it was created or invoiced in. Every report range is a range over this column (ix_job_eday), which makes it the one date the reports cannot do without -- a job with a NULL job_eday belongs to no period and therefore appears in no report at all.';
 COMMENT ON COLUMN job.job_eday_time IS 'Delivery time; see job_sday_time.';
 COMMENT ON COLUMN job.job_memo IS 'Legacy JOB_MEMO, nvarchar(max). Internal working notes.';
 COMMENT ON COLUMN job.job_state IS
   'Legacy JOB_STATE. Workflow status. Unconstrained text with no CHECK and no sys_code FK -- live data contains retired status values; see project.prj_state.';
-COMMENT ON COLUMN job.deleted IS 'Legacy DEL_YN (Y/N). Soft delete. IMPORTANT for reporting: deleted jobs must be excluded from revenue, which is why the rollup recompute filters NOT deleted.';
+COMMENT ON COLUMN job.deleted IS 'Legacy DEL_YN (Y/N). Soft delete. IMPORTANT for reporting: deleted jobs must be excluded from revenue, which is why every report query carries `j.deleted = false` -- written as `= false` rather than `NOT deleted` so it matches the WHERE NOT deleted predicate of ix_job_eday and the report stays an index scan.';
 
 
 -- ---------------------------------------------------------------------
@@ -1040,7 +1040,7 @@ COMMENT ON COLUMN purchase_order.po_coin_rate IS
 COMMENT ON COLUMN purchase_order.po_price_sum IS
   'Total cost of this PO in the ORIGINAL currency (po_coin_code). Legacy nvarchar(200) -> numeric(18,2).';
 COMMENT ON COLUMN purchase_order.po_price_ksum IS
-  'Legacy PO_PRICE_KSUM. "KSUM" = KRW-converted total (= po_price_sum * po_coin_rate). This is the column report_daily_rollup.cost aggregates, so that cost is comparable across currencies and against job_price_ksum.';
+  'Legacy PO_PRICE_KSUM. "KSUM" = KRW-converted total (= po_price_sum * po_coin_rate). This is the column the reports sum as COST, so that cost is comparable across currencies and against job_price_ksum. Note that cost sits one level BELOW revenue -- a job has many POs -- so the reports sum it through a LATERAL subquery per job rather than a join, which would otherwise multiply the job''s revenue by its number of POs.';
 COMMENT ON COLUMN purchase_order.po_tax IS
   'Legacy PO_TAX, nvarchar(200) -> numeric(18,3). READ AS a RATE/PERCENTAGE (3.300 = Korean 3.3% withholding), on the inference that po_tax (rate) x base = po_tax_price (amount) with po_tax_sum the gross. That reading is NOT confirmed: all three legacy tax columns were nvarchar(200), so any of them could hold an amount instead.
    WIDTH IS DELIBERATELY WIDER THAN THE READING NEEDS. A rate needs numeric(6,3); this is numeric(18,3) so that the column also accepts a tax AMOUNT in KRW or JPY without overflowing. The point is to make a wrong guess a LABELLING problem (the column means something other than the comment says) rather than an ETL problem (the load aborts on the first row over 999.999, mid-migration, with a numeric overflow that names no column value). Narrowing it later is a one-line ALTER; re-running a half-loaded migration is not.
@@ -1075,7 +1075,7 @@ COMMENT ON COLUMN purchase_order.inv_code IS
   'Legacy INV_CODE. The translator invoice (invoice_translator.inv_tran_code) this PO was settled on. NOT an FK -- legacy references invoices that were later deleted.';
 COMMENT ON COLUMN purchase_order.inv_dt IS 'Legacy INV_DT -> date. Date of that translator invoice.';
 COMMENT ON COLUMN purchase_order.deleted IS
-  'Legacy DEL_YN (Y/N). Soft delete. Deleted POs must be excluded from cost, which is why the rollup recompute filters NOT deleted.';
+  'Legacy DEL_YN (Y/N). Soft delete. Deleted POs must be excluded from cost, which is why the reports'' cost LATERAL filters `po.deleted = false` -- spelled `= false` to match the WHERE NOT deleted predicate of ix_po_job.';
 
 
 -- =====================================================================
@@ -1394,6 +1394,7 @@ COMMENT ON COLUMN modify_log.contents IS
 -- (SY_MGR.MGR_PASS) are intentionally absent -- see the decision record at
 -- the top of this file.
 --
--- Next: 003_indexes.sql, then 004_rollup.sql.
+-- Next: 003_indexes.sql, then 004_rollup.sql (which no longer creates
+-- anything -- it tears the old reporting rollup down and records why).
 -- =====================================================================
 

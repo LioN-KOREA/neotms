@@ -695,8 +695,9 @@ describe("the LPX access authority", () => {
  * One SQL file with its comments removed.
  *
  * Needed because the tests below look for things that are legitimate in prose and fatal in code -
- * `:business_date`, `\set` - and both appear in 004_rollup.sql's comments, which explain why they
- * are not in its statements. A test that could not tell the two apart would have to be deleted.
+ * a `:placeholder`, a leading `\` - and both appear in 004_rollup.sql's comments, which exist to
+ * explain why they are not in its statements. A test that could not tell the two apart would have
+ * to be deleted.
  *
  * Block comments first, then line comments, so a `--` inside a block comment does not truncate the
  * line and leave the block's closing delimiter behind.
@@ -826,9 +827,11 @@ describe("the empty-database bootstrap", () => {
   test("the files an operator pastes into the SQL editor contain nothing psql-only", () => {
     /*
      * A real failure, reported from a real attempt: `ERROR: 42601: syntax error at or near ":"`,
-     * from a `WHERE business_date = :business_date` left in 004_rollup.sql. `:name` is an
-     * APPLICATION convention - `toPositional` in PostgresUtils.ts rewrites it to `$n` - and nothing
-     * else in the world knows that, so a file carrying one cannot be applied at all.
+     * from a `WHERE business_date = :business_date` left in the rollup recompute that 004_rollup.sql
+     * used to define. `:name` is an APPLICATION convention - `toPositional` in PostgresUtils.ts
+     * rewrites it to `$n` - and nothing else in the world knows that, so a file carrying one cannot
+     * be applied at all. The recompute is gone; the rule it taught is still enforced here, and
+     * 004_rollup.sql still carries the note that 006, 008 and 009 point at.
      *
      * `\set`, `\i` and friends are the same class of problem with a different audience: psql
      * executes them, the Supabase SQL editor does not, and the editor is what the operator is
@@ -858,6 +861,47 @@ describe("the empty-database bootstrap", () => {
       expect(code).not.toMatch(/(^|[^:]):[a-z_][a-z0-9_]*/m);
     }
     expect(sql("004_verify_search.sql")).toContain("\\set ON_ERROR_STOP on");
+  });
+
+  test("004 tears the reporting rollup down and does not build a new one", () => {
+    /*
+     * The reports aggregate `job` and `purchase_order` on every request. A pre-aggregated table is
+     * the obvious design and it was wrong here three times over - see the decision record in
+     * db/004_rollup.sql - and the way it would come back is not a commit titled "reintroduce the
+     * rollup". It is a CREATE TABLE in a bootstrap file, added to make a report faster, by someone
+     * who never saw the empty one.
+     *
+     * The specific failure mode is why this is worth a test rather than a comment: a rollup with
+     * nothing writing it returns ZEROES, not errors. An empty chart over a valid date range reads
+     * as "a quiet quarter", not as "the pipeline does not exist", so the report stays broken for
+     * as long as nobody happens to know what the number should be.
+     *
+     * The DROPs are asserted by name, individually, because a half-applied older bootstrap can
+     * leave one index behind, and `DROP TABLE` alone would not remove it.
+     */
+    const code = sqlCode("004_rollup.sql");
+    expect(code).toContain("DROP TABLE IF EXISTS report_daily_rollup");
+    expect(code).toContain("DROP FUNCTION IF EXISTS report_rollup_recompute(date)");
+    for (const index of [
+      "ix_rollup_customer",
+      "ix_rollup_pm",
+      "ix_rollup_sales",
+      "ix_rollup_corp",
+      "ix_rollup_category",
+      "ix_rollup_langpair",
+    ]) {
+      expect(code).toContain(`DROP INDEX IF EXISTS ${index}`);
+    }
+    // The function is dropped BEFORE the table it reads and writes, or there is a window in which
+    // it exists over a missing one.
+    expect(code.indexOf("DROP FUNCTION")).toBeLessThan(code.indexOf("DROP TABLE"));
+
+    // And nothing in the bootstrap creates one. Checked across every file, not just this one: a
+    // rollup added to 002 with the tables would be just as invisible, and more plausible.
+    for (const file of readdirSync(dbDir).filter((f) => f.endsWith(".sql"))) {
+      expect(sqlCode(file)).not.toMatch(/CREATE\s+(TABLE|MATERIALIZED VIEW)[^;]*rollup/i);
+      expect(sqlCode(file)).not.toMatch(/CREATE\s+(OR REPLACE\s+)?FUNCTION\s+report_rollup/i);
+    }
   });
 
   test("006 is idempotent at every statement, because there is no transaction around it", () => {

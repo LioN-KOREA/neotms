@@ -1,0 +1,557 @@
+// SPDX-License-Identifier: MIT
+//
+// The report SQL, asserted by shape.
+//
+// Testing the TEXT of a generated query is an unusual thing to do, and it is the right thing here.
+// The reports used to read `report_daily_rollup`, a pre-aggregated table rebuilt nightly; they now
+// sum `job` and `purchase_order` on every request (see NeotmsReport.dbops.ts and db/004_rollup.sql
+// for why). The ways that query can go wrong share one property: the result is a plausible number.
+//
+//   * a `JOIN purchase_order` in place of the lateral overstates revenue by each job's PO count
+//   * a dropped scope predicate shows company-wide margin to a PM restricted to their own rows
+//   * a `LIMIT` on the display ordering returns the OLDEST ten days to someone who asked for the
+//     newest
+//   * a sentinel filter emitted as `= 0` instead of `IS NULL` returns an empty report that reads
+//     as a quiet month
+//
+// None of those throw, none of them log, and none of them are visible to `tsc`. A chart is drawn
+// either way, and the figures on it are the kind a manager quotes in a meeting.
+//
+// The figures themselves were reconciled against the rollup these queries replaced, before it was
+// dropped: zero difference in revenue and cost over a 58-day window, all seven dimensions matching
+// key-for-key. That reconciliation cannot be re-run - the table is gone, which was the point. What
+// a test can still protect is that the STRUCTURE proven correct that day is the structure still
+// being generated.
+//
+// There is no database here and none is needed: `SqlOps` is a plain `{ sql, parameters, mapper }`,
+// and `PostgresUtils` validates its environment inside its functions rather than at module load.
+// This is a separate file from neotms.test.ts because that one asserts a synthesised
+// CloudFormation template and reads `db/*.sql` as text; this one imports the Lambda's own runtime.
+
+import {
+  toPositional,
+  type SqlParameter,
+} from "../lambdas/neotms/nodejs/utils/PostgresUtils.js";
+import { JOB_SCOPE_COLUMNS } from "../lambdas/neotms/nodejs/neotms/jobs/NeotmsJob.dbops.js";
+import {
+  REPORT_LINE_CAP,
+  REPORT_SCOPE_COLUMNS,
+  ReportBreakdownOps,
+  ReportTotalsOps,
+  WorkloadCountsOps,
+} from "../lambdas/neotms/nodejs/neotms/reports/NeotmsReport.dbops.js";
+import type { ReportQuery } from "../lambdas/neotms/nodejs/neotms/neotms.schemas.js";
+import type { NeotmsCaller } from "../lambdas/neotms/nodejs/auth/NeotmsAuthGuard.js";
+
+/** A caller restricted to their own rows - the case every scope assertion below is about. */
+const scopedCaller: NeotmsCaller = {
+  sub: "sub-1",
+  staffId: "42",
+  mgrId: "mgr-1",
+  name: "Scoped PM",
+  email: "pm@example.com",
+  corpCode: null,
+  roleId: "1",
+  roleCode: "PM",
+  roleName: "PM",
+  permissions: new Map(),
+  viewScope: "OWN",
+  seesEveryRow: false,
+};
+
+const everyRowCaller: NeotmsCaller = { ...scopedCaller, seesEveryRow: true };
+
+/**
+ * All seven, written out rather than read off `REPORT_DIMENSIONS`.
+ *
+ * Deliberate duplication: reading the keys from the map under test would make every loop below
+ * vacuous for a dimension somebody deleted. This list is `ReportQuerySchema.groupBy`'s picklist,
+ * and a mismatch between the two is itself a failure worth having.
+ */
+const GROUP_BYS: ReportQuery["groupBy"][] = [
+  "date",
+  "customer",
+  "pm",
+  "salesManager",
+  "corp",
+  "category",
+  "langPair",
+];
+
+const query = (overrides: Partial<ReportQuery> = {}): ReportQuery => ({
+  from: "2025-01-01",
+  to: "2025-01-31",
+  groupBy: "customer",
+  ...overrides,
+});
+
+/** Whitespace collapsed, so an assertion is about the SQL and not about its indentation. */
+const flat = (sql: string): string => sql.replace(/\s+/g, " ").trim();
+
+/**
+ * The bound parameters, with `SqlOps`' optional field narrowed.
+ *
+ * `parameters` is optional on `SqlOps` because plenty of ops have none. `?? []` rather than a
+ * non-null assertion, so that an op which stopped binding anything fails the assertion it is in
+ * rather than this helper - "expected to contain scope_staff_id, received []" names the defect.
+ */
+const params = (ops: { parameters?: SqlParameter[] }): SqlParameter[] => ops.parameters ?? [];
+
+describe("revenue is never multiplied by a job's PO count", () => {
+  test("cost is collapsed per job by a lateral, never joined", () => {
+    /*
+     * The single most expensive mistake available in this file, and the one the whole query shape
+     * exists to prevent. A job has many POs, so `JOIN purchase_order po ON po.job_id = j.id` fans
+     * each job out once per PO and multiplies its `job_price_ksum` by that count. Measured on the
+     * benchmark database: 1,917 rows where there are 1,431 jobs - revenue overstated by a third,
+     * with every figure still looking like money.
+     *
+     * Asserted three ways, because each alone is weak. The lateral must be present; the string
+     * `purchase_order` must appear exactly ONCE (which is what catches a second join added
+     * alongside the lateral by someone who wanted a PO column for a label); and no form of
+     * `JOIN purchase_order` may appear at all.
+     */
+    for (const groupBy of GROUP_BYS) {
+      const sql = flat(ReportBreakdownOps(scopedCaller, query({ groupBy })).sql);
+      expect(sql).toContain("LEFT JOIN LATERAL");
+      expect(sql.match(/purchase_order/g)).toHaveLength(1);
+      expect(sql).not.toMatch(/JOIN purchase_order/);
+    }
+    const totals = flat(ReportTotalsOps(scopedCaller, query()).sql);
+    expect(totals).toContain("LEFT JOIN LATERAL");
+    expect(totals.match(/purchase_order/g)).toHaveLength(1);
+    expect(totals).not.toMatch(/JOIN purchase_order/);
+  });
+
+  test("the lateral is correlated to the job it hangs off", () => {
+    // `WHERE po.job_id = j.id` is what makes this run `ix_po_job` once per job already selected by
+    // the date range. The uncorrelated form - `GROUP BY job_id` over the whole PO table - must
+    // aggregate every PO in the database before any date filter can apply, which is exactly what
+    // made the nightly recompute O(dates x all POs) and eventually time out on 200k POs. It would
+    // return the same numbers, so only an EXPLAIN would ever tell you.
+    const sql = flat(ReportBreakdownOps(scopedCaller, query()).sql);
+    expect(sql).toContain("WHERE po.job_id = j.id");
+    expect(sql).not.toContain("GROUP BY po.job_id");
+  });
+
+  test("the totals carry no label join, so they cannot fan out either", () => {
+    // Nothing in the totals is grouped, so the joins that exist only to print a name have no work
+    // to do - and a label join is the other place a fan-out could creep in, since nothing
+    // constrains a label table to one row per key the way `sys_code.code`'s UNIQUE does. Omitting
+    // them makes this query structurally incapable of disagreeing with itself.
+    const sql = flat(ReportTotalsOps(scopedCaller, query({ groupBy: "customer" })).sql);
+    for (const join of ["customer cu", "staff spm", "staff ssm", "corp co", "sys_code sc"]) {
+      expect(sql).not.toContain(join);
+    }
+  });
+
+  test("the row count the totals report is a job count", () => {
+    // A sanity signal rather than a business figure: it is exactly the job count because the
+    // lateral contributes one row per job by construction. If it ever drifts above
+    // `SELECT count(*) FROM job ...` for the same range, something has started fanning out.
+    expect(flat(ReportTotalsOps(scopedCaller, query()).sql)).toContain("count(*) AS row_count");
+  });
+});
+
+describe("the reports and the job list see the same work", () => {
+  test("the scope predicate is on both queries and names all three ownership columns", () => {
+    /*
+     * A reporting endpoint with the scope predicate left off is how row-level access control is
+     * actually defeated in practice: the list screens are locked down, nobody thinks of the report,
+     * and company-wide margin becomes readable by anyone holding the REPORT menu. The menu check is
+     * not a substitute - it grants "may see reports", this decides "of whose work".
+     *
+     * The totals query is checked separately and deliberately. It is a different statement, and a
+     * scope predicate present on the chart but missing from the grand total leaks the whole
+     * company's revenue as a single number while every bar underneath it looks correctly
+     * restricted - which is the version of this bug least likely to be noticed.
+     */
+    for (const ops of [
+      ReportBreakdownOps(scopedCaller, query()),
+      ReportTotalsOps(scopedCaller, query()),
+      WorkloadCountsOps(scopedCaller, "2025-01-01", "2025-01-31"),
+    ]) {
+      const sql = flat(ops.sql);
+      for (const column of REPORT_SCOPE_COLUMNS) {
+        expect(sql).toContain(`${column} = :scope_staff_id`);
+      }
+      // OR'd, not AND'd: any one of the three is enough to own the row.
+      expect(sql).toContain(" OR ");
+      expect(params(ops).find((p) => p.name === "scope_staff_id")?.value).toBe("42");
+    }
+  });
+
+  test("a caller who sees every row gets no scope predicate at all", () => {
+    // The other direction, and the safe-looking mistake: an unconditional predicate would restrict
+    // an administrator to their own jobs. That is a report which reads LOW rather than one which
+    // errors, and the harder of the two to notice.
+    for (const ops of [
+      ReportBreakdownOps(everyRowCaller, query()),
+      ReportTotalsOps(everyRowCaller, query()),
+      WorkloadCountsOps(everyRowCaller, "2025-01-01", "2025-01-31"),
+    ]) {
+      expect(flat(ops.sql)).not.toContain("scope_staff_id");
+      expect(params(ops).map((p) => p.name)).not.toContain("scope_staff_id");
+    }
+  });
+
+  test("the report's scope columns equal the job list's", () => {
+    /*
+     * The gap this closes was real and large. The rollup carried `pm_id` and `sales_mgr_id` and had
+     * no column for the project's own PM, so `prj_pm_id` was simply absent from the report's scope:
+     * a project PM could open every job in their project on the job screen and then read zero
+     * revenue for it on the report. Measured on the benchmark database, one staff member's own
+     * projects hid ₩37,296,000 of their revenue from them.
+     *
+     * A report is an aggregate of jobs, so it must be visible over exactly the jobs its reader can
+     * list. Drift is silent in both directions: a column here and not there hides revenue from
+     * someone who can open every row behind it; a column there and not here leaks an aggregate over
+     * work they cannot see a single row of.
+     *
+     * Compared as sets, because the order of an OR'd predicate is immaterial and a failure here
+     * should mean a real difference in what is visible.
+     */
+    expect([...REPORT_SCOPE_COLUMNS].sort()).toEqual([...JOB_SCOPE_COLUMNS].sort());
+  });
+});
+
+describe("the definitions the rollup left behind", () => {
+  test("the range is on job_eday, the business date, and binds both ends as dates", () => {
+    /*
+     * Delivery is the point of revenue recognition, so a job created in December and delivered in
+     * January belongs to January. `created_at` would look defensible and be wrong, and the two
+     * agree for most rows - which is what would carry it through review.
+     *
+     * Both ends are required by `ReportQuerySchema`, and this is why: the bound is what keeps the
+     * aggregate an index scan on `ix_job_eday` instead of the legacy report's full-history scan.
+     * The `date` kind matters for the same reason - sent as text, the comparison stops matching the
+     * index.
+     */
+    const ops = ReportBreakdownOps(scopedCaller, query());
+    const sql = flat(ops.sql);
+    expect(sql).toContain("j.job_eday >= :range_from");
+    expect(sql).toContain("j.job_eday <= :range_to");
+    expect(sql).not.toContain("created_at");
+    for (const name of ["range_from", "range_to"]) {
+      expect(params(ops).find((p) => p.name === name)?.kind).toBe("date");
+    }
+  });
+
+  test("revenue is the job's KSUM and cost is the PO's, both COALESCEd", () => {
+    /*
+     * The KRW-converted "KSUM" totals rather than the original-currency "SUM" ones, because a
+     * report row aggregates across currencies and those figures have to be comparable.
+     *
+     * `COALESCE` on each sum is not defensive noise. `sum()` over an empty set - or over a group
+     * whose every amount is NULL, which is a job priced but not yet costed - is NULL, and
+     * `NULL - NULL` makes margin NULL rather than zero. The client renders a missing margin as an
+     * explanatory note instead of a bar, so a NULL turns a correct zero-margin line into "unknown".
+     */
+    const sql = flat(ReportTotalsOps(scopedCaller, query()).sql);
+    expect(sql).toContain("COALESCE(sum(j.job_price_ksum), 0) AS revenue");
+    expect(sql).toContain("COALESCE(sum(poc.cost), 0) AS cost");
+    expect(sql).toContain(
+      "COALESCE(sum(j.job_price_ksum), 0) - COALESCE(sum(poc.cost), 0) AS margin",
+    );
+    // No bare sum anywhere: `job_price_sum` / `po_price_sum` are the original-currency columns and
+    // summing those across currencies adds yen to won.
+    expect(sql).not.toMatch(/job_price_sum|po_price_sum/);
+  });
+
+  test("the breakdown and the totals are computed from the same rows", () => {
+    /*
+     * The totals are NOT a sum of the returned lines - the lines are capped, and adding up a
+     * truncated list gives a grand total quietly smaller than the real one, which is the worst kind
+     * of wrong number: plausible, and off by an amount nobody can account for.
+     *
+     * So the only thing keeping the figure above the chart consistent with the chart is that both
+     * were computed from the same rows with the same measures. Two hand-written copies would be two
+     * definitions of revenue, and they would agree right up until one of them was edited.
+     */
+    const from = "FROM job j JOIN project p ON p.id = j.project_id AND p.deleted = false";
+    const revenue = "COALESCE(sum(j.job_price_ksum), 0) AS revenue";
+    for (const ops of [
+      ReportBreakdownOps(scopedCaller, query()),
+      ReportTotalsOps(scopedCaller, query()),
+    ]) {
+      expect(flat(ops.sql)).toContain(from);
+      expect(flat(ops.sql)).toContain(revenue);
+    }
+  });
+
+  test("the soft-delete filters are spelled to match the partial indexes", () => {
+    /*
+     * `ix_job_eday` and `ix_po_job` are both `WHERE NOT deleted`. PostgreSQL does use a partial
+     * index for `deleted = false` - the two were confirmed equivalent on an EXPLAIN of the live
+     * report - but the dbops layer has one spelling, and a mixture is how the next person concludes
+     * the rule is arbitrary.
+     *
+     * All three tables are checked. A missing filter on any of them silently counts deleted money,
+     * and `job` is the one that matters most: a soft-deleted job is usually one that was entered
+     * wrongly, so its revenue is often a figure somebody already decided was not real.
+     */
+    for (const sql of [
+      flat(ReportBreakdownOps(scopedCaller, query()).sql),
+      flat(ReportTotalsOps(scopedCaller, query()).sql),
+    ]) {
+      expect(sql).toContain("j.deleted = false");
+      expect(sql).toContain("p.deleted = false");
+      expect(sql).toContain("po.deleted = false");
+      expect(sql).not.toMatch(/NOT\s+[a-z]*\.?deleted/);
+    }
+  });
+});
+
+describe("the dimensions", () => {
+  test("the grouping key is the expression the key column is selected as", () => {
+    // `GROUP BY` drifting from the selected key expression is not a type error and often still
+    // runs - PostgreSQL only objects when the result would be ambiguous. Where it runs, the bars
+    // are keyed by one expression and aggregated by another, so a drill-down sends back a key that
+    // selects a different set of rows than the bar it was clicked on.
+    for (const groupBy of GROUP_BYS) {
+      const sql = flat(ReportBreakdownOps(scopedCaller, query({ groupBy })).sql);
+      // From after `FROM (`, so this reads the INNER select - the outer one re-projects
+      // `picked.dim_key`, and matching from the start of the string would capture across both.
+      const inner = sql.slice(sql.indexOf("FROM (") + "FROM (".length);
+      const selected = /^ SELECT (.+?) AS dim_key, (.+?) AS dim_label,/.exec(inner);
+      expect(selected).not.toBeNull();
+      expect(inner).toContain(`GROUP BY ${selected?.[1]}, ${selected?.[2]}`);
+    }
+  });
+
+  test("an unset id keys as 0 and an unset language as ?", () => {
+    // Inherited from the rollup, whose dimension columns were NOT NULL with sentinel defaults
+    // because NULLs in a composite primary key never match `ON CONFLICT`. Kept now that the table
+    // is gone for a different reason: `dim_key` is what a drill-down sends back as
+    // `?customerId=...`, and `null` is not a value a query string can carry.
+    for (const groupBy of ["customer", "pm", "salesManager", "corp", "category"] as const) {
+      expect(flat(ReportBreakdownOps(scopedCaller, query({ groupBy })).sql)).toMatch(
+        /COALESCE\([a-z]+\.[a-z_]+, 0\)::text AS dim_key/,
+      );
+    }
+    const lang = flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "langPair" })).sql);
+    expect(lang).toContain("COALESCE(NULLIF(j.job_slang, ''), '?')");
+    expect(lang).toContain("COALESCE(NULLIF(j.job_elang, ''), '?')");
+    // The date dimension gets no sentinel, and should not: a job with a NULL `job_eday` has already
+    // failed the range predicate, because `NULL >= :from` is NULL rather than true. Such a job is
+    // revenue that appears in no report for any range - a data-entry gap, visible on the job list.
+    expect(flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "date" })).sql)).toContain(
+      "j.job_eday::text AS dim_key",
+    );
+  });
+
+  test("the label joins are LEFT, so a missing name does not delete the money", () => {
+    // A project whose `prj_field` holds a retired code with no `sys_code` row, or whose customer was
+    // hard-deleted by the legacy system, must fall through to "(unassigned)" rather than vanish.
+    // INNER here would silently drop that revenue from the chart AND leave it in the totals, which
+    // are computed without the label joins - so the bars would no longer add up to the figure above
+    // them, and nothing would say why.
+    for (const groupBy of ["customer", "pm", "salesManager", "corp", "category"] as const) {
+      const sql = flat(ReportBreakdownOps(scopedCaller, query({ groupBy })).sql);
+      expect(sql).toMatch(/LEFT JOIN (customer|staff|corp|sys_code)/);
+      expect(sql).toContain("'(unassigned)'");
+    }
+  });
+
+  test("the subject domain joins on the unique code column, and ignores prj_field2", () => {
+    // `sys_code.code` is UNIQUE, so this cannot fan a job out across several code rows the way an
+    // unconstrained label join could. `prj_field2` is deliberately absent: a job counted under two
+    // fields would double the revenue of any breakdown that summed the bars.
+    const sql = flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "category" })).sql);
+    expect(sql).toContain("LEFT JOIN sys_code sc ON sc.code = p.prj_field");
+    expect(sql).not.toContain("prj_field2");
+  });
+
+  test("the PM is the job's and the sales manager is the project's", () => {
+    // The two dimensions that are easy to transpose, and a transposition groups correctly on the
+    // wrong thing: both are staff ids joined to the same table, so the chart looks right and simply
+    // attributes the work to the other person.
+    expect(flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "pm" })).sql)).toContain(
+      "LEFT JOIN staff spm ON spm.id = j.job_pm_id",
+    );
+    expect(
+      flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "salesManager" })).sql),
+    ).toContain("LEFT JOIN staff ssm ON ssm.id = p.prj_mgr_id");
+  });
+});
+
+describe("picking rows and ordering them are different questions", () => {
+  test("the time series is picked newest-first and read oldest-first", () => {
+    /*
+     * The one dimension where picking and display disagree, and the bug it guards is invisible.
+     * `ORDER BY dim_key ASC LIMIT 10` over "the last 30 days" returns the OLDEST ten days in the
+     * range: ten rows, correct figures, ascending dates - and a user who believes they are looking
+     * at the recent past is looking at the start of the month.
+     *
+     * So the inner query must cut on DESC and the outer must re-sort to ASC. Asserted by position
+     * because both strings appear; what matters is which one the LIMIT is attached to. Doing this
+     * in one statement is not possible - `ORDER BY ... LIMIT` is evaluated as a unit - and sorting
+     * in TypeScript afterwards cannot help, because the wrong ten rows have already left the
+     * database.
+     */
+    const sql = flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "date", limit: 10 })).sql);
+    expect(sql).toContain("ORDER BY dim_key DESC LIMIT 10");
+    expect(sql.lastIndexOf("ORDER BY dim_key ASC")).toBeGreaterThan(
+      sql.indexOf("ORDER BY dim_key DESC"),
+    );
+  });
+
+  test("every revenue breakdown breaks ties on the label, so a top-N is stable", () => {
+    // `ORDER BY revenue DESC` alone leaves equal-revenue rows in whatever order the aggregate
+    // happened to emit them, and PostgreSQL is free to change that between runs - a different plan,
+    // a different worker count under parallel aggregate. With a LIMIT in front of it, the
+    // MEMBERSHIP of a top-10 then changes between two identical requests whenever 10th and 11th
+    // place tie: the chart shuffles on refresh with no data change behind it. Ties are common here -
+    // a dimension value with one small job in the range, or several at the same round price.
+    for (const groupBy of GROUP_BYS.filter((g) => g !== "date")) {
+      expect(flat(ReportBreakdownOps(scopedCaller, query({ groupBy })).sql)).toContain(
+        "ORDER BY revenue DESC, dim_label ASC",
+      );
+    }
+  });
+
+  test("the only thing interpolated into LIMIT is a bounded integer", () => {
+    /*
+     * `LIMIT` is interpolated rather than bound so the planner knows the row count when it chooses
+     * between a full sort and a bounded heap sort for a top-N over an aggregate. That is safe only
+     * because the value has been through `ReportTopNSchema` (digits, 1..30) or is the integer
+     * literal `REPORT_LINE_CAP`.
+     *
+     * Above the cap is clamped rather than passed through: the Data API fails an entire call at
+     * 1 MiB, from deep inside the SQL layer, with an error that names nothing useful.
+     */
+    expect(flat(ReportBreakdownOps(scopedCaller, query()).sql)).toContain(
+      `LIMIT ${String(REPORT_LINE_CAP)}`,
+    );
+    expect(flat(ReportBreakdownOps(scopedCaller, query({ limit: 30 })).sql)).toContain("LIMIT 30");
+    expect(
+      flat(ReportBreakdownOps(scopedCaller, query({ limit: REPORT_LINE_CAP + 500 })).sql),
+    ).toContain(`LIMIT ${String(REPORT_LINE_CAP)}`);
+    for (const groupBy of GROUP_BYS) {
+      expect(flat(ReportBreakdownOps(scopedCaller, query({ groupBy })).sql)).toMatch(/LIMIT \d+\b/);
+    }
+  });
+
+  test("the totals are not limited", () => {
+    // Because they are the grand total. A LIMIT here would be invisible - one row either way.
+    expect(flat(ReportTotalsOps(scopedCaller, query({ limit: 5 })).sql)).not.toContain("LIMIT");
+  });
+});
+
+describe("the drill-down filters", () => {
+  test("a sentinel filter becomes IS NULL rather than = 0", () => {
+    /*
+     * `?customerId=0` is a legitimate request: it is what clicking the "(unassigned)" bar sends,
+     * because `dim_key` reports an unset id as `0`. The underlying column is NULL there, not 0, so
+     * emitting `customer_id = 0` matches nothing - the bar stays clickable, returns an empty
+     * report, and reads as a quiet month. On the benchmark database the correct form returns 198
+     * jobs and ₩90,883,000 where `= 0` returns zero.
+     *
+     * "00" and "0000" are checked because `IdSchema` is `^\d{1,19}$`, which accepts any number of
+     * leading zeros: a string comparison against "0" would let `?customerId=00` through to `= 00`.
+     */
+    for (const value of ["0", "00", "0000"]) {
+      const ops = ReportBreakdownOps(scopedCaller, query({ customerId: value }));
+      expect(flat(ops.sql)).toContain("AND p.customer_id IS NULL");
+      expect(params(ops).map((p) => p.name)).not.toContain("f_customer_id");
+    }
+  });
+
+  test("a real id is bound, and the column is left bare for its index", () => {
+    // `IS NULL` for the sentinel branch rather than `COALESCE(column, 0) = :id` for both, because
+    // wrapping the column puts an expression on the indexed side and gives up `ix_prj_cus` for the
+    // common case in order to tidy up the rare one.
+    const ops = ReportBreakdownOps(scopedCaller, query({ customerId: "77" }));
+    expect(flat(ops.sql)).toContain("AND p.customer_id = :f_customer_id");
+    expect(flat(ops.sql)).not.toContain("p.customer_id IS NULL");
+    expect(flat(ops.sql)).not.toContain("COALESCE(p.customer_id, 0) =");
+    expect(params(ops).find((p) => p.name === "f_customer_id")?.value).toBe("77");
+  });
+
+  test("every filter lands on the table that actually holds the column", () => {
+    // Customer, corp and the sales manager are project-level, so every job in a project shares
+    // them; the PM is the one on the JOB, which can differ from the project's own PM. A filter on
+    // the wrong table filters correctly on the wrong thing.
+    const sql = flat(
+      ReportBreakdownOps(
+        scopedCaller,
+        query({ customerId: "1", pmId: "2", salesManagerId: "3", corpId: "4" }),
+      ).sql,
+    );
+    expect(sql).toContain("AND p.customer_id = :f_customer_id");
+    expect(sql).toContain("AND j.job_pm_id = :f_pm_id");
+    expect(sql).toContain("AND p.prj_mgr_id = :f_sales_mgr_id");
+    expect(sql).toContain("AND p.corp_id = :f_corp_id");
+  });
+
+  test("the breakdown and the totals apply the same filters", () => {
+    // Otherwise a drill-down narrows the chart and not the figure above it, and the user is shown
+    // one customer's bars under the whole company's total.
+    const filters = { customerId: "1", pmId: "0", salesManagerId: "3", corpId: "4" };
+    const breakdown = flat(ReportBreakdownOps(scopedCaller, query(filters)).sql);
+    const totals = flat(ReportTotalsOps(scopedCaller, query(filters)).sql);
+    for (const predicate of [
+      "AND p.customer_id = :f_customer_id",
+      "AND j.job_pm_id IS NULL",
+      "AND p.prj_mgr_id = :f_sales_mgr_id",
+      "AND p.corp_id = :f_corp_id",
+    ]) {
+      expect(breakdown).toContain(predicate);
+      expect(totals).toContain(predicate);
+    }
+  });
+});
+
+describe("every generated statement is complete", () => {
+  test("no placeholder is left unbound, across every dimension and filter combination", () => {
+    /*
+     * `toPositional` throws on a `:name` it has no parameter for, which makes running it the test.
+     * The failure that catches is a conditional fragment added to the SQL without its value - and
+     * the overwhelmingly likely fragment is a filter, where binding NULL instead would turn
+     * `AND x = :x` into `AND x = NULL`. Never true, so the report returns nothing at all and reads
+     * as an empty quarter.
+     *
+     * Run across every dimension, with no filters, with all four set, and with all four as
+     * sentinels, for both callers and both queries - 84 statements - because the filters and the
+     * scope clause are precisely the fragments that come and go.
+     */
+    for (const groupBy of GROUP_BYS) {
+      for (const filters of [
+        {},
+        { customerId: "1", pmId: "2", salesManagerId: "3", corpId: "4" },
+        { customerId: "0", pmId: "0", salesManagerId: "0", corpId: "0" },
+      ]) {
+        for (const caller of [scopedCaller, everyRowCaller]) {
+          for (const build of [ReportBreakdownOps, ReportTotalsOps]) {
+            const ops = build(caller, query({ groupBy, ...filters }));
+            const { text, values } = toPositional(ops.sql, params(ops));
+            // `(^|[^:])` so `::text` and `$1::date` are not read as placeholders.
+            expect(text).not.toMatch(/(^|[^:]):[a-z_]/);
+            expect(values).toHaveLength(params(ops).length);
+          }
+        }
+      }
+    }
+  });
+
+  test("the casts the driver needs survive the rewrite", () => {
+    // Without `::date` the driver sends the range as text and the comparison stops matching
+    // `ix_job_eday`; without `::bigint` an id is compared as text against a bigint column, which
+    // PostgreSQL refuses outright. Both are appended by `toPositional` from the parameter's kind,
+    // so this asserts the kinds were declared and not defaulted.
+    const ops = ReportBreakdownOps(scopedCaller, query({ customerId: "7" }));
+    const { text } = toPositional(ops.sql, params(ops));
+    expect(text).toContain("::date");
+    expect(text).toContain("::bigint");
+  });
+
+  test("no report query contains a psql-only placeholder style or a meta-command", () => {
+    // These queries are also what gets pasted into a SQL editor when somebody is reconciling a
+    // figure. `:name` is this application's convention, rewritten by `toPositional`; nothing else
+    // knows it, which is why the reconciliation queries in db/004_rollup.sql carry none.
+    for (const groupBy of GROUP_BYS) {
+      const sql = ReportBreakdownOps(everyRowCaller, query({ groupBy })).sql;
+      expect(sql).not.toMatch(/^\s*\\\w+/m);
+    }
+  });
+});
