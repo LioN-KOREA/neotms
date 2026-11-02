@@ -233,3 +233,71 @@ export function decimalSum(
 
   return { total: toFixedString(units, scale, targetScale), counted, skipped }
 }
+
+/**
+ * 두 10진 문자열의 크기를 비교한다. `a < b` 면 음수, 같으면 0, `a > b` 면 양수. 파싱 실패는 null.
+ *
+ * 왜 있나: 막대 그래프는 **가장 큰 값**을 알아야 그린다. 각 막대의 길이는 '그 줄의 매출 ÷ 가장
+ * 큰 줄의 매출' 이고, 그 '가장 큰 줄' 을 찾으려면 금액끼리 비교해야 한다.
+ *
+ * `Number(a) > Number(b)` 로 쓰면 당장은 맞는 답이 나온다 — 그래서 위험하다. 이 파일 맨 위의
+ * 규칙(Number 로 계산하지 않는다)은 한 군데가 뚫리면 다음 사람이 그 옆에 `Number(a) + Number(b)`
+ * 를 쓰기 때문에 지켜지는 규칙이고, 비교를 위해 예외를 두면 그 뚫린 자리가 바로 생긴다. 게다가
+ * 이 비교가 틀릴 수 있는 입력이 실제로 존재한다: 외화 누적액은 15자리를 넘길 수 있고, 그
+ * 지점부터 `Number` 는 서로 다른 두 금액을 **같은 값으로** 본다.
+ *
+ * 문자열 길이로 비교할 수도 없다 — "9.99" 와 "10.0" 은 길이가 같고, "100" 보다 "99.9" 가 더
+ * 길다. 그래서 scale 을 맞춘 뒤 정수로 비교한다.
+ */
+export function decimalCompare(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number | null {
+  const x = parseDecimal(a)
+  const y = parseDecimal(b)
+  if (!x || !y) return null
+  const { a: lx, b: ly } = align(x, y)
+  if (lx === ly) return 0
+  return lx < ly ? -1 : 1
+}
+
+/**
+ * `part` 가 `whole` 의 몇 %인지. 10진 문자열로 돌려준다(`"37.42"`). 못 구하면 null.
+ *
+ * **돌려주는 값이 숫자가 아니라 문자열인 것이 이 함수의 핵심이다.** 이 값이 가는 곳은 CSS 의
+ * `width: 37.42%` 이고, CSS 는 문자열을 받는다. 즉 퍼센트를 `Number` 로 만들 이유가 한 군데도
+ * 없다 — BigInt 로 정확히 계산한 10진 문자열을 그대로 템플릿에 끼우면 끝이다. `Number` 를
+ * 거치면 0.1+0.2 문제가 **화면에 보이는 숫자**로 새어 나온다(합계 100% 가 99.99999999999999%
+ * 로 적히는 식).
+ *
+ * 분모가 0 이면 null 이다. 0 을 돌려주면 "매출이 0원인 기간" 과 "원가 비중이 0%" 가 구분되지
+ * 않고, 화면은 전자에서 그래프를 아예 그리지 않아야 한다 — 가로 길이가 전부 0 인 막대 서른 개는
+ * 데이터가 없다는 뜻이지 모두 똑같다는 뜻이 아니다.
+ *
+ * 100 을 넘는 값을 깎지 않는다. 원가가 수주액을 넘긴 기간은 원가 비중이 120% 이고, 그것이
+ * 이 리포트가 알려 줄 수 있는 가장 중요한 사실이다. 100 으로 눌러 두면 "딱 맞게 쓴 기간" 과
+ * 구분되지 않는다. 막대를 어디서 자를지는 화면이 결정한다.
+ */
+export function decimalPercent(
+  part: string | null | undefined,
+  whole: string | null | undefined,
+  targetScale = 2,
+): string | null {
+  const x = parseDecimal(part)
+  const y = parseDecimal(whole)
+  if (!x || !y) return null
+  const { a: lx, b: ly } = align(x, y)
+  if (ly === 0n) return null
+
+  // scale 을 맞췄으므로 비율은 lx / ly 다. 원하는 자릿수만큼 먼저 올려 두고 정수 나눗셈을
+  // 하면, 나머지로 half-up 반올림을 할 수 있다 — `toFixedString` 과 같은 방향이어야 화면
+  // 안에서 반올림 규칙이 둘로 갈라지지 않는다.
+  const numerator = lx * 100n * 10n ** BigInt(targetScale)
+  const negative = numerator < 0n !== ly < 0n
+  const absNum = numerator < 0n ? -numerator : numerator
+  const absDen = ly < 0n ? -ly : ly
+  const quotient = absNum / absDen
+  const remainder = absNum % absDen
+  const rounded = remainder * 2n >= absDen ? quotient + 1n : quotient
+  return toFixedString(negative ? -rounded : rounded, targetScale, targetScale)
+}

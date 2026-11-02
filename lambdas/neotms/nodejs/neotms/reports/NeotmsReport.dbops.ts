@@ -88,49 +88,86 @@ type Dimension = {
   label: string;
   /** The LEFT JOIN the label needs, if any. */
   join: string;
-  /** Default ordering: a time series reads chronologically, a breakdown reads largest-first. */
-  orderBy: string;
+  /**
+   * Which rows survive the `LIMIT`. Written in terms of the output aliases (`dim_key`, `revenue`).
+   *
+   * Separate from `displayBy` because "which rows matter" and "what order to read them in" are not
+   * the same question once there is a limit, and for the time series they are opposites. `LIMIT 10`
+   * on a `business_date ASC` ordering returns the *oldest* ten days in the range - so a user asking
+   * for "the last 30 days, top 10" would be shown January while believing they were shown the
+   * recent past. Nothing about the result looks wrong: ten rows, correct figures, ascending dates.
+   */
+  pickBy: string;
+  /** What order the surviving rows are returned in: a time series reads chronologically, a
+   * breakdown largest-first. */
+  displayBy: string;
 };
 
 const unassigned = (expression: string): string =>
   `COALESCE(NULLIF(${expression}, ''), '(unassigned)')`;
 
+/**
+ * The ordering every revenue breakdown uses, for both picking and display.
+ *
+ * The `dim_label ASC` tie-breaker is not cosmetic. `ORDER BY revenue DESC` alone leaves rows with
+ * equal revenue in whatever order the aggregate happened to emit them, and PostgreSQL is free to
+ * change that between runs (a different plan, a different worker count under parallel aggregate).
+ * With a `LIMIT` in front of it that means the *membership* of a top-10 can change between two
+ * identical requests when the 10th and 11th place tie - the chart would shuffle on refresh with no
+ * underlying data change. Ties are common here: a dimension value with one small job in the range,
+ * or several at the same round price.
+ */
+const BY_REVENUE = "revenue DESC, dim_label ASC";
+
 const REPORT_DIMENSIONS = {
+  /*
+   * The time series, and the only dimension where picking and display disagree.
+   *
+   * `dim_key` is `business_date::text`, and an ISO date string sorts identically to the date itself
+   * (fixed width, most significant field first) - which is why ordering on the alias rather than on
+   * `r.business_date` is safe here and saves repeating the expression.
+   */
   date: {
     key: "r.business_date::text",
     label: "r.business_date::text",
     join: "",
-    orderBy: "r.business_date ASC",
+    pickBy: "dim_key DESC",
+    displayBy: "dim_key ASC",
   },
   customer: {
     key: "r.customer_id::text",
     label: unassigned("cu.cus_name"),
     join: "LEFT JOIN customer cu ON cu.id = r.customer_id",
-    orderBy: "revenue DESC",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
   },
   pm: {
     key: "r.pm_id::text",
     label: unassigned("spm.mgr_name"),
     join: "LEFT JOIN staff spm ON spm.id = r.pm_id",
-    orderBy: "revenue DESC",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
   },
   salesManager: {
     key: "r.sales_mgr_id::text",
     label: unassigned("ssm.mgr_name"),
     join: "LEFT JOIN staff ssm ON ssm.id = r.sales_mgr_id",
-    orderBy: "revenue DESC",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
   },
   corp: {
     key: "r.corp_id::text",
     label: unassigned("co.corp_name"),
     join: "LEFT JOIN corp co ON co.id = r.corp_id",
-    orderBy: "revenue DESC",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
   },
   category: {
     key: "r.category_id::text",
     label: unassigned("sc.code_name"),
     join: "LEFT JOIN sys_code sc ON sc.id = r.category_id",
-    orderBy: "revenue DESC",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
   },
   /*
    * The one composite dimension. Both halves are already code strings on the rollup row - the DDL
@@ -142,7 +179,8 @@ const REPORT_DIMENSIONS = {
     key: "(COALESCE(NULLIF(r.slang, ''), '?') || ' > ' || COALESCE(NULLIF(r.elang, ''), '?'))",
     label: "(COALESCE(NULLIF(r.slang, ''), '?') || ' > ' || COALESCE(NULLIF(r.elang, ''), '?'))",
     join: "",
-    orderBy: "revenue DESC",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
   },
 } as const satisfies Record<ReportQuery["groupBy"], Dimension>;
 
@@ -216,6 +254,25 @@ const reportWhere = (caller: NeotmsCaller, query: ReportQuery): SqlClause =>
  * produce a rollup row at all, so there is nothing to filter out. A line with revenue and no cost
  * is real and must be kept - it is a job that has been sold but not yet subcontracted, and dropping
  * it would overstate margin.
+ *
+ * Two nested queries rather than one, because the limit has to cut on one ordering and the result
+ * has to arrive in another. The inner query aggregates and keeps the rows that matter (`pickBy`);
+ * the outer one only re-sorts what survived (`displayBy`). For the five revenue dimensions the two
+ * orderings are the same string and the outer sort is a no-op on at most thirty rows - the cost of
+ * the wrapper is nothing. For the time series they are opposites, and the wrapper is the whole
+ * point: "the last 10 days" must be picked newest-first and then read oldest-first.
+ *
+ * Doing it in one query is not possible. `ORDER BY ... LIMIT` is evaluated as a unit, so a single
+ * statement can only express one of the two orderings, and picking the display one silently returns
+ * the wrong *rows* rather than the right rows in the wrong order. Sorting in TypeScript after the
+ * fact would work for display but cannot fix the selection - the wrong ten rows have already left
+ * the database.
+ *
+ * `LIMIT` is interpolated rather than bound as a parameter. That is safe here because the value has
+ * been through `ReportTopNSchema` (digits only, 1..30) or is the integer literal `REPORT_LINE_CAP`;
+ * nothing else can reach this line. It is interpolated because binding it would make the planner
+ * choose a plan without knowing the row count, which for a top-N over an aggregate is exactly the
+ * information that decides between a sort and a bounded heap sort.
  */
 export const ReportBreakdownOps: (
   caller: NeotmsCaller,
@@ -223,20 +280,25 @@ export const ReportBreakdownOps: (
 ) => SqlOps<ReportLine[]> = (caller, query) => {
   const dimension: Dimension = REPORT_DIMENSIONS[query.groupBy];
   const where = reportWhere(caller, query);
+  const lineLimit = Math.min(query.limit ?? REPORT_LINE_CAP, REPORT_LINE_CAP);
   return {
     sql: `
-      SELECT ${dimension.key}   AS dim_key,
-             ${dimension.label} AS dim_label,
-             sum(r.revenue)                  AS revenue,
-             sum(r.cost)                     AS cost,
-             sum(r.revenue) - sum(r.cost)    AS margin
-        FROM report_daily_rollup r
-        ${dimension.join}
-       WHERE true
-      ${where.fragment}
-       GROUP BY ${dimension.key}, ${dimension.label}
-       ORDER BY ${dimension.orderBy}
-       LIMIT ${REPORT_LINE_CAP}
+      SELECT picked.dim_key, picked.dim_label, picked.revenue, picked.cost, picked.margin
+        FROM (
+              SELECT ${dimension.key}   AS dim_key,
+                     ${dimension.label} AS dim_label,
+                     sum(r.revenue)                  AS revenue,
+                     sum(r.cost)                     AS cost,
+                     sum(r.revenue) - sum(r.cost)    AS margin
+                FROM report_daily_rollup r
+                ${dimension.join}
+               WHERE true
+              ${where.fragment}
+               GROUP BY ${dimension.key}, ${dimension.label}
+               ORDER BY ${dimension.pickBy}
+               LIMIT ${String(lineLimit)}
+             ) picked
+       ORDER BY ${dimension.displayBy}
     `,
     parameters: where.parameters,
     mapper: (rows) => rows.map(toReportLine),

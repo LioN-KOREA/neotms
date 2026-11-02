@@ -175,13 +175,13 @@ export function ProjectDetailView() {
           </span>
         </div>
         <div className={ui.stat}>
-          <span className={ui.statLabel}>원가 (발주 {cost.counted}건)</span>
+          <span className={ui.statLabel}>원가 (PO {cost.counted}건)</span>
           <span className={ui.statValue}>
             <Amount value={cost.total} kind="cost" />
           </span>
         </div>
         <div className={ui.stat}>
-          <span className={ui.statLabel}>마진</span>
+          <span className={ui.statLabel}>수익</span>
           <span className={ui.statValue}>
             <Amount value={margin} kind="margin" />
           </span>

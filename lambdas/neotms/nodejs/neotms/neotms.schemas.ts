@@ -358,6 +358,36 @@ export const PurchaseOrderUpdateSchema = v.partial(v.omit(PurchaseOrderCreateSch
 /* -------------------------------------------------------------------------- */
 
 /**
+ * The largest top-N a report breakdown will return.
+ *
+ * Thirty, because the breakdown is read as a bar chart and thirty bars is about where a chart stops
+ * being readable on a laptop screen. It is a product decision rather than a performance one - the
+ * aggregate costs the same whether we return ten rows or a thousand - so the number lives here next
+ * to the schema that enforces it instead of being buried in the SQL.
+ */
+export const REPORT_TOP_N_MAX = 30;
+
+/**
+ * How many breakdown rows to return. Whole, small, and arriving as either a string or a number.
+ *
+ * Built like `OrdNoSchema` below and for the same reason: this value reaches the server as a query
+ * string, where `Number("")` is 0 and `Number("abc")` is NaN. A bare `v.number()` with a careless
+ * transform in front of it would accept both, and a limit of 0 or NaN interpolated into `LIMIT`
+ * yields either an empty chart or a syntax error at query time rather than a 400 here.
+ *
+ * `v.maxValue` rather than a clamp: silently narrowing 500 to 30 would have the caller believe they
+ * asked for 500 and that the data really does stop at thirty rows. Refusing says which it is.
+ */
+export const ReportTopNSchema = v.pipe(
+  v.union([v.string(), v.number()]),
+  v.transform(String),
+  v.regex(/^\d{1,2}$/, "must be a whole number"),
+  v.transform(Number),
+  v.minValue(1, "must be at least 1"),
+  v.maxValue(REPORT_TOP_N_MAX, `must be at most ${String(REPORT_TOP_N_MAX)}`),
+);
+
+/**
  * A report query.
  *
  * The date range is required, both of it. An unbounded report over the full history is the legacy
@@ -377,6 +407,15 @@ export const ReportQuerySchema = v.object({
   pmId: v.optional(IdSchema),
   salesManagerId: v.optional(IdSchema),
   corpId: v.optional(IdSchema),
+  /**
+   * Optional, and absent means "as many as the hard cap allows" rather than "thirty".
+   *
+   * The distinction matters because the totals row is computed by a separate, deliberately
+   * unbounded query (see `ReportTotalsOps`). A caller that wants the full breakdown - the XLSX
+   * export, a future API consumer - must be able to ask for it, and defaulting this to 30 would
+   * truncate them without their having said anything. The screen always sends a value.
+   */
+  limit: v.optional(ReportTopNSchema),
 });
 
 /* -------------------------------------------------------------------------- */

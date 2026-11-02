@@ -632,6 +632,18 @@ export interface ReportQuery {
   pmId?: string | null
   salesManagerId?: string | null
   corpId?: string | null
+  /**
+   * 막대 그래프에 보여 줄 줄 수. 1~30(서버의 `REPORT_TOP_N_MAX`).
+   *
+   * 숫자가 아니라 **문자열**인 이유: 이 값은 `<select>` 의 `value` 에서 그대로 오고, 쿼리
+   * 문자열로 나갈 때도 문자열이다. 중간에서 `Number()` 로 바꾸면 빈 값이 `0` 이 되고
+   * (`Number('') === 0`), 0 은 서버 스키마가 거부하므로 "조회를 눌렀는데 400" 이 된다.
+   * 서버의 `ReportTopNSchema` 가 문자열·숫자를 모두 받으니, 문자열로 흘려보내면 변환 지점이
+   * 아예 없어서 이 함정이 생길 자리가 없다.
+   *
+   * 비어 있으면 서버 상한(1000줄)까지 돌려준다 — 화면은 항상 값을 보낸다.
+   */
+  limit?: string | null
 }
 
 /** 집계 한 줄. 세 값 모두 10진 문자열이다. margin = revenue - cost 를 서버가 계산한 값. */

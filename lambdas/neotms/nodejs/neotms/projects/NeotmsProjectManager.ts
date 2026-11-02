@@ -51,6 +51,8 @@ function readFilters(request: RequestData): ProjectFilters {
     salesManagerId: read("salesManagerId"),
     dueFrom: read("dueFrom"),
     dueTo: read("dueTo"),
+    startFrom: read("startFrom"),
+    startTo: read("startTo"),
   };
 }
 

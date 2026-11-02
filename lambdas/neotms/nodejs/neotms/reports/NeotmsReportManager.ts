@@ -29,12 +29,20 @@ export type ReportResult = {
   totals: ReportTotals;
   lines: ReportLine[];
   /**
-   * True when the breakdown hit `REPORT_LINE_CAP`.
+   * True when the breakdown returned as many rows as it was allowed to - either the caller's own
+   * `limit` or `REPORT_LINE_CAP`.
    *
    * Reported rather than silently truncated. A client that shows a table and a grand total needs to
    * know the table is incomplete, because the totals come from a separate unbounded query and would
    * otherwise not add up - and "the numbers do not add up" destroys trust in a report far faster
    * than "showing the top 1000, export for the rest".
+   *
+   * Note the one false positive this shape admits: a breakdown with exactly `limit` distinct values
+   * reports `truncated: true` although nothing was left out. Learning otherwise costs a second
+   * `count(DISTINCT ...)` query over the same range, and the consequence of the false positive is a
+   * client that says "top 10 shown" when the top 10 happens to be all of them - true, if
+   * uninformative. The opposite trade (no flag) hides real truncation, which is not recoverable by
+   * the reader.
    */
   truncated: boolean;
   /** When the rollup was last rebuilt. Shown so a stale report is visibly stale. */
@@ -60,6 +68,7 @@ export async function runReport(
     pmId: request.queryParams["pmId"],
     salesManagerId: request.queryParams["salesManagerId"],
     corpId: request.queryParams["corpId"],
+    limit: request.queryParams["limit"],
   });
   if (!parsed.ok) return parsed.response;
   const query = parsed.value;
@@ -78,7 +87,11 @@ export async function runReport(
       query,
       totals,
       lines,
-      truncated: lines.length >= REPORT_LINE_CAP,
+      // Compared against whichever ceiling actually applied. Leaving this at `REPORT_LINE_CAP`
+      // after adding `limit` would have made the flag permanently false for every screen request -
+      // ten lines is not a thousand - so a top-10 of two hundred customers would have claimed to be
+      // the whole picture, with a grand total five times the sum of the bars.
+      truncated: lines.length >= Math.min(query.limit ?? REPORT_LINE_CAP, REPORT_LINE_CAP),
       computedAt,
     });
   });

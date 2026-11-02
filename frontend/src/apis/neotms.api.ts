@@ -221,6 +221,19 @@ export interface ProjectListQuery extends ListQuery {
   field?: string | null
   pmId?: string | null
   salesManagerId?: string | null
+  /**
+   * 기간 검색. `YYYY-MM-DD`, 양끝 포함.
+   *
+   * 두 쌍이 **서로 독립**이다. `startFrom`/`startTo` 는 "2월에 **시작한** 프로젝트",
+   * `dueFrom`/`dueTo` 는 "2월에 **납기인** 프로젝트" 이고, 둘을 같이 보내면 "2월에 시작해서
+   * 2월에 끝나는" 프로젝트만 남는다(서버가 AND 로 묶는다). 화면에서는 기준 하나를 골라
+   * 한 쌍만 채우지만, 타입에 둘 다 있는 이유는 서버가 둘 다 받기 때문이고 — 쌍을 하나로
+   * 줄이고 '기준' 플래그를 두면 "2월에 시작해서 2월에 끝나는" 을 표현할 길이 없어진다.
+   */
+  startFrom?: string | null
+  startTo?: string | null
+  dueFrom?: string | null
+  dueTo?: string | null
 }
 
 export const fetchProjects = (query: ProjectListQuery, signal?: AbortSignal) =>

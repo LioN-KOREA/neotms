@@ -203,6 +203,31 @@ export type ProjectFilters = Partial<Record<keyof typeof PROJECT_FILTERS, string
   /** Inclusive deadline range. The filter every project screen is actually used with. */
   dueFrom?: string;
   dueTo?: string;
+  /**
+   * Inclusive start-date range, orthogonal to the deadline range above.
+   *
+   * Two separate pairs rather than one pair plus a "which column?" flag, because the two readings of
+   * "find projects in this period" are different questions and both are legitimate. A flag can only
+   * express one of them at a time; two pairs express both, and the caller decides.
+   *
+   *   - Sending only `startFrom`/`startTo` asks "which projects *began* in March?" - the question a
+   *     sales manager asks when reviewing what was won that month.
+   *   - Sending only `dueFrom`/`dueTo` asks "which projects are *due* in March?" - the question a PM
+   *     asks when planning capacity.
+   *   - Sending both narrows to projects that started AND are due inside the window, i.e. the ones
+   *     wholly contained in it. That is an AND because `mergeClauses` joins with AND, and it is the
+   *     right default: a project that started in January and is due in June is not a March project
+   *     by any useful definition.
+   *
+   * What this deliberately does NOT express is the interval-overlap test ("touches March at all",
+   * i.e. `prj_sday <= to AND prj_eday >= from`). That needs the two endpoints crossed over between
+   * columns, which no combination of two independent ranges can produce. It is omitted because no
+   * screen asks for it today; if one ever does, it belongs here as a third, explicitly named pair
+   * (`overlapsFrom`/`overlapsTo`) rather than as a reinterpretation of these, so that an existing
+   * caller's saved URL never silently changes meaning.
+   */
+  startFrom?: string;
+  startTo?: string;
 };
 
 /**
@@ -229,6 +254,11 @@ export const ProjectListOps: (
     searchClause(PROJECT_SEARCH_COLUMNS, query.search),
     filterClause(PROJECT_FILTERS, filters),
     rangeClause("due", "p.prj_eday", filters.dueFrom, filters.dueTo),
+    // The parameter names must differ from the deadline range's ("start_from" vs "due_from"), which
+    // is why `rangeClause` takes a name at all. Reusing one name for both would have the second
+    // binding overwrite the first in the parameter map, and the query would silently filter on one
+    // range twice - no error, just wrong rows.
+    rangeClause("start", "p.prj_sday", filters.startFrom, filters.startTo),
   );
   const limit = limitClause(query);
   return {
