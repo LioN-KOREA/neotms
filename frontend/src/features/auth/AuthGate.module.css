@@ -71,16 +71,15 @@
 /* 서비스 이름을 두 줄로 나눈다. '라이온코리아 TMS 시스템' 은 한 줄로 두면 카드 안에서
    줄바꿈 위치를 브라우저가 정하게 되고, 그 위치가 폭마다 달라진다. */
 .brandOrg {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--nt-ind-d);
 }
 
 .brandText {
-  font-size: 15px;
-  font-weight: 800;
+  font-size: 20px;
+  font-weight: 700;
   letter-spacing: -0.03em;
   color: var(--nt-ink);
 }
