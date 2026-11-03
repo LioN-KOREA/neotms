@@ -68,6 +68,37 @@ export const NeotmsMenu = {
    * that nothing enumerates.
    */
   STAFF: "STAFF",
+  /**
+   * 대시보드(영업) - the caller's own book as 영업담당자.
+   *
+   * ## Why two ids and not one `DASHBOARD`
+   *
+   * Because the requirement is "each person sees the one that matches their position", and one menu
+   * id cannot say that. A single `DASHBOARD` grant would be all-or-nothing: a PM who is granted it
+   * also gets the 영업 screen, and withholding it takes away the screen they actually need. Two ids
+   * make the two screens two separately grantable things, which is what `sys_role_auth` is for - and
+   * a system administrator simply holds both.
+   *
+   * These are not more permissive than `PROJECT`, which is what these two routes were gated on
+   * before. Every figure on either screen is an aggregate over the caller's own project, job and PO
+   * rows, each already readable one project at a time on the project detail screen. Splitting the
+   * gate narrows what a grant means; it does not widen what a holder can see.
+   *
+   * ## The cost of splitting, and why it is paid rather than avoided
+   *
+   * A new menu id needs a `sys_menu` row before the screen works at all, and a missing row fails
+   * **silently** - `readableNav` drops a nav item whose menu the caller does not hold, and the server
+   * answers 403 with a message about the caller's role. That is the hazard db/008_admin.sql warns
+   * about, and it is why these two screens originally reused `PROJECT`.
+   *
+   * It is handled, not avoided: db/013_dashboard_menus.sql seeds both rows and re-grants them to
+   * NEOTMS_SYSADMIN, and the bootstrap test in test/neotms.test.ts asserts that every id in this
+   * object appears in one of the seed files. Adding an id here without seeding it fails the suite
+   * before it can fail a user.
+   */
+  DASHBOARD_SALES: "DASHBOARD_SALES",
+  /** 대시보드(PM) - the same aggregate over `project.prj_pm_id`. See DASHBOARD_SALES above. */
+  DASHBOARD_PM: "DASHBOARD_PM",
 } as const;
 
 export type NeotmsMenuId = (typeof NeotmsMenu)[keyof typeof NeotmsMenu];

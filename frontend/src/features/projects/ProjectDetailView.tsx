@@ -7,6 +7,7 @@ import {
   useProject,
   usePurchaseOrders,
 } from '@/apis/queries/neotms.query'
+import { useDeleteJob, useDeletePurchaseOrder } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN, isLinguistic } from '@/apis/neotms.codes'
 import type { JobRow, PurchaseOrderRow } from '@/apis/neotms.types'
 import { DETAIL_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
@@ -54,6 +55,9 @@ export function ProjectDetailView() {
   const jobsQuery = useJobs({ limit: DETAIL_PAGE_SIZE, projectId: id }, !!id)
   const posQuery = usePurchaseOrders({ limit: DETAIL_PAGE_SIZE, projectId: id }, !!id)
 
+  const deleteJob = useDeleteJob()
+  const deletePo = useDeletePurchaseOrder()
+
   /** 업무 분류 코드를 이름으로. 작업 표에서 쓴다 — 작업 목록 화면과 같은 처리다. */
   const categoryName = useCodeNames(CODE_DOMAIN.JOBCAT)
 
@@ -83,9 +87,39 @@ export function ProjectDetailView() {
   const mayReadJob = mayDo(profile, NeotmsMenuId.JOB, 'read')
   const mayCreateJob = mayDo(profile, NeotmsMenuId.JOB, 'create')
   const mayUpdateJob = mayDo(profile, NeotmsMenuId.JOB, 'update')
+  const mayDeleteJob = mayDo(profile, NeotmsMenuId.JOB, 'delete')
   const mayReadPo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'read')
   const mayCreatePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'create')
   const mayUpdatePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'update')
+  const mayDeletePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')
+
+  /*
+   * 삭제 두 개. 문구는 각 목록 화면의 것과 **같은 문장**이다(JobsView·PurchaseOrdersView) —
+   * 같은 동작을 두 화면에서 다르게 설명하면 어느 쪽이 맞는지 담당자가 확인할 방법이 없다.
+   *
+   * 작업 삭제는 발주가 달려 있으면 서버가 거절한다. 그 거절은 정상 동작이고, 본문이 이유를
+   * 설명하므로 아래에서 `ErrorNotice` 로 그대로 내보낸다 — 여기서 뭉개면 담당자는 'PO 를 먼저
+   * 지워야 한다' 는 사실을 알 길이 없고, 삭제가 그냥 안 되는 화면으로 읽는다.
+   */
+  const onDeleteJob = async (row: JobRow) => {
+    const label = row.jobName || row.jobCode
+    if (
+      !window.confirm(
+        `${label} 작업을 삭제할까요?\n이 작업의 매출이 집계에서 빠집니다. 발주가 달려 있으면 삭제할 수 없습니다.`,
+      )
+    ) {
+      return
+    }
+    await deleteJob.mutateAsync(row.id)
+    setNotice(`${label} 작업을 삭제했습니다.`)
+  }
+
+  const onDeletePo = async (row: PurchaseOrderRow) => {
+    const label = row.poName || row.poCode
+    if (!window.confirm(`${label} PO를 삭제할까요?`)) return
+    await deletePo.mutateAsync(row.id)
+    setNotice(`PO [${label}]를 삭제했습니다.`)
+  }
 
   /** 이 프로젝트를 `JobFormModal` 에 넘길 형태로. 작업 등록 시 프로젝트는 고정이다. */
   const projectOption: PickerOption | null = project
@@ -165,6 +199,10 @@ export function ProjectDetailView() {
       </div>
 
       {notice ? <SuccessNotice>{notice}</SuccessNotice> : null}
+      {/* 삭제 거절을 읽을 수 있는 자리. 두 표가 멀리 떨어져 있어 각 표 안에 두면 스크롤
+          밖에서 사라지므로, 알림은 화면 머리에 모아 둔다. */}
+      <ErrorNotice error={deleteJob.error} />
+      <ErrorNotice error={deletePo.error} />
 
       {/*
        * 매출·원가·마진 세 숫자.
@@ -327,7 +365,9 @@ export function ProjectDetailView() {
                     <th>PO</th>
                     <th>마감일</th>
                     <th>상태</th>
-                    <th>수정</th>
+                    {/* 머리글이 '수정' 이었다. 이 칸에 버튼이 셋(수정·PO 추가·삭제) 있으므로
+                        그중 하나의 이름을 머리글로 쓰면 나머지 둘을 가린다 — PO 표와 같이 비운다. */}
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
@@ -414,6 +454,16 @@ export function ProjectDetailView() {
                                 }}
                               >
                                 PO 추가
+                              </button>
+                            ) : null}
+                            {mayDeleteJob ? (
+                              <button
+                                type="button"
+                                className={`${ui.btn} ${ui.btnDanger} ${ui.btnSm}`}
+                                onClick={() => void onDeleteJob(job)}
+                                disabled={deleteJob.isPending}
+                              >
+                                삭제
                               </button>
                             ) : null}
                           </div>
@@ -515,6 +565,16 @@ export function ProjectDetailView() {
                               }}
                             >
                               수정
+                            </button>
+                          ) : null}
+                          {mayDeletePo ? (
+                            <button
+                              type="button"
+                              className={`${ui.btn} ${ui.btnDanger} ${ui.btnSm}`}
+                              onClick={() => void onDeletePo(po)}
+                              disabled={deletePo.isPending}
+                            >
+                              삭제
                             </button>
                           ) : null}
                         </div>

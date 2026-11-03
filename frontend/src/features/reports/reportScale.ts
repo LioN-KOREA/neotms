@@ -1,4 +1,4 @@
-import { decimalCompare, decimalPercent, isDecimalString } from '@/shared/utils/money'
+import { decimalPercent, isDecimalString } from '@/shared/utils/money'
 
 /**
  * 세로 막대 그래프의 **세로축**을 만든다.
@@ -171,10 +171,4 @@ export function barHeight(value: string | null | undefined, scale: ChartScale): 
   const abs = decimalAbs(value)
   if (abs === null) return null
   return decimalPercent(abs, scale.range)
-}
-
-/** 눈금·막대를 그릴 수 있을 만큼의 값인지. `decimalCompare` 로만 판단한다. */
-export function atLeast(value: string | null | undefined, threshold: string): boolean {
-  const cmp = decimalCompare(value, threshold)
-  return cmp !== null && cmp >= 0
 }

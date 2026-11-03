@@ -50,6 +50,24 @@ export const NeotmsMenuId = {
    * 회수할 방법도 감사할 방법도 없다.
    */
   STAFF: 'STAFF',
+  /**
+   * 대시보드(영업) — 영업담당자가 나인 프로젝트의 집계.
+   *
+   * 두 대시보드가 메뉴를 **하나씩** 갖는다. 하나로 묶으면 "자기 직책에 맞는 쪽만 보인다" 를
+   * 표현할 수 없기 때문이다 — 묶인 권한을 주면 둘 다 보이고, 주지 않으면 정작 필요한 쪽도
+   * 사라진다. 둘로 나누면 PM 에게는 PM 쪽만, 영업담당자에게는 영업 쪽만 주고, 시스템 담당자가
+   * 둘 다 갖는다.
+   *
+   * 권한이 넓어진 것이 아니다. 두 화면의 모든 숫자는 내 프로젝트·작업·발주의 합이고, 프로젝트
+   * 상세 화면이 이미 한 건씩 보여 주는 값이다. 메뉴를 나눈 것은 권한의 **의미**를 좁힌 것이고,
+   * 볼 수 있는 것을 넓힌 것이 아니다.
+   *
+   * `sys_menu` 에 행이 없으면 탭이 없고 주소를 직접 열면 403 이며 그 사실이 어디에도 적히지
+   * 않는다 — 그 행은 db/013_dashboard_menus.sql 이 넣는다.
+   */
+  DASHBOARD_SALES: 'DASHBOARD_SALES',
+  /** 대시보드(PM) — PM 이 나인 프로젝트의 집계. 위 DASHBOARD_SALES 주석 참고. */
+  DASHBOARD_PM: 'DASHBOARD_PM',
 } as const
 
 export type NeotmsMenuIdValue = (typeof NeotmsMenuId)[keyof typeof NeotmsMenuId]

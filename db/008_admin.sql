@@ -27,7 +27,13 @@
 --   does only what its header says. Growing it every time a menu is added
 --   turns "apply the bootstrap" into a decision about which version of the
 --   bootstrap, which is exactly the doubt you cannot afford at that
---   moment. New menus land here; 006 stays the way back in.
+--   moment. 006 stays the way back in.
+--
+--   This file said "new menus land here" while it was the newest file.
+--   They do not: db/013_dashboard_menus.sql adds the two 대시보드 menus,
+--   for the same reason this file is not an edit to 006 -- an applied file
+--   is a record of what was done, and growing it makes "has 008 been
+--   applied" a question with two answers.
 --
 --   The INSERT below is ON CONFLICT DO NOTHING for the same reason 006's
 --   menu seed is: once an administrator has renamed a label, this file
@@ -71,8 +77,9 @@ COMMENT ON TABLE sys_menu IS
   'returns one entry per active row here, so a menu with no row is INVISIBLE AND FORBIDDEN with no '
   'error anywhere: the sidebar omits it and every route gated on it answers 403. The ids the '
   'application gates on are enumerated in lambdas/neotms/nodejs/neotms/NeotmsMenus.ts; the six '
-  'business menus are seeded by db/006_bootstrap.sql and the two administrative ones (MAINTENANCE, '
-  'STAFF) by db/008_admin.sql. After inserting any row here, re-run '
+  'business menus are seeded by db/006_bootstrap.sql, the two administrative ones (MAINTENANCE, '
+  'STAFF) by db/008_admin.sql, and the two dashboards (DASHBOARD_SALES, DASHBOARD_PM) by '
+  'db/013_dashboard_menus.sql. After inserting any row here, re-run '
   'sys_role_grant_all_menus(''NEOTMS_SYSADMIN'') -- grants written earlier do not cover menus added '
   'later.';
 
@@ -87,7 +94,8 @@ COMMENT ON TABLE sys_menu IS
 -- in the sidebar (sys_menu has the row) and gets 403 from every request it
 -- makes (sys_role_auth does not).
 --
--- Idempotent, and it re-asserts all five action flags on all eight menus.
+-- Idempotent, and it re-asserts all five action flags on every menu that
+-- exists when it runs.
 SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN') AS menus_granted;
 
 
@@ -95,7 +103,8 @@ SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN') AS menus_granted;
 -- 3. Verification
 -- =====================================================================
 --
--- Expect 8 menus and 8 full grants:
+-- Expect 8 menus and 8 full grants -- 10 and 10 if 013_dashboard_menus.sql
+-- has already been applied, which is the normal state once it has:
 --
 --   SELECT (SELECT count(*) FROM sys_menu WHERE active) AS menus,
 --          (SELECT count(*) FROM sys_role_auth a

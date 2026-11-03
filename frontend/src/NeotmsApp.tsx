@@ -207,8 +207,15 @@ function Shell({ onLogout }: { onLogout: () => void }) {
         <div className={styles.navGroupLabel}>{activeGroup.label}</div>
 
         <ul className={styles.navList}>
+          {/*
+           * 키는 `path` 다. 지금은 `menuId` 도 유일하지만(대시보드 둘이 메뉴를 하나씩 가졌다),
+           * `NeotmsNavItem` 에서 유일함이 **보장되는** 쪽은 경로다 — 두 항목이 한 메뉴 권한을
+           * 공유하는 일은 실제로 한 번 있었고(대시보드가 둘 다 PROJECT 에 걸려 있던 동안) 또
+           * 생길 수 있다. 그때 `menuId` 를 키로 두면 React 가 두 항목을 한 항목으로 보고, 둘 중
+           * 하나가 사라지거나 라벨이 서로 바뀐다 — 타입도 테스트도 잡지 못하는 고장이다.
+           */}
           {activeGroup.items.map((item) => (
-            <li key={item.menuId}>
+            <li key={item.path}>
               {/* NavLink 가 활성 상태를 직접 계산한다 — 현재 경로를 따로 비교하면 상세
                   화면(/projects/123)에서 상위 메뉴의 강조가 꺼진다. */}
               <NavLink

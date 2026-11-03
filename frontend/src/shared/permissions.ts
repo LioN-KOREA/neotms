@@ -19,7 +19,7 @@ import type { IconName } from '@/shared/ui/Icon'
  * 매일 여는 업무 화면, 거래처 정보, 가끔 보는 집계, 한 달에 한 번 쓰는 관리. 여덟 개를 한 줄로
  * 세우면 그 차이가 사라지고, 담당자는 매번 같은 목록을 처음부터 훑는다.
  */
-export type NeotmsNavGroupId = 'work' | 'party' | 'insight' | 'admin' | 'trn'
+export type NeotmsNavGroupId = 'dashboard' | 'work' | 'party' | 'insight' | 'admin' | 'trn'
 
 /** 사이드바 메뉴. `menuId` 는 서버가 권한을 부여하는 단위이고, `path` 는 라우터의 경로다. */
 export interface NeotmsNavItem {
@@ -44,6 +44,20 @@ export interface NeotmsNavGroup {
 }
 
 export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
+  /*
+   * 대시보드가 맨 앞이다. 두 가지 이유가 같은 방향을 가리킨다.
+   *
+   * **첫 화면이 된다.** `routes.tsx` 의 `HomeRedirect` 는 `readableNav(profile)[0]` 로 보낸다.
+   * 그러므로 이 묶음이 맨 앞이면 로그인 직후 보이는 것이 자기 대시보드다 — 집계 화면은 들어와야
+   * 보이는 순간부터 아무도 보지 않는다.
+   *
+   * 이 자리는 두 대시보드가 메뉴 권한을 **하나씩** 갖게 된 뒤에야 맞는 자리가 되었다. 둘 다
+   * PROJECT 에 걸려 있던 동안에는 모든 계정의 첫 화면이 **대시보드(영업)** 가 되고, PM 만 하는
+   * 담당자는 로그인할 때마다 0 이 네 칸 찍힌 화면을 먼저 봤다 — 그 0 은 사실이지만 고장으로
+   * 읽힌다. 이제 그 담당자의 `readableNav[0]` 은 대시보드(PM) 이므로, 맨 앞이 각자에게 맞는
+   * 화면을 뜻한다.
+   */
+  { id: 'dashboard', label: '대시보드', icon: 'grid' },
   { id: 'work', label: '업무', icon: 'folder' },
   { id: 'party', label: '고객', icon: 'users' },
   { id: 'trn', label: '번역가', icon: 'globe' },
@@ -62,6 +76,44 @@ export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
  * 새 메뉴를 추가하는 사람이 "이건 무엇인가" 를 한 번은 적게 만든다.
  */
 export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
+  /*
+   * 대시보드 둘. 세 가지가 설명이 필요하다.
+   *
+   * **왜 메뉴가 둘인가.** 요구가 "각자 자기 직책에 맞는 쪽만 본다" 이고, 메뉴 하나로는 그 말을
+   * 할 수 없다. `DASHBOARD` 하나로 묶으면 권한은 둘 다이거나 둘 다 아니거나이므로, PM 에게
+   * 주면 영업 화면까지 열리고 주지 않으면 PM 화면도 사라진다. 메뉴를 둘로 두면 `sys_role_auth`
+   * 가 화면별로 부여되고, 시스템 담당자는 둘 다 갖는다. 권한 배정 자체는 사용자 관리 화면에서
+   * 하고 여기서는 아무것도 정하지 않는다.
+   *
+   * 이것은 권한이 넓어진 것이 아니다. 두 화면이 보여 주는 것은 전부 내 프로젝트와 그에 달린
+   * 작업·발주의 합계이고, 프로젝트 상세 화면이 이미 한 건씩 같은 값을 적는다. REPORT 로 걸면
+   * 오히려 넓어진다(REPORT 는 남의 실적까지 본다) — 내 숫자를 보는 것이 특권이 되어서는 안 된다.
+   *
+   * **왜 맨 앞인가.** `NEOTMS_NAV_GROUPS` 의 'dashboard' 주석에 있다. 요약하면 `HomeRedirect`
+   * 가 `readableNav(profile)[0]` 로 보내므로, 이 순서가 곧 로그인 직후의 첫 화면이다. 묶음만
+   * 앞으로 보내도 레일의 순서는 바뀌지만 **첫 화면은 바뀌지 않는다** — `readableNav` 는 묶음이
+   * 아니라 이 배열의 순서를 따르기 때문이고, 그래서 두 항목이 여기서도 맨 앞에 있어야 한다.
+   *
+   * **왜 둘 다 보일 수 있는가.** `staff` 에는 '이 사람은 영업' 이라는 칼럼이 없다 — 영업이냐
+   * PM 이냐는 **프로젝트마다** 정해진다(`prj_mgr_id` / `prj_pm_id`). 한 사람이 어떤 프로젝트에서는
+   * 영업이고 다른 프로젝트에서는 PM 일 수 있고, 그런 사람에게는 두 메뉴를 다 주는 것이 맞다.
+   * 그래서 두 `hint` 가 '내 것' 의 기준을 각각 명시한다 — 한 화면만 받은 사람은 그 기준을 볼
+   * 기회가 한 번뿐이다.
+   */
+  {
+    menuId: NeotmsMenuId.DASHBOARD_SALES,
+    path: '/dashboard/sales',
+    label: '대시보드(영업)',
+    hint: '영업담당자가 나인 프로젝트 현황',
+    group: 'dashboard',
+  },
+  {
+    menuId: NeotmsMenuId.DASHBOARD_PM,
+    path: '/dashboard/pm',
+    label: '대시보드(PM)',
+    hint: 'PM 이 나인 프로젝트 현황',
+    group: 'dashboard',
+  },
   {
     menuId: NeotmsMenuId.PROJECT,
     path: '/projects',

@@ -301,3 +301,24 @@ export function decimalPercent(
   const rounded = remainder * 2n >= absDen ? quotient + 1n : quotient
   return toFixedString(negative ? -rounded : rounded, targetScale, targetScale)
 }
+
+/**
+ * `decimalPercent` 의 결과를 CSS 의 `width`·`height` 에 넣을 문자열로. 못 그리는 값(null)과
+ * 음수는 `0%` 로 눕힌다.
+ *
+ * **음수를 그대로 넘기면 안 된다.** `width: -5%` 는 CSS 가 선언째로 무시하므로, 비중 막대의
+ * 왼쪽 조각은 `width: auto` 로 되돌아가 트랙을 꽉 채운다. 즉 **가장 나쁜 값이 가장 좋은 값으로
+ * 그려진다** — 막대 그래프에서 할 수 있는 최악의 실패다. 0 으로 눕히면 "그릴 수 없었다" 가
+ * 그림으로도 그렇게 보인다.
+ *
+ * 세로 막대의 높이도 같은 함수를 쓴다. 그쪽에서 음수는 **아래로 자라는 막대**이고, 부호는
+ * 높이가 아니라 0 선의 어느 쪽에 붙이느냐로 표현한다(reportScale.ts 의 `barHeight`).
+ *
+ * 리포트 화면 안에 있던 것을 여기로 올렸다. 비중 막대가 공용 컴포넌트(`ShareBar`)가 되면서 이
+ * 보정이 **두 곳**에서 필요해졌고, 위에 적은 실패 양상은 복사본 하나가 빠져도 오류 없이
+ * 그림만 거짓이 되는 종류다.
+ */
+export function cssPercent(pct: string | null | undefined): string {
+  if (pct === null || pct === undefined || isNegative(pct)) return '0%'
+  return `${pct}%`
+}

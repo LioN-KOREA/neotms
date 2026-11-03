@@ -292,6 +292,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `010_currency.sql` | the five currencies the console can submit. Without it **every create in the system fails** — **see §6.2** |
 | `011_job_types.sql` | 업무 구분 (Linguistics / MICE / IMC) and 업무 분류: two `sys_code` domains, `job.job_type` / `purchase_order.po_type`, the four detail tables that replace the language columns, **and a migration that drops `job_slang` / `job_elang` / `po_slang` / `po_elang`** — **see §6.2** |
 | `012_job_pricing.sql` | moves the nine pricing *inputs* (`job_volume`, `unit_code`, `job_price_sel`, `job_price`, `job_price_dis`; `po_volume`, `po_unit_code`, `po_price_sel`, `po_price`) onto the linguistic detail tables, so a MICE or IMC job records a total without a fabricated word count. **The totals — `job_price_sum` / `job_price_ksum` / `po_price_sum` / `po_price_ksum` — stay on the parents.** Drops the nine columns it moved — **see §6.2** |
+| `013_dashboard_menus.sql` | the two 대시보드 menus (`DASHBOARD_SALES`, `DASHBOARD_PM`) and the re-grant that makes them usable. Without it the two dashboards are **unreachable by everyone**, including the superuser; nothing else is affected — **see §6.2** |
 
 Every file in `db/` is applicable **as-is**: plain DDL, no placeholders. That matters because the
 application's dbops modules write `:name` parameters (rewritten to `$1` by `toPositional` in
@@ -422,9 +423,9 @@ SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN');
 
 Idempotent, returns the number of menus granted, and safe to run any time.
 
-### 6.2 `007`, `008`, `009`, `010` — the files whose absence is silent (and `011` / `012`, whose absence is not)
+### 6.2 `007`, `008`, `009`, `010`, `013` — the files whose absence is silent (and `011` / `012`, whose absence is not)
 
-`006` gets one administrator in. These four are what the console assumes about the database once
+`006` gets one administrator in. These five are what the console assumes about the database once
 somebody is in, and they share a property worth stating before the detail: **skipping one produces no
 error anywhere a user or an operator would look.** The apply succeeds (they were never run), the
 deploy succeeds (CDK knows nothing about the database's contents), the Lambda starts, and the console
@@ -437,6 +438,16 @@ of the symptom points away from the cause.
 | `008_admin.sql` | the `sys_menu` rows for 유지보수 and 사용자 관리 | both administrative screens are unreachable **by everyone, including the superuser**; the sidebar just has six entries |
 | `009_selfservice.sql` | `staff_self_register()` | the sign-up form submits and answers **500**, with the cause visible only in CloudWatch |
 | `010_currency.sql` | the `currency` rows every `*_coin` / `coin_code` foreign key points at | **every create in the system fails**, on a field nobody touched, reporting a constraint name |
+| `013_dashboard_menus.sql` | the `sys_menu` rows for 대시보드(영업) and 대시보드(PM) | both dashboards are unreachable **by everyone, including the superuser**, and 대시보드 — the first rail entry — is absent, so a signed-in user lands on 프로젝트 instead. Nothing else is affected: no table, column or other route is touched |
+
+`013` is the one of these an operator is most likely to defer, because the screens it unlocks are
+the only part of the application nobody's day depends on. It is in this table anyway for the reason
+the others are: the symptom is a missing menu, and a missing menu is indistinguishable from a
+feature that was not deployed. The two dashboards also hold the two menu ids that are **granted per
+person** — a 영업담당자 holds `DASHBOARD_SALES`, a PM holds `DASHBOARD_PM`, and whoever runs the
+system holds both — which is assigned on 사용자 관리 after this file has been applied. `013` grants
+the bootstrap superuser only; it deliberately does not hand both dashboards to every existing role,
+because that would undo the split on the way in.
 
 `011_job_types.sql` and `012_job_pricing.sql` belong to the same list by position and to none of it
 by behaviour, which is why they are called out separately rather than given rows above. **Their
@@ -667,7 +678,8 @@ docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
 for f in 001_extensions 002_tables 003_indexes 004_rollup 005_code_sequences 006_bootstrap \
-         007_codes 008_admin 009_selfservice 010_currency 011_job_types 012_job_pricing; do
+         007_codes 008_admin 009_selfservice 010_currency 011_job_types 012_job_pricing \
+         013_dashboard_menus; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done

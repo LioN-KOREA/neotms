@@ -7,6 +7,7 @@ import { mayDo, readableNav } from '@/shared/permissions'
 import { CallbackView } from '@/features/auth/CallbackView'
 import { LogoutView } from '@/features/auth/LogoutView'
 import { CustomersView } from '@/features/customers/CustomersView'
+import { DashboardView } from '@/features/dashboard/DashboardView'
 import { JobsView } from '@/features/jobs/JobsView'
 import { MaintenanceView } from '@/features/maintenance/MaintenanceView'
 import { ProjectDetailView } from '@/features/projects/ProjectDetailView'
@@ -162,6 +163,39 @@ export const neotmsRouter = createBrowserRouter([
         element: (
           <RequireMenu menuId={NeotmsMenuId.TRANSLATOR}>
             <TranslatorsView />
+          </RequireMenu>
+        ),
+      },
+      {
+        /*
+         * 대시보드 둘. 경로가 역할을 들고 있고(`/dashboard/sales`, `/dashboard/pm`), 화면은
+         * 같은 컴포넌트에 `role` 만 다르게 받는다.
+         *
+         * `:role` 파라미터 하나로 묶지 않은 이유가 둘이다.
+         *
+         * 하나는 잘못된 값이다. 묶으면 `/dashboard/anything` 이 라우터를 통과하고, 그 사실은
+         * 화면 안쪽에서야 드러난다 — `ROLE_TITLE[role]` 이 `undefined` 가 되어 제목 없는
+         * 대시보드가 그려지는 식이다. 두 줄을 적어 두면 없는 역할은 라우터에서 404 가 된다.
+         *
+         * 다른 하나가 더 중요하다. **두 화면의 권한이 서로 다르다.** `RequireMenu` 는 메뉴 id
+         * 를 상수로 받으므로, 역할이 파라미터이면 게이트를 화면 안쪽으로 옮겨야 하고 그러면
+         * "이 경로에 어떤 권한이 필요한가" 를 이 표에서 읽을 수 없게 된다. 서버의 라우트 표도
+         * 정확히 같은 이유로 `?as=` 를 버리고 경로를 둘로 나눴다.
+         *
+         * 근거는 permissions.ts 의 대시보드 주석에 있다.
+         */
+        path: 'dashboard/sales',
+        element: (
+          <RequireMenu menuId={NeotmsMenuId.DASHBOARD_SALES}>
+            <DashboardView role="sales" />
+          </RequireMenu>
+        ),
+      },
+      {
+        path: 'dashboard/pm',
+        element: (
+          <RequireMenu menuId={NeotmsMenuId.DASHBOARD_PM}>
+            <DashboardView role="pm" />
           </RequireMenu>
         ),
       },

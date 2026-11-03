@@ -32,10 +32,21 @@ export interface CodeOption {
 
 const opt = (value: string, label?: string): CodeOption => ({ value, label: label ?? value })
 
+/**
+ * 진행 중을 뜻하는 상태값. 화면이 이 값으로 **거르기** 때문에 이름이 붙어 있다.
+ *
+ * 대시보드의 '나의 진행중인 프로젝트 목록' 이 `state: PROJECT_STATE_ACTIVE` 로 목록을 읽는다.
+ * 거기에 `'진행'` 을 직접 적으면 이 파일의 목록과 그 화면이 **서로 독립적인 추측**이 되고, 그
+ * 추측이 운영 데이터와 어긋나는 날 목록은 오류 없이 0건이 된다 — 비어 있는 목록은 '없음' 으로
+ * 읽히므로 아무도 눈치채지 못한다. 서버가 같은 이유로 NeotmsProjectStates.ts 를 두고 있고, 이
+ * 상수는 그 모듈의 `PROJECT_STATE_ACTIVE` 와 같은 값이어야 한다(운영 데이터 확인 시 함께 고친다).
+ */
+export const PROJECT_STATE_ACTIVE = '진행'
+
 /** 프로젝트 진행 상태. */
 export const PROJECT_STATES: readonly CodeOption[] = [
   opt('견적', '견적'),
-  opt('진행', '진행'),
+  opt(PROJECT_STATE_ACTIVE),
   opt('완료', '완료'),
   opt('보류', '보류'),
   opt('취소', '취소'),

@@ -4,6 +4,7 @@ import {
   fetchCodes,
   fetchCustomer,
   fetchCustomers,
+  fetchDashboard,
   fetchJob,
   fetchJobs,
   fetchProfile,
@@ -23,7 +24,7 @@ import {
   type TranslatorListQuery,
 } from '../neotms.api'
 import { codeOptions, codesToOptions, type CodeDomainId, type CodeOption } from '../neotms.codes'
-import type { ListPage, ListQuery, ReportQuery } from '../neotms.types'
+import type { DashboardRole, ListPage, ListQuery, ReportQuery } from '../neotms.types'
 import { neotmsKeys } from './neotms.keys'
 
 /**
@@ -307,6 +308,30 @@ export function useWorkload(range: { from?: string; to?: string } = {}, enabled 
     queryKey: neotmsKeys.workload(range),
     queryFn: ({ signal }) => fetchWorkload(range, signal),
     enabled,
+    staleTime: 1000 * 60 * 5,
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 대시보드                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 내 프로젝트 현황. 리포트와 달리 **화면을 열면 바로 읽는다.**
+ *
+ * `enabled` 를 받지 않는 것이 위의 `useReportSummary` 와의 유일한 차이이고, 이유는 비용이다:
+ * 리포트는 기간이 없으면 전체 스캔이 되는 쿼리라 '조회' 를 누를 때까지 미뤘지만, 여기는 집합이
+ * 소유 조건으로 이미 한 사람 몫으로 묶여 있다. 열자마자 읽어도 싼 쿼리이고, 대시보드는 열면
+ * 숫자가 보여야 하는 화면이다 — 조회 버튼을 눌러야 채워지는 대시보드는 대시보드가 아니다.
+ *
+ * `staleTime` 은 리포트와 같은 5분. 프로젝트·작업·발주를 고치면 `neotmsKeys.dashboards` 가
+ * 무효화되므로(neotms.mutation.ts), 내가 한 변경은 5분을 기다리지 않고 바로 반영된다. 5분은
+ * **다른 사람이** 바꾼 것이 늦게 보이는 창일 뿐이다.
+ */
+export function useDashboard(role: DashboardRole) {
+  return useQuery({
+    queryKey: neotmsKeys.dashboard(role),
+    queryFn: ({ signal }) => fetchDashboard(role, signal),
     staleTime: 1000 * 60 * 5,
   })
 }

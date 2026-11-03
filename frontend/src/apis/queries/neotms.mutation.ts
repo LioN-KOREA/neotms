@@ -185,6 +185,9 @@ const STAFF_AFFECTS = [
   neotmsKeys.jobs,
   neotmsKeys.purchaseOrders,
   neotmsKeys.reports,
+  // 대시보드도 2번 이유 그대로다. `view_scope` 는 대시보드 쿼리의 `scopeClause` 이기도 하므로,
+  // 범위가 바뀌면 타일의 **건수 자체**가 달라진다.
+  neotmsKeys.dashboards,
 ] as const
 
 /**
@@ -276,11 +279,22 @@ export function useDeleteTranslator() {
 /* 프로젝트                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * `dashboards` 가 `reports` 와 **따로** 적혀 있는 것에 주의한다.
+ *
+ * 두 키는 접두사를 공유하지 않으므로(neotms.keys.ts 의 이유) `reports` 를 무효화해도 대시보드는
+ * 낡은 채로 남는다. 그리고 프로젝트 수정은 대시보드의 **모든** 숫자를 움직인다 — 진행 상태를
+ * 바꾸면 타일이, 납기일을 바꾸면 지연 타일이, 영업담당이나 PM 을 바꾸면 그 프로젝트가 누구의
+ * 대시보드에 속하는지가 달라진다. 마지막 경우는 **두 사람의** 대시보드가 동시에 낡는 것인데,
+ * 역할이 키에 들어 있으므로 `dashboards` 접두사 하나가 내 쪽 두 역할을 함께 처리한다(남의
+ * 브라우저 캐시는 어차피 여기서 손댈 수 없고, 5분 뒤 자동으로 다시 읽힌다).
+ */
 const PROJECT_AFFECTS = [
   neotmsKeys.projects,
   neotmsKeys.jobs,
   neotmsKeys.purchaseOrders,
   neotmsKeys.reports,
+  neotmsKeys.dashboards,
 ] as const
 
 export function useCreateProject() {
@@ -315,12 +329,16 @@ export function useDeleteProject() {
 /**
  * 작업을 고치면 프로젝트 목록도 낡는다 — 프로젝트 화면이 소속 작업의 합계를 보여 주기 때문이다.
  * 발주 목록도 작업명을 들고 있다.
+ *
+ * 대시보드는 금액 때문에 들어간다: 작업은 매출이고, 대시보드의 '수익' 은 매출에서 원가를 뺀
+ * 값이므로 작업 하나의 금액이 세 숫자를 모두 움직인다. 타일(건수)은 작업과 무관하다.
  */
 const JOB_AFFECTS = [
   neotmsKeys.jobs,
   neotmsKeys.projects,
   neotmsKeys.purchaseOrders,
   neotmsKeys.reports,
+  neotmsKeys.dashboards,
 ] as const
 
 export function useCreateJob() {
@@ -360,6 +378,8 @@ const PO_AFFECTS = [
   neotmsKeys.jobs,
   neotmsKeys.projects,
   neotmsKeys.reports,
+  // 발주는 원가다. 대시보드의 원가와 수익이 함께 달라진다 — JOB_AFFECTS 와 같은 이유.
+  neotmsKeys.dashboards,
 ] as const
 
 export function useCreatePurchaseOrder() {

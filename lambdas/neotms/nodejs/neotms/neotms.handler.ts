@@ -89,6 +89,7 @@ import {
   listPurchaseOrders,
   updatePurchaseOrder,
 } from "./purchase-orders/NeotmsPurchaseOrderManager.js";
+import { getDashboard } from "./dashboard/NeotmsDashboardManager.js";
 import { getProfile } from "./profile/NeotmsProfileManager.js";
 import { registerSelf } from "./profile/NeotmsRegistrationManager.js";
 import { getWorkload, runReport } from "./reports/NeotmsReportManager.js";
@@ -375,6 +376,23 @@ const handleRunReport: RRHandler = async (request) => runReport(callerOf(request
 const handleGetWorkload: RRHandler = async (request) => getWorkload(callerOf(request), request);
 
 /*
+ * 대시보드 - the caller's own book, 영업 or PM.
+ *
+ * **Two handlers rather than one reading `?as=`.** Each carries its role as a literal, which is what
+ * lets the two routes below declare a menu each: this API declares authorization only in the route
+ * table and only per path, so a gate that varied by query parameter could not be declared there at
+ * all. The role being un-forgeable is the second benefit - see NeotmsDashboardManager's header.
+ *
+ * Gated on DASHBOARD_SALES / DASHBOARD_PM rather than on REPORT, which is the opposite of the two
+ * routes above. The reasoning is in NeotmsMenus: a report aggregates other people's work within the
+ * reader's scope and is its own privilege, while these aggregate only the reader's own projects and
+ * are therefore not a wider view than the project list they sit beside.
+ */
+const handleGetSalesDashboard: RRHandler = async (request) =>
+  getDashboard(callerOf(request), "sales");
+const handleGetPmDashboard: RRHandler = async (request) => getDashboard(callerOf(request), "pm");
+
+/*
  * 코드 - the code tables, in two halves.
  *
  * The read is `anyStaff` and the writes are MAINTENANCE, which is the whole reason there are two
@@ -564,6 +582,19 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // be bookmarked and mailed to a colleague - which is what people currently do with screenshots.
   { path: "/api/v0/reports/summary", method: "GET", handler: handleRunReport, menu: NeotmsMenu.REPORT, action: "read" },
   { path: "/api/v0/reports/workload", method: "GET", handler: handleGetWorkload, menu: NeotmsMenu.REPORT, action: "read" },
+
+  // -- 대시보드 -------------------------------------------------------------
+  //
+  // A path and a menu per role, not one path with `?as=sales|pm`. This is the only table in which
+  // this API says who may call what, and it says it per path - so "a person sees the dashboard that
+  // matches their position" has to be two rows here or it is not expressible at all. Neither is
+  // REPORT: both screens are the caller's own projects' arithmetic and nothing they could not
+  // already open one record at a time. Argued in NeotmsMenus and NeotmsDashboardManager.
+  //
+  // Static trailing segments, like `/reports/summary` above - not `:id` params, so there is no
+  // collision with `recordId` and nothing for rou3 to disambiguate.
+  { path: "/api/v0/dashboard/sales", method: "GET", handler: handleGetSalesDashboard, menu: NeotmsMenu.DASHBOARD_SALES, action: "read" },
+  { path: "/api/v0/dashboard/pm", method: "GET", handler: handleGetPmDashboard, menu: NeotmsMenu.DASHBOARD_PM, action: "read" },
 
   // -- 유지보수 (the code tables) --------------------------------------------
   //

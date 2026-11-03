@@ -6,6 +6,8 @@ import type {
   CodeUpdateInput,
   CustomerInput,
   CustomerRow,
+  DashboardRole,
+  DashboardSummary,
   JobInput,
   JobRow,
   JobUpdate,
@@ -347,3 +349,24 @@ export const fetchWorkload = (
   range: { from?: string; to?: string } = {},
   signal?: AbortSignal,
 ) => neotmsApi<WorkloadCounts>('/api/v0/reports/workload', { query: { ...range }, signal })
+
+/* -------------------------------------------------------------------------- */
+/* 대시보드                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 내 프로젝트 현황 한 장.
+ *
+ * `role` 이 **경로**에 들어간다. 한동안 `?as=` 였고, 두 화면이 메뉴 권한을 하나씩 갖게 되면서
+ * 옮겼다 — 서버는 권한을 경로마다 선언하므로(라우트 표), 질의 문자열에 따라 달라지는 게이트는
+ * 그 표에 적을 수가 없다. 그래서 `/api/v0/dashboard/sales` 와 `/api/v0/dashboard/pm` 이다.
+ *
+ * 기본값도 두지 않는다. 영업과 PM 을 겸하는 사람에게 두 응답은 같은 제목 아래의 **다른 숫자**
+ * 이고, 기본값이 있으면 어느 쪽을 보고 있는지 알 방법이 없다. 화면은 경로로 역할을 이미 알고
+ * 있으므로 모르는 채로 부르는 경우가 없다.
+ *
+ * 리포트와 달리 기간 인자가 없다. 기간은 리포트에서 집계 비용을 묶는 장치이고, 여기서는 '내
+ * 프로젝트' 라는 소유 조건이 같은 일을 한다(`ix_prj_mgr`·`ix_prj_pm`).
+ */
+export const fetchDashboard = (role: DashboardRole, signal?: AbortSignal) =>
+  neotmsApi<DashboardSummary>(`/api/v0/dashboard/${role}`, { signal })

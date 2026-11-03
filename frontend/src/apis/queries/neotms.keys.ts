@@ -55,4 +55,19 @@ export const neotmsKeys = {
   reports: ['reports'] as const,
   reportSummary: (query: unknown) => ['reports', 'summary', query] as const,
   workload: (range: unknown) => ['reports', 'workload', range] as const,
+
+  /*
+   * 대시보드. `reports` 아래가 아니라 따로 둔다.
+   *
+   * 접두사를 공유하면 리포트 하나를 무효화할 때 대시보드까지 끌려오고, 그 반대도 마찬가지다.
+   * 둘은 같은 숫자를 다른 범위로 보는 화면이지만 **읽는 시점이 전혀 다르다** — 리포트는 '조회'
+   * 버튼을 눌러야 읽고(`enabled`), 대시보드는 화면을 열면 바로 읽는다. 한 접두사에 묶으면
+   * 대시보드를 여는 것만으로 리포트 캐시가 함께 낡는다.
+   *
+   * 역할(`sales`/`pm`)이 키에 들어간다. 한 사람이 어떤 프로젝트에서는 영업담당이고 다른
+   * 프로젝트에서는 PM 인 경우가 정상이므로 두 응답은 서로 다른 숫자이고, 키를 공유하면 탭을
+   * 옮길 때 옆 역할의 숫자가 잠깐 그려진다.
+   */
+  dashboards: ['dashboard'] as const,
+  dashboard: (role: string) => ['dashboard', role] as const,
 } as const

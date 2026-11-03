@@ -719,15 +719,20 @@ describe("the empty-database bootstrap", () => {
      * It also drives the sidebar: `getProfile` builds the menu tree from `sys_menu`, so the same
      * omission removes the screen from the navigation entirely.
      *
-     * Both seed files, because the menus are deliberately split across two. 006 holds the six
+     * Every seed file, because the menus are deliberately split across several. 006 holds the six
      * business menus and is the lockout-recovery file - its one job is to stay the thing an operator
      * can run without deciding anything, so new menus are not added to it. 008 holds the two
-     * administrative ones. Scanning both means neither file can be the one that was forgotten, which
-     * is the real risk now that there is more than one: this very test failed on MAINTENANCE the
-     * moment `NeotmsMenu` grew, which is exactly what it is for.
+     * administrative ones, and 013 the two dashboards. Scanning all of them means none can be the one
+     * that was forgotten, which is the real risk now that there is more than one: this very test
+     * failed on MAINTENANCE the moment `NeotmsMenu` grew, and again on DASHBOARD_SALES and
+     * DASHBOARD_PM, which is exactly what it is for.
+     *
+     * The list is literal rather than every `db/*.sql`, so that adding a menu to `NeotmsMenu` and a
+     * row to a brand-new file is not enough on its own - the file has to be named here, which is
+     * also what puts it under the editor-safety assertions further down.
      */
     const seeded = new Set(
-      ["006_bootstrap.sql", "008_admin.sql"].flatMap((file) =>
+      ["006_bootstrap.sql", "008_admin.sql", "013_dashboard_menus.sql"].flatMap((file) =>
         [...sqlCode(file).matchAll(/^\s*\('([A-Z_]+)',/gm)].map((m) => m[1]),
       ),
     );
@@ -752,6 +757,38 @@ describe("the empty-database bootstrap", () => {
     expect(code).toMatch(/SELECT sys_role_grant_all_menus\('NEOTMS_SYSADMIN'\)/);
     // The INSERT must not reset a label an operator has corrected - same rule as 006's menu seed.
     expect(code).toMatch(/INSERT INTO sys_menu[\s\S]*?ON CONFLICT \(menu_id\) DO NOTHING/);
+    expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
+  });
+
+  test("013 seeds two dashboard menus, re-grants them, and grants nobody else", () => {
+    /*
+     * The same three properties 008 is checked for, plus one that is specific to this file.
+     *
+     * The two dashboards exist as separate menus **in order to be granted separately** - a PM holds
+     * DASHBOARD_PM, a 영업담당자 holds DASHBOARD_SALES, and that assignment is made on the 사용자
+     * 관리 screen. A seed file that handed both to every existing role, or that called
+     * `sys_role_grant_all_menus` for anything other than the bootstrap superuser, would undo the
+     * split on the way in - and silently, because the symptom is a screen appearing for someone it
+     * was meant to be withheld from, which nobody reports.
+     *
+     * The superuser is the exception the user named: the only account that holds both.
+     */
+    const code = sqlCode("013_dashboard_menus.sql");
+    expect(code).toMatch(/INSERT INTO sys_menu[\s\S]*?ON CONFLICT \(menu_id\) DO NOTHING/);
+    expect(code).toContain("'DASHBOARD_SALES'");
+    expect(code).toContain("'DASHBOARD_PM'");
+
+    // The paths must be the ones the router and NEOTMS_NAV use. `menu_url` is not what the client
+    // navigates by, but it is what someone reading `sys_menu` directly will believe.
+    expect(code).toContain("'/dashboard/sales'");
+    expect(code).toContain("'/dashboard/pm'");
+
+    // Exactly one grant call, and for NEOTMS_SYSADMIN. Grants written by 006 and 008 do not cover
+    // rows added here, so without this the superuser sees two tabs that both answer 403.
+    const grants = [...code.matchAll(/sys_role_grant_all_menus\('([A-Z_]+)'\)/g)].map((m) => m[1]);
+    expect(grants).toEqual(["NEOTMS_SYSADMIN"]);
+    expect(code).not.toMatch(/INSERT INTO sys_role_auth/);
+
     expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
   });
 
@@ -854,6 +891,7 @@ describe("the empty-database bootstrap", () => {
       "010_currency.sql",
       "011_job_types.sql",
       "012_job_pricing.sql",
+      "013_dashboard_menus.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -959,6 +997,24 @@ const neotmsLambdaDir = path.join(
 
 const lambdaSource = (relative: string) =>
   readFileSync(path.join(neotmsLambdaDir, relative), "utf8");
+
+/**
+ * TypeScript with its comments removed - `sqlCode`'s counterpart, and needed for the same reason.
+ *
+ * The modules in this codebase document what they deliberately do NOT do, by name. NeotmsDashboard
+ * explains at length that it must not key on `job_pm_id` and must not use `CURRENT_DATE`; its header
+ * is the clearest statement of both rules and would fail an assertion that either word is absent. A
+ * test that could not tell a prose mention from a statement would have to be written as the weaker
+ * "this file mentions neither", which is the opposite of what the file should say.
+ *
+ * Strips as text, which is what makes it wrong on a `//` inside a string literal - a URL, say. The
+ * assertions that use it are scoped to modules with no URLs in them, and that limitation is the same
+ * one `sqlCode` carries.
+ */
+const tsCode = (relative: string) =>
+  lambdaSource(relative)
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ");
 
 /** Every `.ts` under a directory, recursively. */
 const walkTs = (dir: string): string[] =>
@@ -1938,6 +1994,300 @@ describe("the pricing-model split", () => {
     expect(code()).not.toMatch(/CREATE (OR REPLACE )?(TRIGGER|FUNCTION)/i);
     expect(code()).not.toMatch(/ADD CONSTRAINT/);
     expect(code()).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
+  });
+});
+
+describe("the 대시보드 aggregate", () => {
+  /*
+   * 대시보드(영업) and 대시보드(PM) answer "how are MY projects doing". Every assertion here guards a
+   * way for that screen to be WRONG rather than broken, which is the whole difficulty: a tile is one
+   * number with no units and no context, so a reader has nothing to check it against. Four of the
+   * five failures below produce a plausible number.
+   */
+  /*
+   * Comments stripped. This module's header is the clearest statement of what it must not do -
+   * `job_pm_id`, `CURRENT_DATE`, a `GROUP BY` - so three of the assertions below would fail against
+   * the prose that exists to prevent them.
+   */
+  const dbops = () => tsCode("dashboard/NeotmsDashboard.dbops.ts");
+
+  /** `frontend/src/...`, as text. Same reason as the currency seed's reader above. */
+  const frontendFile = (...segments: string[]) =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  test("both dashboards key on the PROJECT's owner, never on the job's PM", () => {
+    /*
+     * The mismatch that made this a new endpoint instead of a report filter, pinned.
+     *
+     * `REPORT_DIMENSIONS`/`dimensionFilters` bind `pmId` to `j.job_pm_id` - the PM of the individual
+     * JOB - and db/002_tables.sql says on the column that the two legitimately differ. So a
+     * dashboard built on the report's filter would answer "the jobs I personally run" under a
+     * heading that says "my projects", and a project manager who delegates every job would read
+     * zero. Zero is a number a reader accepts.
+     *
+     * `job_pm_id` is asserted absent from the whole module, not just from the WHERE clause, because
+     * the plausible mistake is adding it to one of the two LATERAL subqueries - which narrows the
+     * money while leaving the counts right, so three tiles agree and the money quietly does not.
+     */
+    const owners = /OWNER_COLUMN[\s\S]*?\n\};/.exec(dbops())?.[0] ?? "";
+    expect(owners).not.toBe("");
+    expect(owners).toContain('sales: "p.prj_mgr_id"');
+    expect(owners).toContain('pm: "p.prj_pm_id"');
+    expect(dbops()).not.toContain("job_pm_id");
+  });
+
+  test("every role in DASHBOARD_ROLES has an owner column", () => {
+    /*
+     * `OWNER_COLUMN[role]` is interpolated into the statement text. A role present in the validated
+     * list and absent from this record does not throw - it puts the string "undefined" into the
+     * WHERE clause, and PostgreSQL answers `42703 column "undefined" does not exist`. That is a
+     * loud failure, so this test is about the list growing, not about injection: a third dashboard
+     * ('내가 등록한 프로젝트') is added by extending `DASHBOARD_ROLES`, and the record is the second
+     * half of that edit.
+     *
+     * The membership check in the manager is what keeps a request string from becoming a column
+     * name, and it is tested by being the only path to this record - there is no `as` value outside
+     * `DASHBOARD_ROLES` that reaches the SQL at all.
+     */
+    const roles = [
+      ...(/DASHBOARD_ROLES[^=]*=\s*\[([^\]]*)\]/.exec(dbops())?.[1] ?? "").matchAll(/"(\w+)"/g),
+    ].map((m) => m[1]!);
+    const columns = [
+      ...(/OWNER_COLUMN[\s\S]*?\n\};/.exec(dbops())?.[0] ?? "").matchAll(/(\w+): "p\.\w+"/g),
+    ].map((m) => m[1]!);
+    expect(roles.length).toBe(2);
+    expect(columns.sort()).toEqual([...roles].sort());
+  });
+
+  test("revenue and cost are collapsed separately, so neither multiplies the other", () => {
+    /*
+     * The fan-out NeotmsReport.dbops.ts describes: revenue lives on `job`, cost on `purchase_order`,
+     * and a project has many of each. Joining both to `project` in one FROM clause multiplies every
+     * job's revenue by the project's PO count.
+     *
+     * It is asserted here because of how it fails. The total does not error, does not go negative
+     * and does not change shape - it is simply larger, by a factor nobody can derive from the
+     * screen. On a project with one PO it is exactly right, which is most projects early on, so the
+     * bug arrives later and looks like growth.
+     *
+     * Two LATERALs and no `GROUP BY`: with no grouping an aggregate over `project` returns exactly
+     * one row, so the query cannot duplicate or drop a project either.
+     */
+    expect([...dbops().matchAll(/LEFT JOIN LATERAL/g)]).toHaveLength(2);
+    expect(dbops()).not.toMatch(/GROUP BY/i);
+  });
+
+  test("the overdue tile asks the database what day it is in Seoul", () => {
+    /*
+     * `CURRENT_DATE` is the server's date and the database runs in UTC, so between midnight and
+     * 09:00 KST it is still yesterday there. The client's `isOverdue` splits the date in
+     * `Asia/Seoul`, so for those nine hours the tile would call a project on time while the list
+     * beside it already paints its due date red.
+     *
+     * Nine hours a day, starting at midnight - which is to say the tile would be wrong every
+     * morning, and right by the time anyone went looking.
+     */
+    expect(dbops()).toContain("(now() AT TIME ZONE 'Asia/Seoul')::date");
+    expect(dbops()).not.toContain("CURRENT_DATE");
+  });
+
+  test("the dashboard is scoped by the same two project columns it filters on", () => {
+    /*
+     * The ownership filter already pins one of `PROJECT_SCOPE_COLUMNS` to the caller, so
+     * `scopeClause` is redundant today - and that is the reason to pin it. The day somebody widens
+     * the ownership filter (a team dashboard, a "my department" view) the scope predicate is the
+     * only thing standing between the widening and a widening of who may be read, and a scope
+     * clause that was never there is not noticed at that moment.
+     */
+    expect(dbops()).toMatch(/scopeClause\(caller, \["p\.prj_mgr_id", "p\.prj_pm_id"\]\)/);
+  });
+
+  test("each dashboard is a path of its own, gated on a menu of its own", () => {
+    /*
+     * The requirement is that a person sees the dashboard matching their position, and the route
+     * table is the only place this API says who may call what - per path. So the two screens are two
+     * paths with one `menu:` each; one path taking `?as=sales|pm` could not express it, because a
+     * gate that varied by query parameter would have to live inside the manager where no audit of
+     * this table can see it.
+     *
+     * The pairing is what is asserted, not merely that both routes exist. Crossing them - the sales
+     * path gated on DASHBOARD_PM - is the failure this guards: it is not a type error, both names are
+     * real, and the symptom is a person holding one grant and reading the other person's book. That
+     * is indistinguishable from working, since the numbers are plausible either way.
+     *
+     * Neither is REPORT, which would be wider: REPORT means "may read company figures", a grant an
+     * organisation can reasonably withhold from a PM who should still see their own book.
+     */
+    const lines = lambdaSource("neotms.handler.ts").split("\n");
+    for (const [role, menu] of [
+      ["sales", "DASHBOARD_SALES"],
+      ["pm", "DASHBOARD_PM"],
+    ]) {
+      const routes = lines.filter((l) => l.includes(`path: "/api/v0/dashboard/${role}"`));
+      expect(routes).toHaveLength(1);
+      expect(routes[0]).toContain(`menu: NeotmsMenu.${menu}`);
+      expect(routes[0]).toContain('method: "GET"');
+    }
+    /*
+     * And the old shape is gone. `?as=` surviving anywhere would mean a second way in, which - being
+     * one path - could only be gated on one of the two menus.
+     */
+    expect(lambdaSource("neotms.handler.ts")).not.toContain('path: "/api/v0/dashboard"');
+    expect(tsCode("dashboard/NeotmsDashboardManager.ts")).not.toContain('queryParams["as"]');
+  });
+
+  test("the client asks for the same two paths the server serves", () => {
+    /*
+     * Two files with no import between them, so nothing makes them agree. A mismatch is a 404 on a
+     * screen that renders its loading state first, so it reads as a slow screen rather than a wrong
+     * URL - and the nav entry, the route and the menu grant all look correct while it happens.
+     */
+    const api = frontendFile("apis", "neotms.api.ts");
+    expect(api).toContain("`/api/v0/dashboard/${role}`");
+    expect(api).not.toMatch(/'\/api\/v0\/dashboard'/);
+  });
+
+  test("the 진행 상태 vocabulary has one definition on the server and matches the client's", () => {
+    /*
+     * `project.prj_state` is unconstrained `text` - no CHECK, no FK, no default - so the counters are
+     * built on literals, and a literal that does not match production does not fail. It reads zero,
+     * and a zero tile is read as good news. `unrecognisedState` is what makes that loud at runtime;
+     * this is what keeps the two lists from drifting in the first place.
+     *
+     * Both halves matter and they fail differently. A second definition on the server drifts
+     * silently. A client list that offers a state the server does not know is worse than drift: the
+     * dropdown writes it, every row saved with it lands in `unrecognisedState`, and the warning
+     * banner then blames the data for what is actually a mismatch between two of our own files.
+     */
+    const offenders = walkTs(neotmsLambdaDir)
+      .map((file) => path.relative(neotmsLambdaDir, file))
+      .filter((relative) => /["'](진행|보류|완료|취소|견적)["']/.test(tsCode(relative)));
+    expect(offenders).toEqual(["NeotmsProjectStates.ts"]);
+
+    const states = tsCode("NeotmsProjectStates.ts");
+    const server = [
+      ...(/PROJECT_STATES: readonly string\[\] = \[([\s\S]*?)\]/.exec(states)?.[1] ?? "").matchAll(
+        /PROJECT_STATE_(\w+)/g,
+      ),
+    ].map((m) => new RegExp(`PROJECT_STATE_${m[1]!} = "([^"]+)"`).exec(states)?.[1]);
+    expect(server).toEqual(["견적", "진행", "완료", "보류", "취소"]);
+
+    const codes = frontendFile("apis", "neotms.codes.ts");
+    const block = /export const PROJECT_STATES[^=]*=\s*\[([\s\S]*?)\n\]/.exec(codes)?.[1] ?? "";
+    expect(block).not.toBe("");
+    /*
+     * The client's list mixes `opt('진행', '진행')` with `opt(PROJECT_STATE_ACTIVE)`, the constant the
+     * dashboard imports, so both forms are read: a quoted first argument, or the exported constant
+     * resolved through its own declaration.
+     */
+    const client = [...block.matchAll(/opt\(\s*(?:'([^']+)'|(\w+))/g)].map(
+      (m) => m[1] ?? new RegExp(`${m[2]!} = '([^']+)'`).exec(codes)?.[1],
+    );
+    expect(client).toEqual(server);
+  });
+
+  test("every nav path has a route, and both dashboards are in both tables", () => {
+    /*
+     * A nav entry whose path has no route is a menu item that lands on "페이지를 찾을 수 없습니다".
+     * The two halves of the dashboard live in two files that do not import each other, so there is
+     * no compile error in either direction - and the forgetful direction is the nav entry, because
+     * that is the file a new screen is added to last.
+     *
+     * Asserted for the whole table rather than only for the dashboard: the hazard is structural, and
+     * the two paths that prompted the test are the proof it can happen.
+     */
+    const nav = [...frontendFile("shared", "permissions.ts").matchAll(/path: '([^']+)'/g)].map(
+      (m) => m[1]!,
+    );
+    const routes = [...frontendFile("routes.tsx").matchAll(/path: '([^']+)'/g)].map((m) => m[1]!);
+    expect(nav).toContain("/dashboard/sales");
+    expect(nav).toContain("/dashboard/pm");
+    for (const item of nav) {
+      // The route table is nested under `/`, so its paths are relative - `projects`, not `/projects`.
+      expect(routes).toContain(item.replace(/^\//, ""));
+    }
+  });
+
+  test("the client gates each dashboard on its own menu, the same way round as the server", () => {
+    /*
+     * `RequireMenu` is not a security boundary - every API re-checks - but it is the difference
+     * between "접근 권한이 없습니다" and a screen that renders empty while three requests 403 behind
+     * it.
+     *
+     * The crossing hazard from the server-side test applies here too, and worse: a client gated on
+     * DASHBOARD_PM for the sales path would show the screen to the wrong holder, then let the server
+     * refuse it - a visible menu whose every request 403s, which is the exact symptom
+     * db/013_dashboard_menus.sql's header warns about and which reads as a deployment fault rather
+     * than as a mistake in this table.
+     */
+    const routes = frontendFile("routes.tsx").replace(/\s+/g, " ");
+    for (const [role, menu] of [
+      ["sales", "DASHBOARD_SALES"],
+      ["pm", "DASHBOARD_PM"],
+    ]) {
+      expect(routes).toMatch(
+        new RegExp(
+          `path: 'dashboard/${role}'[^}]*?RequireMenu menuId=\\{NeotmsMenuId\\.${menu}\\}` +
+            `[^}]*?DashboardView role="${role!}"`,
+        ),
+      );
+    }
+  });
+
+  test("the two dashboards are their own nav group, and it is the one people land on", () => {
+    /*
+     * Three coupled facts, and the first two only work together.
+     *
+     * `HomeRedirect` sends to `readableNav(profile)[0]`, and `readableNav` filters NEOTMS_NAV in
+     * **array** order - not group order. So the rail showing 대시보드 first and a person landing on
+     * their dashboard are two different things, and moving only the group entry changes the rail
+     * while leaving everyone's first screen at 프로젝트. Both are pinned because fixing one and
+     * believing it fixed the other is the natural mistake.
+     *
+     * The third is that neither item is gated on PROJECT any more. While they were, this position was
+     * actively wrong: every account's first screen became 대시보드(영업), so a PM-only user signed in
+     * to four zeros that are true and read as a fault. It is right only because the grants are now
+     * per screen - which is to say, this test fails if somebody reverts the menu split without
+     * reverting the ordering.
+     */
+    const nav = frontendFile("shared", "permissions.ts");
+
+    const groups = [...nav.matchAll(/\{ id: '(\w+)', label: '([^']+)'/g)].map((m) => [m[1], m[2]]);
+    expect(groups[0]).toEqual(["dashboard", "대시보드"]);
+
+    const items = [...nav.matchAll(/menuId: NeotmsMenuId\.(\w+),\s*\n\s*path: '([^']+)'/g)].map(
+      (m) => [m[2], m[1]],
+    );
+    expect(items.slice(0, 2)).toEqual([
+      ["/dashboard/sales", "DASHBOARD_SALES"],
+      ["/dashboard/pm", "DASHBOARD_PM"],
+    ]);
+
+    // Both in the 'dashboard' group, and nothing else in it - a 업무 screen landing there would take
+    // the first slot from the dashboards and become the landing page instead.
+    const inGroup = [...nav.matchAll(/path: '([^']+)',[\s\S]{0,160}?group: 'dashboard'/g)].map(
+      (m) => m[1],
+    );
+    expect(inGroup).toEqual(["/dashboard/sales", "/dashboard/pm"]);
+  });
+
+  test("the client's menu ids are the server's", () => {
+    /*
+     * `NeotmsMenuId` in frontend/src/shared/config.ts mirrors `NeotmsMenu` by hand - there is no
+     * shared package, deliberately, because the frontend is a static bundle and the Lambda is ESM
+     * Node. A value that drifts produces a menu that is absent from the sidebar with no error
+     * anywhere, which is the failure that file's own docstring describes.
+     *
+     * Checked for every id rather than just the two new ones: the drift is structural, and the
+     * dashboards are only the latest proof that ids get added one side at a time.
+     */
+    const client = [
+      ...frontendFile("shared", "config.ts").matchAll(/^\s{2}(\w+): '(\w+)',$/gm),
+    ].map((m) => m[2]);
+    expect([...client].sort()).toEqual([...Object.values(NeotmsMenu)].sort());
   });
 });
 
