@@ -40,7 +40,10 @@ import {
   ReportTotalsOps,
   WorkloadCountsOps,
 } from "../lambdas/neotms/nodejs/neotms/reports/NeotmsReport.dbops.js";
-import type { ReportQuery } from "../lambdas/neotms/nodejs/neotms/neotms.schemas.js";
+import {
+  ReportQuerySchema,
+  type ReportQuery,
+} from "../lambdas/neotms/nodejs/neotms/neotms.schemas.js";
 import type { NeotmsCaller } from "../lambdas/neotms/nodejs/auth/NeotmsAuthGuard.js";
 
 /** A caller restricted to their own rows - the case every scope assertion below is about. */
@@ -62,11 +65,12 @@ const scopedCaller: NeotmsCaller = {
 const everyRowCaller: NeotmsCaller = { ...scopedCaller, seesEveryRow: true };
 
 /**
- * All seven, written out rather than read off `REPORT_DIMENSIONS`.
+ * All nine, written out rather than read off `REPORT_DIMENSIONS`.
  *
  * Deliberate duplication: reading the keys from the map under test would make every loop below
  * vacuous for a dimension somebody deleted. This list is `ReportQuerySchema.groupBy`'s picklist,
- * and a mismatch between the two is itself a failure worth having.
+ * and the first test in "the dimensions" asserts the two agree - so adding a dimension to the
+ * schema without extending the loops below fails here rather than going untested.
  */
 const GROUP_BYS: ReportQuery["groupBy"][] = [
   "date",
@@ -76,6 +80,8 @@ const GROUP_BYS: ReportQuery["groupBy"][] = [
   "corp",
   "category",
   "langPair",
+  "jobType",
+  "jobCategory",
 ];
 
 const query = (overrides: Partial<ReportQuery> = {}): ReportQuery => ({
@@ -303,6 +309,20 @@ describe("the definitions the rollup left behind", () => {
 });
 
 describe("the dimensions", () => {
+  test("every dimension the API accepts is exercised by the loops in this file", () => {
+    /*
+     * `REPORT_DIMENSIONS` is declared `satisfies Record<ReportQuery["groupBy"], Dimension>`, so a
+     * picklist entry with no implementation behind it is already a compile error. What `tsc` cannot
+     * see is THIS file: `GROUP_BYS` is a hand-written copy, and a dimension added to the schema but
+     * not to the copy is simply never asserted about. It would then be free to fan out revenue, drop
+     * the scope predicate, or emit an unbound placeholder, and every test below would still pass.
+     *
+     * Compared as sets, because the picklist's order is the dropdown's and has no bearing on what
+     * needs testing.
+     */
+    expect([...GROUP_BYS].sort()).toEqual([...ReportQuerySchema.entries.groupBy.options].sort());
+  });
+
   test("the grouping key is the expression the key column is selected as", () => {
     // `GROUP BY` drifting from the selected key expression is not a type error and often still
     // runs - PostgreSQL only objects when the result would be ambiguous. Where it runs, the bars
@@ -330,8 +350,27 @@ describe("the dimensions", () => {
       );
     }
     const lang = flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "langPair" })).sql);
-    expect(lang).toContain("COALESCE(NULLIF(j.job_slang, ''), '?')");
-    expect(lang).toContain("COALESCE(NULLIF(j.job_elang, ''), '?')");
+    expect(lang).toContain("COALESCE(NULLIF(jdl.job_slang, ''), '?')");
+    expect(lang).toContain("COALESCE(NULLIF(jdl.job_elang, ''), '?')");
+    /*
+     * And the distinction that '?' only means what it says BECAUSE of this branch.
+     *
+     * Before db/011_job_types.sql every job was assumed to be linguistics, so a MICE job - which
+     * has no language pair to record at all - could only be entered with both languages blank and
+     * landed under '? > ?' next to the translation jobs somebody had forgotten to fill in. One line
+     * on the chart, two unrelated facts, and no way to tell which rows were which.
+     *
+     * So '? > ?' is still exactly "a LINGUISTICS job with nothing filled in", and everything with
+     * no language pair by nature keys as '(비언어)'. A fourth 업무 구분 added later falls into the
+     * same bucket, which is the honest answer until somebody gives it a dimension of its own.
+     */
+    expect(lang).toContain("ELSE '(비언어)' END");
+    expect(lang).toContain("CASE WHEN j.job_type = 'LINGUISTICS'");
+    // The languages come from the detail table now, and via a LEFT JOIN - the columns are gone from
+    // `job` (section 6 of db/011), and an INNER join would drop every blank-language job out of the
+    // breakdown while leaving it in the totals.
+    expect(lang).toContain("LEFT JOIN job_detail_linguistic jdl ON jdl.job_id = j.id");
+    expect(lang).not.toMatch(/j\.job_slang|j\.job_elang/);
     // The date dimension gets no sentinel, and should not: a job with a NULL `job_eday` has already
     // failed the range predicate, because `NULL >= :from` is NULL rather than true. Such a job is
     // revenue that appears in no report for any range - a data-entry gap, visible on the job list.
@@ -360,6 +399,39 @@ describe("the dimensions", () => {
     const sql = flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "category" })).sql);
     expect(sql).toContain("LEFT JOIN sys_code sc ON sc.code = p.prj_field");
     expect(sql).not.toContain("prj_field2");
+  });
+
+  test("업무 구분 keys on the code itself and 업무 분류 on the detail table", () => {
+    /*
+     * Two things worth pinning about the pair db/011_job_types.sql added.
+     *
+     * `jobType` keys on `j.job_type` rather than on a `sys_code.id`, unlike `category`. The code IS
+     * what the column stores and it is UNIQUE, so going through the id would buy nothing and add a
+     * join that could fan a job out. The label still falls back to the raw code, so a 업무 구분
+     * whose `sys_code` row was retired degrades to 'MICE' rather than to '(unassigned)' - which
+     * would be a lie, the column being NOT NULL.
+     *
+     * `jobCategory` reads the non-linguistic detail table, so every linguistics job keys as
+     * '(unassigned)' there. That is correct and not a gap: a translation job has no 업무 분류.
+     *
+     * The aliases matter more than they look. `sc` is already taken by `category`
+     * (`LEFT JOIN sys_code sc ON sc.code = p.prj_field`), and a duplicated alias is a syntax error
+     * on a query nobody runs until somebody picks that dimension from the dropdown.
+     */
+    const byType = flat(ReportBreakdownOps(scopedCaller, query({ groupBy: "jobType" })).sql);
+    expect(byType).toContain("j.job_type AS dim_key");
+    expect(byType).toContain("LEFT JOIN sys_code sct ON sct.code = j.job_type");
+    expect(byType).toContain("COALESCE(NULLIF(sct.code_name, ''), j.job_type) AS dim_label");
+    expect(byType).not.toContain("'(unassigned)'");
+
+    const byCategory = flat(
+      ReportBreakdownOps(scopedCaller, query({ groupBy: "jobCategory" })).sql,
+    );
+    expect(byCategory).toContain(
+      "LEFT JOIN job_detail_non_linguistic jdn ON jdn.job_id = j.id",
+    );
+    expect(byCategory).toContain("LEFT JOIN sys_code sccat ON sccat.code = jdn.job_category");
+    expect(byCategory).toContain("'(unassigned)'");
   });
 
   test("the PM is the job's and the sales manager is the project's", () => {

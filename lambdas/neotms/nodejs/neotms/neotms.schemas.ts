@@ -247,9 +247,29 @@ export const JobCreateSchema = v.object({
   jobName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(500)),
   workCode: settable(CodeSchema),
   jobPmId: settable(IdSchema),
+  /**
+   * 업무 구분 - a `JOBTYPE` code: LINGUISTICS, MICE or IMC. Decides which of the two fields below
+   * applies, and therefore which detail table the job's payload lands in (db/011_job_types.sql).
+   *
+   * Optional, and absent means LINGUISTICS. Not because the type is unimportant but because the
+   * ETL and every pre-existing client omit it, and the column's DEFAULT is the same value - a
+   * required field here would reject exactly the requests that are correct by default.
+   */
+  jobType: settable(CodeSchema),
   jobSlang: settable(CodeSchema),
   /** Target language ("ELANG" = end language). */
   jobElang: settable(CodeSchema),
+  /**
+   * 업무 분류 - a `JOBCAT` code, for a MICE or IMC job. Any of the four is valid on either type;
+   * the business has no type-to-category mapping.
+   *
+   * Deliberately NOT part of a discriminated union with `jobSlang` / `jobElang`. A `v.variant` on
+   * `jobType` would make the type mandatory on every PATCH body and would reject a job that has
+   * neither a language nor a category - and jobs in exactly that state exist by the thousand. The
+   * enforcement that a MICE job cannot carry a language pair is in the database, where it holds for
+   * the ETL too; see the constraint section of db/011_job_types.sql.
+   */
+  jobCategory: settable(CodeSchema),
   jobVolume: settable(VolumeSchema),
   unitCode: settable(CodeSchema),
   /** How the price was arrived at (rate card vs manual override). Value set unconfirmed. */
@@ -310,8 +330,28 @@ export const PurchaseOrderCreateSchema = v.object({
   poPmId: settable(IdSchema),
   /** The vendor being paid. */
   translatorId: settable(IdSchema),
+  /**
+   * 업무 구분 - a `JOBTYPE` code, exactly as on a job, and **independent of the job's own type**.
+   *
+   * Independent because the real cases demand it: a MICE conference buys interpretation (a
+   * LINGUISTICS PO on a MICE job), and a translation project buys event staffing. Tying the PO's
+   * type to its job's would make both unrecordable.
+   *
+   * Absent on create means "the job's type" - the manager reads it from the job rather than
+   * defaulting to LINGUISTICS, because a PO raised against a MICE job is a MICE PO far more often
+   * than not. Absent on update means "leave it alone".
+   */
+  poType: settable(CodeSchema),
   poSlang: settable(CodeSchema),
   poElang: settable(CodeSchema),
+  /**
+   * 업무 분류 - a `JOBCAT` code, for a MICE or IMC purchase order. Any of the four is valid on
+   * either type.
+   *
+   * Not a discriminated union with `poSlang` / `poElang`, for the reasons recorded on
+   * `JobCreateSchema.jobCategory`. The database holds the line; see db/011_job_types.sql.
+   */
+  poCategory: settable(CodeSchema),
   poVolume: settable(VolumeSchema),
   poUnitCode: settable(CodeSchema),
   poPriceSel: settable(text(50)),
@@ -406,8 +446,23 @@ export const ReportQuerySchema = v.object({
   /**
    * What to break the totals down by. One dimension, because a two-dimensional breakdown is a
    * pivot table and belongs in the XLSX export rather than in a JSON list.
+   *
+   * THIS LIST IS ONE OF THREE THAT HAVE TO STAY EQUAL. The keys of `REPORT_DIMENSIONS` in
+   * `reports/NeotmsReport.dbops.ts` are the implementations, and `REPORT_GROUPS` in the frontend's
+   * `apis/neotms.codes.ts` is the dropdown. An entry here with no dimension behind it is a 500; an
+   * entry in the dropdown that is missing here is a 400 on a choice the console itself offered.
    */
-  groupBy: v.picklist(["date", "customer", "pm", "salesManager", "corp", "category", "langPair"]),
+  groupBy: v.picklist([
+    "date",
+    "customer",
+    "pm",
+    "salesManager",
+    "corp",
+    "category",
+    "langPair",
+    "jobType",
+    "jobCategory",
+  ]),
   customerId: v.optional(IdSchema),
   pmId: v.optional(IdSchema),
   salesManagerId: v.optional(IdSchema),

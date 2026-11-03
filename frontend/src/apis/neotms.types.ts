@@ -450,10 +450,19 @@ export interface JobRow {
   workCode: string | null
   jobPmId: string | null
   jobPmName: string | null
-  /** 출발어. */
+  /**
+   * 업무 구분. `JOBTYPE` 코드이고, 이 작업이 언어쌍을 가지는지 업무 분류를 가지는지 결정한다.
+   *
+   * 서버에서 NOT NULL 이라 `null` 로 오지 않지만, 타입은 다른 코드 필드와 같은 모양으로 둔다 —
+   * 이 값만 `string` 으로 두면 `CodeSelect` 와 필터 처리에서 혼자 예외가 된다.
+   */
+  jobType: string | null
+  /** 출발어. 'LINGUISTICS' 작업에만 있다(서버의 `job_detail_linguistic`). */
   jobSlang: string | null
-  /** 도착어. */
+  /** 도착어. 출발어와 같은 조건이다. */
   jobElang: string | null
+  /** 업무 분류. `JOBCAT` 코드. MICE·IMC 작업에만 있다(`job_detail_non_linguistic`). */
+  jobCategory: string | null
   /** 물량. 10진 문자열. */
   jobVolume: string | null
   unitCode: string | null
@@ -485,8 +494,12 @@ export interface JobInput {
   jobName: string
   workCode?: string | null
   jobPmId?: string | null
+  /** 업무 구분. 생략하면 서버가 'LINGUISTICS' 로 둔다(컬럼의 DEFAULT). */
+  jobType?: string | null
   jobSlang?: string | null
   jobElang?: string | null
+  /** 업무 분류. 언어쌍과 둘 중 하나만 보낸다 — 어긋나면 서버가 400 으로 거절한다. */
+  jobCategory?: string | null
   jobVolume?: string | null
   unitCode?: string | null
   jobPriceSel?: string | null
@@ -531,8 +544,17 @@ export interface PurchaseOrderRow {
   poPmName: string | null
   translatorId: string | null
   poTranName: string | null
+  /**
+   * 업무 구분. **작업의 업무 구분과 별개다** — MICE 행사에 통역 발주를 내는 것이 정상이다.
+   *
+   * `poLang`(인쇄용 발주서의 한/영 서식)과 `poCatWord` 등 `poCat*`(CAT 분석 수치)은 전혀 다른
+   * 필드다. 이름이 비슷해서 자주 혼동된다.
+   */
+  poType: string | null
   poSlang: string | null
   poElang: string | null
+  /** 업무 분류. `JOBCAT` 코드. MICE·IMC 발주에만 있다. */
+  poCategory: string | null
   /** 물량. 10진 문자열. */
   poVolume: string | null
   poUnitCode: string | null
@@ -577,8 +599,12 @@ export interface PurchaseOrderInput {
   poCatStotal?: string | null
   poPmId?: string | null
   translatorId?: string | null
+  /** 업무 구분. 등록할 때 생략하면 서버가 **작업의 업무 구분**을 따른다. 그 뒤로는 따로 고친다. */
+  poType?: string | null
   poSlang?: string | null
   poElang?: string | null
+  /** 업무 분류. 언어쌍과 둘 중 하나만 보낸다. */
+  poCategory?: string | null
   poVolume?: string | null
   poUnitCode?: string | null
   poPriceSel?: string | null
@@ -622,6 +648,8 @@ export type ReportGroupBy =
   | 'corp'
   | 'category'
   | 'langPair'
+  | 'jobType'
+  | 'jobCategory'
 
 export interface ReportQuery {
   /** `YYYY-MM-DD`. 필수. */

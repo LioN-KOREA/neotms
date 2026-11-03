@@ -161,6 +161,31 @@ export function useCodeOptions(
   }
 }
 
+/**
+ * 코드 → 이름. **표에서 쓴다.**
+ *
+ * `useCodeOptions` 의 라벨과 다른 두 가지: 코드를 괄호로 덧붙이지 않고, 모르는 코드는 끼워 넣는
+ * 대신 코드 자체를 돌려준다. 드롭다운에서는 "등록되지 않은 값" 이라는 꼬리표가 담당자에게 할 말이
+ * 있지만, 표의 한 칸에서는 자리만 차지한다.
+ *
+ * 이름이 없으면 코드로 떨어지는 것이 중요하다 — 은퇴한 코드가 `online_marketing` 으로 읽히는 것은
+ * 사실의 보고이고, 빈 칸이나 '(없음)' 으로 읽히는 것은 거짓이다. 서버의 리포트 라벨도 같은 순서로
+ * 떨어진다(NeotmsReport.dbops.ts 의 `jobCategory`).
+ *
+ * `useCodes` 를 쓰므로 같은 캐시를 공유한다. 표의 모든 행이 이 훅을 각자 부르지 않도록 화면에서
+ * 한 번 부르고 함수를 내려 주는 쪽이 낫다.
+ */
+export function useCodeNames(domain: CodeDomainId): (code: string | null | undefined) => string {
+  const codesQuery = useCodes()
+  const items = codesQuery.data?.items
+  return (code) => {
+    const value = code?.trim()
+    if (!value) return ''
+    const row = items?.find((r) => r.codeParent === domain && r.code === value)
+    return row?.codeName?.trim() || value
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* 목록                                                                        */
 /* -------------------------------------------------------------------------- */

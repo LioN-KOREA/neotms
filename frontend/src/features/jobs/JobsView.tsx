@@ -1,8 +1,8 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
-import { useJobs, useProfile } from '@/apis/queries/neotms.query'
+import { useCodeNames, useJobs, useProfile } from '@/apis/queries/neotms.query'
 import { useDeleteJob } from '@/apis/queries/neotms.mutation'
-import { CODE_DOMAIN, codeOptions, JOB_STATES } from '@/apis/neotms.codes'
+import { CODE_DOMAIN, codeOptions, isLinguistic, JOB_STATES } from '@/apis/neotms.codes'
 import type { JobRow } from '@/apis/neotms.types'
 import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
@@ -36,7 +36,14 @@ import { JobFormModal } from './JobFormModal'
  * 납기가 지난 것은 당연하고, 그걸 칠하면 목록 절반이 붉어져서 정말 늦은 건이 묻힌다.
  */
 
-const FILTER_KEYS = ['q', 'state', 'workCode', 'slang', 'elang'] as const
+/*
+ * 걸러낼 수 있는 조건들. URL 에 그대로 실린다(`useUrlFilters`).
+ *
+ * `jobType` 이 들어오면서 나머지 중 셋의 쓰임이 갈렸다 — 언어 작업에는 출발어·도착어, 비언어 작업에는
+ * 업무 분류다. 셋을 다 남겨 두는 이유는 URL 이다: MICE 로 좁혀 둔 화면의 주소를 그대로 복사해 둔
+ * 사람이 있을 수 있고, 조건 하나가 목록에서 빠지면 그 주소는 조용히 다른 결과를 돌려준다.
+ */
+const FILTER_KEYS = ['q', 'state', 'workCode', 'jobType', 'jobCategory', 'slang', 'elang'] as const
 
 export function JobsView() {
   const { data: profile } = useProfile()
@@ -46,6 +53,8 @@ export function JobsView() {
     q: filters.q,
     state: filters.state,
     workCode: filters.workCode,
+    jobType: filters.jobType,
+    jobCategory: filters.jobCategory,
     slang: filters.slang,
     elang: filters.elang,
   })
@@ -57,10 +66,27 @@ export function JobsView() {
     q: filters.q || undefined,
     state: filters.state || undefined,
     workCode: filters.workCode || undefined,
+    jobType: filters.jobType || undefined,
+    jobCategory: filters.jobCategory || undefined,
     slang: filters.slang || undefined,
     elang: filters.elang || undefined,
   })
   const deleteJob = useDeleteJob()
+
+  /** 업무 분류 코드를 이름으로. 표의 한 칸에서 쓰므로 행마다 부르지 않고 여기서 한 번 받는다. */
+  const categoryName = useCodeNames(CODE_DOMAIN.JOBCAT)
+
+  /**
+   * 걸러내기 칸이 언어쌍을 물을지 업무 분류를 물을지.
+   *
+   * 폼과 달리 **'전체' 일 때는 둘 다 보여 준다.** 폼에서는 작업 하나의 업무 구분이 이미 정해져
+   * 있으므로 쓰지 않는 칸을 숨기는 것이 맞지만, 여기서 구분을 고르지 않은 상태는 "모든 작업" 이고
+   * 그 목록에는 두 종류가 섞여 있다 — 그때 업무 분류 칸을 숨기면 '행사운영' 으로 한 번에 좁힐 수
+   * 없게 된다.
+   */
+  const typeFilter = draft.jobType.trim()
+  const showLangFilters = typeFilter === '' || isLinguistic(typeFilter)
+  const showCategoryFilter = typeFilter === '' || !isLinguistic(typeFilter)
 
   const rows = useMemo(() => jobsQuery.data?.pages.flatMap((p) => p.items) ?? [], [jobsQuery.data])
 
@@ -77,8 +103,37 @@ export function JobsView() {
   }
 
   const onReset = () => {
-    setDraft({ q: '', state: '', workCode: '', slang: '', elang: '' })
+    setDraft({
+      q: '',
+      state: '',
+      workCode: '',
+      jobType: '',
+      jobCategory: '',
+      slang: '',
+      elang: '',
+    })
     resetFilters()
+  }
+
+  /**
+   * 업무 구분을 바꾸면 쓰지 않게 된 조건을 **같이 비운다.**
+   *
+   * 비우지 않으면 숨겨진 조건이 계속 걸린다. MICE 를 고른 뒤 조회를 누르면 보이지 않는 출발어까지
+   * 함께 나가고, 서버는 두 조건을 교집합으로 받으므로 결과가 0건이 된다 — 화면에는 "조건에 맞는
+   * 작업이 없습니다" 만 남고, 걸려 있는 조건은 어디에도 보이지 않는다.
+   */
+  const onTypeChange = (value: string) => {
+    setDraft((p) => {
+      const next = { ...p, jobType: value }
+      // '전체' 는 아무것도 비우지 않는다 — 두 칸이 모두 다시 보이므로 걸린 조건이 숨지 않는다.
+      if (value.trim() === '') return next
+      if (isLinguistic(value)) next.jobCategory = ''
+      else {
+        next.slang = ''
+        next.elang = ''
+      }
+      return next
+    })
   }
 
   const onDelete = async (row: JobRow) => {
@@ -180,37 +235,78 @@ export function JobsView() {
           </div>
 
           <div className={ui.filterField}>
-            <label className={ui.label} htmlFor="jf-slang">
-              출발어
+            <label className={ui.label} htmlFor="jf-type">
+              업무 구분
             </label>
             {/*
-             * 자유 입력이었다. 필터에서 자유 입력은 저장을 깨뜨리지는 않지만 조용히 **0건**을
-             * 돌려준다 — '영어' 로 저장된 작업을 'English' 로 찾으면 결과가 없고, 화면은
-             * "검색한 작업이 없습니다" 라고만 말한다. 찾는 사람은 작업이 없다고 결론 낸다.
+             * 이 화면에서 MICE·IMC 작업을 **찾을 수 있게 하는 칸이다.**
+             *
+             * 전에는 비언어 작업이 언어를 비워 둔 번역 작업으로 들어갔으니, 그걸 골라낼 조건이
+             * 아예 없었다 — 언어가 빈 작업을 찾는 조건도 없고, 있었다 해도 그 결과에는 언어를
+             * 적지 않은 번역 작업이 함께 걸렸다.
              */}
             <CodeSelect
-              id="jf-slang"
-              domain={CODE_DOMAIN.LANG}
-              value={draft.slang}
-              onChange={(v) => setDraft((p) => ({ ...p, slang: v }))}
+              id="jf-type"
+              domain={CODE_DOMAIN.JOBTYPE}
+              value={draft.jobType}
+              onChange={onTypeChange}
               placeholder="전체"
               silent
             />
           </div>
 
-          <div className={ui.filterField}>
-            <label className={ui.label} htmlFor="jf-elang">
-              도착어
-            </label>
-            <CodeSelect
-              id="jf-elang"
-              domain={CODE_DOMAIN.LANG}
-              value={draft.elang}
-              onChange={(v) => setDraft((p) => ({ ...p, elang: v }))}
-              placeholder="전체"
-              silent
-            />
-          </div>
+          {showCategoryFilter ? (
+            <div className={ui.filterField}>
+              <label className={ui.label} htmlFor="jf-category">
+                업무 분류
+              </label>
+              <CodeSelect
+                id="jf-category"
+                domain={CODE_DOMAIN.JOBCAT}
+                value={draft.jobCategory}
+                onChange={(v) => setDraft((p) => ({ ...p, jobCategory: v }))}
+                placeholder="전체"
+                silent
+              />
+            </div>
+          ) : null}
+
+          {showLangFilters ? (
+            <>
+              <div className={ui.filterField}>
+                <label className={ui.label} htmlFor="jf-slang">
+                  출발어
+                </label>
+                {/*
+                 * 자유 입력이었다. 필터에서 자유 입력은 저장을 깨뜨리지는 않지만 조용히 **0건**을
+                 * 돌려준다 — '영어' 로 저장된 작업을 'English' 로 찾으면 결과가 없고, 화면은
+                 * "검색한 작업이 없습니다" 라고만 말한다. 찾는 사람은 작업이 없다고 결론 낸다.
+                 */}
+                <CodeSelect
+                  id="jf-slang"
+                  domain={CODE_DOMAIN.LANG}
+                  value={draft.slang}
+                  onChange={(v) => setDraft((p) => ({ ...p, slang: v }))}
+                  placeholder="전체"
+                  silent
+                />
+              </div>
+
+              <div className={ui.filterField}>
+                <label className={ui.label} htmlFor="jf-elang">
+                  도착어
+                </label>
+                <CodeSelect
+                  id="jf-elang"
+                  domain={CODE_DOMAIN.LANG}
+                  value={draft.elang}
+                  onChange={(v) => setDraft((p) => ({ ...p, elang: v }))}
+                  placeholder="전체"
+                  silent
+                />
+              </div>
+            </>
+          ) : null}
 
           <div className={ui.spacer} />
 
@@ -239,10 +335,16 @@ export function JobsView() {
                  * 자기가 무엇을 보고 있는지 걸러내기 칸을 다시 봐야 확인할 수 있었다.
                  */}
                 <th>종류</th>
-                <th>언어 페어</th>
+                {/*
+                 * 한 열이 업무 구분에 따라 언어쌍 또는 업무 분류를 보여 준다.
+                 *
+                 * 열을 둘로 나누지 않는 이유: 어느 행이든 둘 중 하나만 값이 있으므로, 나누면
+                 * 목록 전체에 반드시 빈 열이 하나 생긴다. 표가 넓어지는 대가로 얻는 것이 없다.
+                 */}
+                <th>언어 페어 · 업무 분류</th>
                 <th>물량 · 단가</th>
                 <th>매출(원화)</th>
-                <th>납기</th>
+                <th>마감일</th>
                 <th>상태</th>
                 <th>수정</th>
               </tr>
@@ -274,8 +376,15 @@ export function JobsView() {
                   <td>
                     <KindTag value={row.workCode} />
                   </td>
+                  {/*
+                   * 비언어 작업에는 업무 구분까지 같이 적는다. 업무 분류만으로는 MICE 의 '행사운영'
+                   * 인지 IMC 의 '행사운영' 인지 알 수 없고, 그 둘은 다른 사업이다.
+                   */}
                   <td className={ui.cellMuted}>
-                    {[row.jobSlang, row.jobElang].filter(Boolean).join(' → ') || '-'}
+                    {isLinguistic(row.jobType)
+                      ? [row.jobSlang, row.jobElang].filter(Boolean).join(' → ') || '-'
+                      : [row.jobType, categoryName(row.jobCategory)].filter(Boolean).join(' · ') ||
+                        '-'}
                   </td>
                   <td className={ui.cellMuted}>
                     <div>

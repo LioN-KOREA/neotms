@@ -108,6 +108,39 @@ export function updateFragments<T>(
   };
 }
 
+/**
+ * The four pieces of an `INSERT ... ON CONFLICT DO UPDATE` over the provided columns only.
+ *
+ * Written for the job and PO detail tables (db/011_job_types.sql), where the row may or may not
+ * already exist and the caller has no cheap way to know: a linguistics job created before anyone
+ * filled its languages in has no detail row, and the same PATCH that first supplies a language must
+ * create one. An upsert answers both cases in one statement; an exists-check-then-branch answers
+ * them in two round trips and a race.
+ *
+ * `assignments` covers the SAME columns as `columns`, which is what preserves PATCH semantics
+ * through the conflict: a body naming only the source language overwrites only `job_slang` and
+ * leaves a `job_elang` already on the row alone. Listing every column instead would clear the
+ * target language on a request that never mentioned it - the one failure mode `undefined` vs `null`
+ * exists to prevent.
+ *
+ * `columns` is empty when the body named none of them. The caller must not emit a statement then:
+ * `INSERT INTO t (key) VALUES (:key) ON CONFLICT DO UPDATE SET` is a syntax error, and more to the
+ * point an empty detail row is not wanted - a job with no language and no category is correct and
+ * should carry no detail row at all.
+ */
+export function upsertFragments<T>(
+  specs: readonly FieldSpec<T>[],
+  input: T,
+): { columns: string[]; placeholders: string[]; assignments: string[]; parameters: SqlParameter[] } {
+  const present = provided(specs, input);
+  return {
+    columns: present.map((spec) => spec.column),
+    placeholders: present.map((spec) => `:${spec.column}`),
+    assignments: present.map((spec) => `${spec.column} = EXCLUDED.${spec.column}`),
+    parameters: parametersFor(present, input),
+  };
+}
+
 /* -------------------------------------------------------------------------- */
 /* Denormalised name columns                                                  */
 /* -------------------------------------------------------------------------- */

@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import { useCreateJob, useUpdateJob } from '@/apis/queries/neotms.mutation'
-import { CODE_DOMAIN, codeOptions, COIN_CODES, JOB_STATES } from '@/apis/neotms.codes'
+import {
+  CODE_DOMAIN,
+  codeOptions,
+  COIN_CODES,
+  isLinguistic,
+  JOB_STATES,
+  JOB_TYPE_LINGUISTIC,
+} from '@/apis/neotms.codes'
 import type { JobInput, JobRow, JobUpdate } from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
@@ -73,8 +80,10 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
   const [form, setForm] = useState({
     jobName: job?.jobName ?? '',
     workCode: job?.workCode ?? '번역',
+    jobType: job?.jobType ?? JOB_TYPE_LINGUISTIC,
     jobSlang: job?.jobSlang ?? '',
     jobElang: job?.jobElang ?? '',
+    jobCategory: job?.jobCategory ?? '',
     jobVolume: job?.jobVolume ?? '',
     unitCode: job?.unitCode ?? '단어',
     jobPrice: job?.jobPrice ?? '',
@@ -124,6 +133,26 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
         next.jobPriceSum = sum ?? ''
         next.jobPriceKsum = ksum ?? ''
       }
+      /*
+       * 업무 구분을 바꾸면 **안 쓰는 쪽을 여기서 비운다.** 이펙트로 미루면 안 되는 자리다.
+       *
+       * 숨겨진 입력란의 값은 화면에 없어도 `form` 에 남아 있고, `onSubmit` 은 그 `form` 을 읽는다.
+       * 이펙트는 렌더가 끝난 뒤에 돌므로, 구분을 바꾸고 바로 저장을 누르면 이미 보이지 않는
+       * 출발어가 그대로 실려 나간다 — 그러면 서버가 400(업무 구분 불일치)으로 거절하거나, 더 나쁘게는
+       * MICE 작업에 언어쌍이 붙은 상태로 남는다. 원인이 되는 입력이 바뀌는 그 자리에서 비우면
+       * 중간 상태가 아예 존재하지 않는다.
+       *
+       * 비우는 쪽만 건드린다. MICE 로 바꿨다가 다시 언어로 되돌리면 출발어는 비어 있는데, 그게
+       * 맞다 — 서버도 구분이 바뀔 때 반대쪽 상세 행을 지우므로, 되살아나는 것처럼 보이는 값이
+       * 실제로는 저장되지 않은 값이 되는 상황을 만들지 않는다.
+       */
+      if (key === 'jobType') {
+        if (isLinguistic(next.jobType)) next.jobCategory = ''
+        else {
+          next.jobSlang = ''
+          next.jobElang = ''
+        }
+      }
       return next
     })
   }
@@ -142,14 +171,28 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
   const name = form.jobName.trim()
   const canSave = name.length > 0 && !!project && !pending
 
+  /** 이 작업이 언어쌍을 가지는지. 입력란과 저장 본문이 모두 이 한 값에서 갈린다. */
+  const linguistic = isLinguistic(form.jobType)
+
   const onSubmit = async () => {
     if (!project || name.length === 0) return
+
+    /*
+     * 업무 구분에 맞는 쪽만 보낸다.
+     *
+     * 반대쪽을 `null` 로 보내도 서버는 무시한다(상세 테이블이 다르므로 그 컬럼이 아예 없다).
+     * 그래도 보내지 않는 쪽이 낫다 — 요청 본문만 보고도 이 작업이 무엇인지 읽히고, 언젠가 서버가
+     * 모르는 필드를 거절하게 되더라도 그대로 통한다.
+     */
+    const detail: Partial<JobUpdate> = linguistic
+      ? { jobSlang: form.jobSlang.trim() || null, jobElang: form.jobElang.trim() || null }
+      : { jobCategory: form.jobCategory.trim() || null }
 
     const common: JobUpdate = {
       jobName: name,
       workCode: form.workCode.trim() || null,
-      jobSlang: form.jobSlang.trim() || null,
-      jobElang: form.jobElang.trim() || null,
+      jobType: form.jobType.trim() || null,
+      ...detail,
       jobVolume: toDecimalInput(form.jobVolume),
       unitCode: form.unitCode.trim() || null,
       jobPrice: toDecimalInput(form.jobPrice),
@@ -291,37 +334,77 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
         </div>
 
         {/*
-         * 언어쌍. 자유 입력이었고, 그래서 **어떤 값도 저장되지 않았다.**
+         * 업무 구분. 아래 두 칸이 무엇이 될지를 이 값이 결정한다.
          *
-         * `job_slang`·`job_elang` 은 `sys_code (code)` 를 참조하는 8개 언어 컬럼 중 둘이다.
-         * 입력란에 "한국어" 라는 placeholder 를 띄워 두고 그대로 받았으니, 코드 테이블이 비어
-         * 있던 동안에는 작업 등록 자체가 불가능했다. 리포트의 언어쌍별 집계가 이 값으로
-         * 묶이므로, 드롭다운이 된 것은 집계 품질에도 직접 영향이 있다 — 자유 입력에서는
-         * '영어' 와 '영어 ' 와 'English' 가 서로 다른 언어쌍이 된다.
+         * 언어쌍 입력란 위에 두는 것은 순서 이상의 의미가 있다 — 담당자는 작업을 등록할 때 그것이
+         * 번역인지 행사인지부터 알고 있고, 그걸 먼저 고르게 하면 쓰지 않을 칸을 보지 않는다.
+         * MICE 작업을 출발어·도착어를 비워 둔 번역 작업으로 기록하던 것이 이 변경 전의 방식이었고,
+         * 그렇게 들어간 행은 '담당자가 언어를 안 적은 번역 작업' 과 구별되지 않았다.
          */}
         <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-slang">
-            출발어
+          <label className={ui.label} htmlFor="job-type">
+            업무 구분
           </label>
           <CodeSelect
-            id="job-slang"
-            domain={CODE_DOMAIN.LANG}
-            value={form.jobSlang}
-            onChange={(v) => set('jobSlang', v)}
+            id="job-type"
+            domain={CODE_DOMAIN.JOBTYPE}
+            value={form.jobType}
+            onChange={(v) => set('jobType', v)}
           />
         </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-elang">
-            도착어
-          </label>
-          <CodeSelect
-            id="job-elang"
-            domain={CODE_DOMAIN.LANG}
-            value={form.jobElang}
-            onChange={(v) => set('jobElang', v)}
-          />
-        </div>
+        {/*
+         * 언어쌍, 혹은 업무 분류. 둘 중 하나만 그린다.
+         *
+         * 언어쌍은 자유 입력이었고, 그래서 **어떤 값도 저장되지 않았다.** `job_slang`·`job_elang` 은
+         * `sys_code (code)` 를 참조하는 언어 컬럼이다. 입력란에 "한국어" 라는 placeholder 를 띄워
+         * 두고 그대로 받았으니, 코드 테이블이 비어 있던 동안에는 작업 등록 자체가 불가능했다.
+         * 리포트의 언어쌍별 집계가 이 값으로 묶이므로 드롭다운이 된 것은 집계 품질에도 직접 영향이
+         * 있다 — 자유 입력에서는 '영어' 와 '영어 ' 와 'English' 가 서로 다른 언어쌍이 된다.
+         *
+         * 어느 쪽도 필수가 아니다. 언어를 비워 둔 작업이 이미 수천 건 있고, 업무 분류를 아직 모르는
+         * MICE 작업도 저장될 수 있어야 한다 — DB 의 제약은 "틀린 조합을 금지" 할 뿐 "값을 요구" 하지
+         * 않는다(db/011_job_types.sql).
+         */}
+        {linguistic ? (
+          <>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="job-slang">
+                출발어
+              </label>
+              <CodeSelect
+                id="job-slang"
+                domain={CODE_DOMAIN.LANG}
+                value={form.jobSlang}
+                onChange={(v) => set('jobSlang', v)}
+              />
+            </div>
+
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="job-elang">
+                도착어
+              </label>
+              <CodeSelect
+                id="job-elang"
+                domain={CODE_DOMAIN.LANG}
+                value={form.jobElang}
+                onChange={(v) => set('jobElang', v)}
+              />
+            </div>
+          </>
+        ) : (
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-category">
+              업무 분류
+            </label>
+            <CodeSelect
+              id="job-category"
+              domain={CODE_DOMAIN.JOBCAT}
+              value={form.jobCategory}
+              onChange={(v) => set('jobCategory', v)}
+            />
+          </div>
+        )}
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="job-volume">

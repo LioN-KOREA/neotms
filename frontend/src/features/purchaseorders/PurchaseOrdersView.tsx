@@ -213,7 +213,7 @@ export function PurchaseOrdersView() {
                 <th>번역가</th>
                 <th>물량 · 단가</th>
                 <th>원가(원화)</th>
-                <th>납기</th>
+                <th>마감일</th>
                 <th>진행</th>
                 <th>지급</th>
                 <th />

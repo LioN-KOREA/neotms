@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import {
+  useCodeNames,
   useJobs,
   useProfile,
   useProject,
   usePurchaseOrders,
 } from '@/apis/queries/neotms.query'
+import { CODE_DOMAIN, isLinguistic } from '@/apis/neotms.codes'
 import type { JobRow, PurchaseOrderRow } from '@/apis/neotms.types'
 import { DETAIL_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { mayDo } from '@/shared/permissions'
@@ -51,6 +53,9 @@ export function ProjectDetailView() {
   const projectQuery = useProject(id || null)
   const jobsQuery = useJobs({ limit: DETAIL_PAGE_SIZE, projectId: id }, !!id)
   const posQuery = usePurchaseOrders({ limit: DETAIL_PAGE_SIZE, projectId: id }, !!id)
+
+  /** 업무 분류 코드를 이름으로. 작업 표에서 쓴다 — 작업 목록 화면과 같은 처리다. */
+  const categoryName = useCodeNames(CODE_DOMAIN.JOBCAT)
 
   const [editingProject, setEditingProject] = useState(false)
   const [editingJob, setEditingJob] = useState<JobRow | null | undefined>(undefined)
@@ -315,7 +320,8 @@ export function ProjectDetailView() {
                   <tr>
                     <th>JOB코드</th>
                     <th>작업명</th>
-                    <th>언어 페어</th>
+                    {/* 작업 목록 화면과 같은 한 열이다 — JobsView 의 같은 열 주석 참고. */}
+                    <th>언어 페어 · 업무 분류</th>
                     <th>물량 · 단가</th>
                     <th>매출(원화)</th>
                     <th>PO</th>
@@ -339,7 +345,11 @@ export function ProjectDetailView() {
                         <td className={ui.cellMono}>{job.jobCode}</td>
                         <td>{job.jobName || '(이름 없음)'}</td>
                         <td className={ui.cellMuted}>
-                          {[job.jobSlang, job.jobElang].filter(Boolean).join(' → ') || '-'}
+                          {isLinguistic(job.jobType)
+                            ? [job.jobSlang, job.jobElang].filter(Boolean).join(' → ') || '-'
+                            : [job.jobType, categoryName(job.jobCategory)]
+                                .filter(Boolean)
+                                .join(' · ') || '-'}
                         </td>
                         <td className={ui.cellMuted}>
                           <div>

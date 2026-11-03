@@ -74,8 +74,7 @@ export function CustomersView() {
       {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
       <div className={ui.pageBar}>
         <p className={ui.pageNote}>
-          프로젝트의 매출이 귀속되는 단위입니다. 기본 통화와 기본 단가는 작업 등록 때{' '}
-          <b>초기값</b>으로 쓰입니다.
+          고객사 목록입니다. 고객사 정보를 조회하고, 고객사별 단가 및 요구사항 (사용하는 프로그램 종류 등)을 파악할 수 있습니다.
         </p>
         {mayCreate ? (
           <button

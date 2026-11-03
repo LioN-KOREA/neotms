@@ -3,11 +3,14 @@ import {
   useCreatePurchaseOrder,
   useUpdatePurchaseOrder,
 } from '@/apis/queries/neotms.mutation'
+import { useJob } from '@/apis/queries/neotms.query'
 import {
   CODE_DOMAIN,
   codeOptions,
   COIN_CODES,
   INVOICE_STATES,
+  isLinguistic,
+  JOB_TYPE_LINGUISTIC,
   MONEY_STATES,
   PO_STATES,
 } from '@/apis/neotms.codes'
@@ -51,6 +54,13 @@ interface Props {
  * `JobFormModal` 의 주석과 같다 — 계산은 `BigInt` 10진 연산으로 하고, 한 번 직접 고친 합계는
  * 그 뒤로 자동 갱신하지 않는다.
  *
+ * ## 업무 구분이 언어쌍인지 업무 분류인지를 가른다
+ *
+ * 발주의 업무 구분은 **작업의 것과 별개다**. 등록할 때 작업에서 가져와 보여 주지만 거기서
+ * 고정되지 않는다 — MICE 행사에 통역 발주를 내는 것이 정상이기 때문이다. 언어 및 통번역이면
+ * 출발어·도착어를, 그 밖이면 업무 분류를 받는다. 한쪽을 받는 동안 다른 쪽은 `set()` 안에서
+ * 비워진다.
+ *
  * ## CAT 분석값은 사용 여부를 켤 때만 보인다
  *
  * `poCatWord`·`poCatMid`·`poCatStotal` 은 CAT 툴 분석 결과를 옮겨 적는 칸이다. 쓰지 않는
@@ -91,8 +101,13 @@ export function PurchaseOrderFormModal({
     poCatWord: po?.poCatWord ?? '',
     poCatMid: po?.poCatMid ?? '',
     poCatStotal: po?.poCatStotal ?? '',
+    /**
+     * 업무 구분. 등록할 때는 **비워 둔 채 시작한다** — 아래 `inheritedType` 주석 참고.
+     */
+    poType: po?.poType ?? '',
     poSlang: po?.poSlang ?? '',
     poElang: po?.poElang ?? '',
+    poCategory: po?.poCategory ?? '',
     poVolume: po?.poVolume ?? '',
     poUnitCode: po?.poUnitCode ?? '단어',
     poPrice: po?.poPrice ?? '',
@@ -117,6 +132,27 @@ export function PurchaseOrderFormModal({
   })
   const [dirty, setDirty] = useState(false)
 
+  /**
+   * 등록할 때 업무 구분의 출발점이 되는 **작업의** 업무 구분.
+   *
+   * 발주의 업무 구분은 작업의 것과 별개다 — MICE 행사에 통역 발주를 내는 것이 정상이다. 그래서
+   * 고정이 아니라 **출발점**이고, 담당자가 바꾸면 그대로 바뀐다. 서버도 같은 규칙으로 동작하므로
+   * (등록 시 `input.poType ?? job.jobType`), 이 조회가 실패하거나 아직 끝나지 않았더라도 결론은
+   * 달라지지 않는다. 그래서 담당자가 손대지 않은 업무 구분은 **보내지 않는다** — 서버가 작업에서
+   * 가져오게 두는 것이, 여기서 추측한 값을 보내는 것보다 언제나 정확하다.
+   *
+   * 조회가 필요한 이유는 입력란 쪽이다: 이 발주가 언어쌍을 받을지 업무 분류를 받을지 지금
+   * 결정해야 하는데, `JobPicker` 가 주는 것은 id·이름뿐이다.
+   *
+   * 수정에서는 조회하지 않는다. 발주 자신의 업무 구분이 이미 있고, 그것이 작업의 것보다 우선한다.
+   */
+  const jobQuery = useJob(!isEdit && job ? job.id : null)
+  const inheritedType = jobQuery.data?.jobType?.trim() || JOB_TYPE_LINGUISTIC
+
+  /** 지금 이 발주의 업무 구분. 입력란과 저장 본문이 모두 이 값에서 갈린다. */
+  const poType = form.poType.trim() || inheritedType
+  const linguistic = isLinguistic(poType)
+
   /** 저장된 합계는 손으로 조정된 값일 수 있다 — `JobFormModal` 과 같은 판단. */
   const [sumEdited, setSumEdited] = useState(isEdit)
 
@@ -137,6 +173,14 @@ export function PurchaseOrderFormModal({
         next.poPriceSum = sum ?? ''
         next.poPriceKsum = ksum ?? ''
       }
+      // 업무 구분을 바꾸면 쓰지 않게 된 쪽을 여기서 비운다 — JobFormModal 의 같은 자리 주석 참고.
+      if (key === 'poType') {
+        if (isLinguistic(next.poType || inheritedType)) next.poCategory = ''
+        else {
+          next.poSlang = ''
+          next.poElang = ''
+        }
+      }
       return next
     })
   }
@@ -152,10 +196,35 @@ export function PurchaseOrderFormModal({
   }
 
   const name = form.poName.trim()
-  const canSave = name.length > 0 && !!job && !pending
+  /*
+   * 작업 조회가 끝나기 전에는 저장할 수 없다.
+   *
+   * 조회 전의 `inheritedType` 은 `LINGUISTICS` 다. 그 상태로 저장하면 MICE 작업의 발주에
+   * 언어쌍을 담아 보내게 되고, 서버는 업무 구분이 `LINGUISTICS` 가 아니라서 그 언어쌍을
+   * **조용히 버린다**(언어 상세 테이블에 쓸 일이 없으므로 문장 자체가 만들어지지 않는다).
+   * 화면은 저장 성공을 알리고 값은 사라지는 조합이라, 막는 쪽이 맞다.
+   */
+  const canSave = name.length > 0 && !!job && !pending && !jobQuery.isLoading
 
   const onSubmit = async () => {
     if (!job || name.length === 0) return
+
+    /*
+     * 업무 구분에 맞는 쪽만 보낸다. 반대쪽을 같이 보내면 서버가 거절하거나(23514·23503) 버린다.
+     */
+    const detail: Partial<PurchaseOrderUpdate> = linguistic
+      ? { poSlang: form.poSlang.trim() || null, poElang: form.poElang.trim() || null }
+      : { poCategory: form.poCategory.trim() || null }
+
+    /*
+     * 담당자가 손대지 않은 업무 구분은 **보내지 않는다** — `inheritedType` 주석 참고.
+     *
+     * 빈 문자열이나 `null` 을 보내지 않는 것도 중요하다. `po_type` 은 NOT NULL 이고 수정
+     * 경로는 `null` 을 "지워라" 로 해석하므로, 보냈다면 23502 로 실패한다.
+     */
+    const typed: Partial<PurchaseOrderUpdate> = form.poType.trim()
+      ? { poType: form.poType.trim() }
+      : {}
 
     const common: PurchaseOrderUpdate = {
       poName: name,
@@ -171,8 +240,8 @@ export function PurchaseOrderFormModal({
       poCatMid: form.poCatUse ? toDecimalInput(form.poCatMid) : null,
       poCatStotal: form.poCatUse ? toDecimalInput(form.poCatStotal) : null,
       translatorId: translator?.id ?? null,
-      poSlang: form.poSlang.trim() || null,
-      poElang: form.poElang.trim() || null,
+      ...typed,
+      ...detail,
       poVolume: toDecimalInput(form.poVolume),
       poUnitCode: form.poUnitCode.trim() || null,
       poPrice: toDecimalInput(form.poPrice),
@@ -334,36 +403,78 @@ export function PurchaseOrderFormModal({
         </div>
 
         {/*
-         * 자유 입력이었다. `po_slang`·`po_elang` 도 `sys_code (code)` 참조이므로 작업 쪽과 같은
-         * 이유로 드롭다운이어야 한다(JobFormModal 의 같은 자리 주석 참고).
+         * 업무 구분이 아래 칸들을 결정하므로 먼저 온다.
+         *
+         * 작업에서 가져온 값이 기본으로 보이지만(`value={poType}`), 고정이 아니다 — MICE 행사에
+         * 통역 발주를 내는 것이 정상이고, 그때 담당자는 여기서 '언어 및 통번역' 으로 바꾼다.
+         */}
+        <div className={ui.field}>
+          <label className={ui.label} htmlFor="po-type">
+            업무 구분
+          </label>
+          <CodeSelect
+            id="po-type"
+            domain={CODE_DOMAIN.JOBTYPE}
+            value={poType}
+            onChange={(v) => set('poType', v)}
+          />
+          {!isEdit && form.poType.trim() === '' ? (
+            <span className={ui.hint}>작업의 업무 구분을 따릅니다. 바꿀 수 있습니다.</span>
+          ) : null}
+        </div>
+
+        {/*
+         * 언어쌍과 업무 분류는 둘 중 하나만 받는다 — JobFormModal 의 같은 자리 주석 참고.
+         *
+         * 언어쌍 두 칸은 자유 입력이었다. `po_slang`·`po_elang` 도 `sys_code (code)` 참조이므로
+         * 작업 쪽과 같은 이유로 드롭다운이어야 한다.
          *
          * 발주의 언어쌍은 보통 작업의 언어쌍과 같지만 자동으로 채우지 않는다 — 한 작업을 두
          * 언어로 쪼개어 발주하는 경우가 있고, 그때 자동 입력된 값은 **맞아 보이기 때문에**
-         * 아무도 고치지 않는다.
+         * 아무도 고치지 않는다. (업무 구분은 반대다. 그쪽은 둘 중 어느 칸을 보여 줄지를
+         * 결정하므로 비워 둘 수가 없다.)
+         *
+         * 어느 쪽도 필수가 아니다. 언어쌍이 비어 있는 발주가 이미 수천 건 있다.
          */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-slang">
-            출발어
-          </label>
-          <CodeSelect
-            id="po-slang"
-            domain={CODE_DOMAIN.LANG}
-            value={form.poSlang}
-            onChange={(v) => set('poSlang', v)}
-          />
-        </div>
+        {linguistic ? (
+          <>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="po-slang">
+                출발어
+              </label>
+              <CodeSelect
+                id="po-slang"
+                domain={CODE_DOMAIN.LANG}
+                value={form.poSlang}
+                onChange={(v) => set('poSlang', v)}
+              />
+            </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-elang">
-            도착어
-          </label>
-          <CodeSelect
-            id="po-elang"
-            domain={CODE_DOMAIN.LANG}
-            value={form.poElang}
-            onChange={(v) => set('poElang', v)}
-          />
-        </div>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="po-elang">
+                도착어
+              </label>
+              <CodeSelect
+                id="po-elang"
+                domain={CODE_DOMAIN.LANG}
+                value={form.poElang}
+                onChange={(v) => set('poElang', v)}
+              />
+            </div>
+          </>
+        ) : (
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="po-category">
+              업무 분류
+            </label>
+            <CodeSelect
+              id="po-category"
+              domain={CODE_DOMAIN.JOBCAT}
+              value={form.poCategory}
+              onChange={(v) => set('poCategory', v)}
+            />
+          </div>
+        )}
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-volume">

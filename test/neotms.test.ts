@@ -852,6 +852,7 @@ describe("the empty-database bootstrap", () => {
       "008_admin.sql",
       "009_selfservice.sql",
       "010_currency.sql",
+      "011_job_types.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -1496,6 +1497,251 @@ describe("the currency seed", () => {
     expect(code).toMatch(/ON CONFLICT \(coin_code\) DO NOTHING/);
     expect(code).not.toMatch(/ON CONFLICT[\s\S]{0,40}DO UPDATE/);
     expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
+  });
+});
+
+describe("the 업무 구분 migration", () => {
+  /**
+   * db/011_job_types.sql, comments stripped.
+   *
+   * Every assertion below is about a statement, and this file's prose deliberately names the things
+   * the statements must not do ("NOT TOUCHED ... purchase_order.po_lang", "the other direction was
+   * considered and rejected"). Asserting on the raw text would make those explanations fail the
+   * tests that exist to protect what they explain.
+   */
+  const code = () => sqlCode("011_job_types.sql");
+
+  test("the discriminator is on the parent rows, where it can be filtered", () => {
+    /*
+     * The headline requirement, and the reason the original sketch's shape was changed: with the
+     * type inside a detail table there is no single predicate that answers "the MICE jobs", and a
+     * LINGUISTICS job - which needs no detail row at all - has no type recorded anywhere.
+     *
+     * NOT NULL DEFAULT, and the default STAYS. The external LKTMS ETL does not know this column
+     * exists, so dropping the default after the backfill - which is the usual playbook - breaks the
+     * next load with a NOT NULL violation on a column the ETL has never heard of. The default is
+     * also the correct answer for anything it inserts: all historical work here was linguistics.
+     */
+    for (const [table, column] of [
+      ["job", "job_type"],
+      ["purchase_order", "po_type"],
+    ]) {
+      expect(code()).toMatch(
+        new RegExp(
+          `ALTER TABLE ${table!}\\s+ADD COLUMN IF NOT EXISTS ${column!}\\s+text NOT NULL DEFAULT 'LINGUISTICS'`,
+        ),
+      );
+    }
+    expect(code()).not.toMatch(/ALTER COLUMN (job_type|po_type) DROP DEFAULT/);
+    // And indexable in one predicate, partial to match the job/PO indexes 003 builds.
+    expect(code()).toContain("CREATE INDEX IF NOT EXISTS ix_job_type ON job (job_type)");
+    expect(code()).toContain("CREATE INDEX IF NOT EXISTS ix_po_type  ON purchase_order (po_type)");
+  });
+
+  test("a MICE job cannot hold a language pair, as a key constraint", () => {
+    /*
+     * The part of this design that is not obvious, and the one a later edit is most likely to
+     * "simplify" away.
+     *
+     * Without the composite foreign key, a type change that leaves the old detail row behind is
+     * silent AND asymmetric: the job list reads the language pair out of job_detail_linguistic while
+     * the report counts that job under (비언어). Two screens disagreeing about one job, neither of
+     * them looking wrong, and no error anywhere. With it, forgetting to clear the old side is a
+     * 23503 - which is why NeotmsJobManager deletes the stale row BEFORE updating the type.
+     *
+     * The UNIQUE on the parent is what the composite FK references; a plain FK on `job_id` would
+     * permit the mismatch, and so would a CHECK on its own.
+     */
+    expect(code()).toContain("ADD CONSTRAINT job_id_type_key UNIQUE (id, job_type)");
+    expect(code()).toContain("ADD CONSTRAINT po_id_type_key UNIQUE (id, po_type)");
+    expect(code()).toMatch(
+      /jdl_job_type_fkey FOREIGN KEY \(job_id, job_type\)\s+REFERENCES job \(id, job_type\)/,
+    );
+    expect(code()).toMatch(
+      /jdn_job_type_fkey FOREIGN KEY \(job_id, job_type\)\s+REFERENCES job \(id, job_type\)/,
+    );
+    expect(code()).toMatch(
+      /pdl_po_type_fkey FOREIGN KEY \(po_id, po_type\)\s+REFERENCES purchase_order \(id, po_type\)/,
+    );
+    expect(code()).toMatch(
+      /pdn_po_type_fkey FOREIGN KEY \(po_id, po_type\)\s+REFERENCES purchase_order \(id, po_type\)/,
+    );
+
+    /*
+     * And both halves of each CHECK pair. The non-linguistic side is `<> 'LINGUISTICS'` rather than
+     * `IN ('MICE', 'IMC')` on purpose: a fourth 업무 구분 added from the 유지보수 screen tomorrow
+     * must be storable without a schema change. An allow-list here would reject it, from a
+     * constraint nobody would think to look at.
+     */
+    expect(code()).toContain("jdl_is_linguistic CHECK (job_type = 'LINGUISTICS')");
+    expect(code()).toContain("jdn_is_not_linguistic CHECK (job_type <> 'LINGUISTICS')");
+    expect(code()).toContain("pdl_is_linguistic CHECK (po_type = 'LINGUISTICS')");
+    expect(code()).toContain("pdn_is_not_linguistic CHECK (po_type <> 'LINGUISTICS')");
+    expect(code()).not.toMatch(/CHECK \((job|po)_type IN \(/);
+  });
+
+  test("nothing in 011 requires a detail row to exist", () => {
+    /*
+     * "Constraints forbid; they never require" - the rule this file's header states and the one
+     * worth a test, because the natural next edit is a NOT NULL on `job_slang` or a trigger that
+     * inserts a detail row for every job.
+     *
+     * Jobs with both languages blank exist by the thousand. That is exactly why the report carries
+     * '?' sentinels and why the console renders the language pickers with no `required`. A
+     * constraint demanding a detail row, or a non-null language inside one, would make those
+     * thousands of rows unsaveable - discovered one at a time, by whoever next edited one.
+     */
+    expect(code()).toMatch(/job_slang text REFERENCES/);
+    expect(code()).toMatch(/job_category text REFERENCES/);
+    expect(code()).not.toMatch(/(job|po)_(slang|elang|category) text NOT NULL/);
+    expect(code()).not.toMatch(/CREATE (OR REPLACE )?(TRIGGER|FUNCTION)/i);
+  });
+
+  test("the detail rows are part of their parent, so they cascade", () => {
+    // Deliberately against this schema's convention, which is ON DELETE RESTRICT everywhere. The
+    // rest of the schema restricts because the child has independent meaning; a detail row has
+    // none - it is part of the parent row, split out only so two types can carry different fields.
+    // The application soft-deletes, so this fires only on a genuine hard delete.
+    //
+    // The PRIMARY KEY on the parent's id is what makes one-row-per-parent a key rather than a
+    // convention: the rejected `job.job_detail_ling_id` direction has no unique constraint, so two
+    // jobs could point at one detail row and editing one job's languages would change another's.
+    for (const [table, key, parent] of [
+      ["job_detail_linguistic", "job_id", "job"],
+      ["job_detail_non_linguistic", "job_id", "job"],
+      ["po_detail_linguistic", "po_id", "purchase_order"],
+      ["po_detail_non_linguistic", "po_id", "purchase_order"],
+    ]) {
+      expect(code()).toMatch(
+        new RegExp(
+          `CREATE TABLE IF NOT EXISTS ${table!} \\(\\s+${key!}\\s+bigint PRIMARY KEY REFERENCES ${parent!} \\(id\\) ON DELETE CASCADE`,
+        ),
+      );
+    }
+    // On the composite FKs too, or a hard delete of a job would be blocked by the constraint that
+    // was supposed to be about types.
+    expect(code().match(/REFERENCES (job|purchase_order) \(id, (job|po)_type\) ON DELETE CASCADE/g))
+      .toHaveLength(4);
+  });
+
+  test("the backfill runs before the drop, and the drop takes only the four language columns", () => {
+    /*
+     * The ordering is the one thing in this file that cannot be recovered from by re-running it.
+     * Section 5 reads `job.job_slang`; section 6 drops it. Reversed, the backfill finds no column
+     * and the migration "succeeds" with the detail tables empty - and the application, which reads
+     * only the detail tables from here on, shows every language pair as blank. The data is not lost
+     * at that point, it is gone.
+     *
+     * `po_lang` and the four `po_cat_*` columns must survive, and they are the two most plausible
+     * casualties of a search-and-replace: `po_lang` is the PRINTED PO's letterhead language (Korean
+     * or English) and `po_cat_*` is CAT-TOOL analysis, where 'cat' is Computer-Assisted Translation
+     * and not 'category'. Both read like the thing being migrated and neither is.
+     *
+     * Asserted as the exact SET of dropped columns rather than as four separate absences, so a
+     * fifth DROP COLUMN added later has to be justified here.
+     */
+    const dropped = [...code().matchAll(/DROP COLUMN IF EXISTS (\w+)/g)].map((m) => m[1]!);
+    expect([...dropped].sort()).toEqual(["job_elang", "job_slang", "po_elang", "po_slang"]);
+
+    const backfill = code().indexOf("INSERT INTO job_detail_linguistic");
+    const drop = code().indexOf("DROP COLUMN IF EXISTS job_slang");
+    expect(backfill).toBeGreaterThan(-1);
+    expect(drop).toBeGreaterThan(backfill);
+
+    // Re-runnable, and DO NOTHING rather than DO UPDATE: an existing detail row is NEWER than these
+    // columns, and overwriting it with pre-migration values is the one thing a re-runnable
+    // migration must never do.
+    expect(code()).toMatch(/ON CONFLICT \(job_id\) DO NOTHING/);
+    expect(code()).toMatch(/ON CONFLICT \(po_id\) DO NOTHING/);
+    expect(code()).not.toMatch(/ON CONFLICT[^;]{0,60}DO UPDATE/);
+    // Empty strings normalise to NULL on the way in, so the application has one kind of unset to
+    // handle from here rather than the two the old columns permitted.
+    expect(code()).toContain("NULLIF(job_slang, '')");
+    expect(code()).toContain("NULLIF(po_slang, '')");
+  });
+
+  test("the backfill is guarded, because section 6 drops the column section 5 reads", () => {
+    /*
+     * The defect the docker rehearsal in README.md found and this suite could not: `ON CONFLICT DO
+     * NOTHING` does NOT make section 5 re-runnable. A second run of the file reaches an INSERT that
+     * names `job.job_slang`, which the FIRST run dropped - and PostgreSQL refuses it at PARSE time
+     * with 42703, before ON CONFLICT or the WHERE clause can observe that there is nothing left to
+     * move. The file then stops one section short of the indexes, which for a file whose stated
+     * purpose is to be safe to repeat is the worst outcome available.
+     *
+     * So each backfill sits inside a `DO` block that checks `information_schema` and runs the
+     * INSERT through `EXECUTE`, where it stays a string until the guard has passed. Asserted here
+     * because the fix looks like ceremony: the plain INSERT reads fine, works on a first run, and
+     * is exactly what someone tidying this file would restore.
+     */
+    expect([...code().matchAll(/DO \$backfill_(?:job|po)\$/g)]).toHaveLength(2);
+    expect([...code().matchAll(/EXECUTE \$move_(?:job|po)\$/g)]).toHaveLength(2);
+    expect(code()).toContain("information_schema.columns");
+
+    // Both INSERTs are INSIDE a guard, not left at the top level where parsing reaches them. The
+    // job block is the first of the two, so every backfill INSERT must follow it.
+    for (const table of ["job_detail_linguistic", "po_detail_linguistic"]) {
+      expect(code().indexOf(`INSERT INTO ${table}`)).toBeGreaterThan(
+        code().indexOf("DO $backfill_job$"),
+      );
+    }
+  });
+
+  test("every drop in the pinning block precedes every add", () => {
+    /*
+     * A defect this test was written for, which fails on the SECOND run of the file and not the
+     * first - the worst possible time to find out.
+     *
+     * The four composite foreign keys depend on the two UNIQUE constraints they reference. So a
+     * `DROP CONSTRAINT job_id_type_key` while `jdl_job_type_fkey` still exists fails with "cannot
+     * drop constraint ... because other objects depend on it". On a fresh database there is nothing
+     * to drop and the order is invisible; on a re-run it stops the file halfway, between the new
+     * tables and the backfill.
+     */
+    const lines = code().split("\n");
+    const lastDrop = lines.reduce(
+      (at, line, i) => (/DROP CONSTRAINT IF EXISTS (jdl|jdn|pdl|pdn)_/.test(line) ? i : at),
+      -1,
+    );
+    const firstUniqueDrop = lines.findIndex((line) =>
+      /DROP CONSTRAINT IF EXISTS (job|po)_id_type_key/.test(line),
+    );
+    expect(lastDrop).toBeGreaterThan(-1);
+    expect(firstUniqueDrop).toBeGreaterThan(lastDrop);
+  });
+
+  test("the two new code domains are seeded with the codes the application reads by name", () => {
+    /*
+     * `NeotmsCodeDomain` in NeotmsCode.dbops.ts and `CODE_DOMAIN` in the frontend both hold these
+     * as literals, and `job.job_type` is a foreign key onto `sys_code (code)`. So a missing or
+     * renamed seed row is not an empty dropdown: it is a job that cannot be created at all, with
+     * `job_job_type_fkey` named in the error instead of a field.
+     *
+     * The three 업무 구분 codes are ASCII while most child codes in 007 are Korean. That is not a
+     * deviation from the rule - the rule is "the code is whatever the thing is called", and 007 is
+     * already ASCII for 사용 프로그램 (Trados, memoQ, XTM, Phrase, DTP) for the same reason.
+     */
+    for (const domain of ["'JOBTYPE'", "'JOBCAT'"]) {
+      expect(code()).toContain(domain);
+    }
+    for (const child of ["'LINGUISTICS'", "'MICE'", "'IMC'"]) {
+      expect(code()).toMatch(new RegExp(`${child},[^\\n]*'JOBTYPE'`));
+    }
+    for (const child of [
+      "'online_marketing'",
+      "'offline_marketing'",
+      "'online_offline_marketing'",
+      "'event_ceremony_management'",
+    ]) {
+      expect(code()).toMatch(new RegExp(`${child},[^\\n]*'JOBCAT'`));
+    }
+    // One shared category list, with no type-to-category allow-list anywhere: an IMC engagement can
+    // be a 행사운영 and a MICE engagement can be 온라인홍보. A second JOBCAT-shaped domain per type
+    // is the shape to watch for here.
+    expect(code().match(/'JOBCAT'/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(code()).not.toMatch(/MICECAT|IMCCAT/);
+    // Re-runnable, like every other seed in db/.
+    expect(code().match(/ON CONFLICT \(code\) DO NOTHING/g)).toHaveLength(3);
   });
 });
 

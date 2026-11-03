@@ -5,22 +5,29 @@
 import {
   paginate,
   pgExecute,
+  pgExecuteCount,
   pgQuery,
+  pgTransaction,
+  sqlConstraint,
   type SqlRow,
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { ProjectVisibleOps } from "../projects/NeotmsProject.dbops.js";
 import { readListQuery, sortAlias } from "../NeotmsQuery.js";
-import { created, notFound, ok, runDb, type ListPage } from "../NeotmsResult.js";
+import { badRequest, created, notFound, ok, runDb, type ListPage } from "../NeotmsResult.js";
 import type { WriteContext } from "../NeotmsWrite.js";
 import type { JobCreate, JobUpdate } from "../neotms.schemas.js";
+import { JOB_TYPE_LINGUISTIC, jobDetailTable, typeMismatchMessage } from "../NeotmsJobTypes.js";
 import {
   JOB_SORTS,
   JobCreateOps,
+  JobDetailClearOps,
+  JobDetailUpsertOps,
   JobGetOps,
   JobListOps,
   JobLivePoCountOps,
+  JobProjectOps,
   JobSoftDeleteOps,
   JobUpdateOps,
   toJobRow,
@@ -37,8 +44,10 @@ function readFilters(request: RequestData): JobFilters {
     projectId: read("projectId"),
     state: read("state"),
     workCode: read("workCode"),
+    jobType: read("jobType"),
     slang: read("slang"),
     elang: read("elang"),
+    jobCategory: read("jobCategory"),
     pmId: read("pmId"),
     customerId: read("customerId"),
     corpId: read("corpId"),
@@ -87,6 +96,17 @@ export async function getJob(
  *
  * 404 rather than 403 when the check fails, matching what a direct read of that project would
  * answer. A 403 here would confirm the project exists to someone who cannot see it.
+ *
+ * ## Why this one is a transaction
+ *
+ * A job's 업무 구분 payload is in a side table (db/011_job_types.sql), so creating a MICE job is two
+ * INSERTs. Un-transacted, a failure between them leaves a job row that claims to be MICE with no
+ * category anywhere - indistinguishable from a MICE job nobody has finished filling in, and so not
+ * even reportable as a defect. Either both land or neither does.
+ *
+ * The visibility read stays OUTSIDE the transaction deliberately. It is read-only, and under
+ * Supavisor's transaction mode the backend is unavailable to every other caller from BEGIN to
+ * COMMIT - so the transaction holds only the two writes it has to.
  */
 export async function createJob(
   caller: NeotmsCaller,
@@ -98,15 +118,55 @@ export async function createJob(
     const visible = (await pgQuery(ProjectVisibleOps(caller, input.projectId))).data;
     if (!visible) return notFound("project");
 
-    const row = (await pgExecute(JobCreateOps(assigned, ctx))).data;
+    let row: JobRow | null;
+    try {
+      row = await pgTransaction(async (client) => {
+        const job = (await pgExecute(JobCreateOps(assigned, ctx), client)).data;
+        if (!job) return null;
+        // The job's own INSERT mints the id, so the detail row can only be written after it - which
+        // is also why the FK runs child-to-parent rather than the other way about.
+        const detail = JobDetailUpsertOps(job.id, assigned.jobType ?? JOB_TYPE_LINGUISTIC, assigned);
+        if (detail) await pgExecuteCount(detail, client);
+        return job;
+      });
+    } catch (err) {
+      const mismatch = typeMismatchMessage(sqlConstraint(err));
+      if (mismatch) return badRequest(mismatch);
+      throw err;
+    }
     if (!row) return { status: 500, body: "The job was not created" };
-    // Re-read so the created job carries its project's code and name, which `RETURNING` cannot
-    // reach. See the mapper comment on JobCreateOps.
+
+    // Re-read so the created job carries its project's code and name and its own language pair or
+    // category, none of which `RETURNING` can reach. See the mapper comment on JobCreateOps.
     const full = (await pgQuery(JobGetOps(caller, row.id))).data;
     return created(full ?? row);
   });
 }
 
+/**
+ * Edit a job.
+ *
+ * ## The statements are in this order because the database insists
+ *
+ * Each detail row's `job_type` is pinned to its parent's by a composite FK, so changing
+ * `job.job_type` while a row of the old type is still there fails with 23503. The stale row is
+ * therefore deleted FIRST, then the job, then the new type's detail row is upserted.
+ *
+ * That deletion would be needed even without the constraint: a job switched to MICE and back would
+ * otherwise still have its original language pair, and would appear to have remembered something
+ * the user had moved away from. The constraint's contribution is to make omitting it loud.
+ *
+ * The table cleared is the one belonging to the type being LEFT - `jobDetailTable(current.jobType)`,
+ * not the one the new type does not use. Those are the same table only while there are two types on
+ * each side of the linguistic line: MICE to IMC leaves a `MICE` row in `job_detail_non_linguistic`,
+ * which is also where an IMC row goes, and clearing "the other table" would clear nothing and let
+ * the FK refuse the UPDATE.
+ *
+ * `JobProjectOps` opens the transaction because it is scoped: it answers "may this caller write this
+ * job" and "what type is it now" in one statement, and the unscoped `JobDetailClearOps` that follows
+ * is safe only because of it. `JobUpdateOps` is scoped too - redundantly, on purpose, so that no
+ * write in the ops module depends on a caller having checked first.
+ */
 export async function updateJob(
   caller: NeotmsCaller,
   id: string,
@@ -117,8 +177,35 @@ export async function updateJob(
     return { status: 400, body: "No editable field was supplied" };
   }
   return runDb("update job", async () => {
-    const row = (await pgExecute(JobUpdateOps(caller, id, input, ctx))).data;
-    return row ? ok(row) : notFound("job");
+    let updated: JobRow | null;
+    try {
+      updated = await pgTransaction(async (client) => {
+        const current = (await pgQuery(JobProjectOps(caller, id), client)).data;
+        if (!current) return null;
+
+        const nextType = input.jobType ?? current.jobType;
+        if (nextType !== current.jobType) {
+          await pgExecuteCount(JobDetailClearOps(id, jobDetailTable(current.jobType)), client);
+        }
+
+        const row = (await pgExecute(JobUpdateOps(caller, id, input, ctx), client)).data;
+        if (!row) return null;
+
+        const detail = JobDetailUpsertOps(id, nextType, input);
+        if (detail) await pgExecuteCount(detail, client);
+        return row;
+      });
+    } catch (err) {
+      const mismatch = typeMismatchMessage(sqlConstraint(err));
+      if (mismatch) return badRequest(mismatch);
+      throw err;
+    }
+    if (!updated) return notFound("job");
+
+    // Re-read for the same reason create does: the language pair and the category are in the side
+    // tables, so the UPDATE's own RETURNING cannot see what it just caused to be written.
+    const full = (await pgQuery(JobGetOps(caller, id))).data;
+    return ok(full ?? updated);
   });
 }
 

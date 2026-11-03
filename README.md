@@ -290,6 +290,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `008_admin.sql` | the two administrative menus (유지보수, 사용자 관리) and the re-grant that makes them usable — **see §6.2** |
 | `009_selfservice.sql` | `staff_self_register()`, the function behind the sign-up form — **see §6.2** |
 | `010_currency.sql` | the five currencies the console can submit. Without it **every create in the system fails** — **see §6.2** |
+| `011_job_types.sql` | 업무 구분 (Linguistics / MICE / IMC) and 업무 분류: two `sys_code` domains, `job.job_type` / `purchase_order.po_type`, the four detail tables that replace the language columns, **and a migration that drops `job_slang` / `job_elang` / `po_slang` / `po_elang`** — **see §6.2** |
 
 Every file in `db/` is applicable **as-is**: plain DDL, no placeholders. That matters because the
 application's dbops modules write `:name` parameters (rewritten to `$1` by `toPositional` in
@@ -311,15 +312,17 @@ PGPASSWORD=$NEOTMS_DB_PASSWORD psql \
   -v ON_ERROR_STOP=1 -f db/001_extensions.sql
 ```
 
-Repeat for `002` … `010` **in order**; `001` must complete before `002`. Pass
+Repeat for `002` … `011` **in order**; `001` must complete before `002`. Pass
 `-v ON_ERROR_STOP=1` every time — without it `psql` reports a failed statement and carries on, so a
-half-applied schema looks like a successful run.
+half-applied schema looks like a successful run. That flag matters most on `011`, which is the only
+file that migrates existing data: it reads `job.job_slang` and then drops it, so a run that carries
+on past a failure can get as far as the drop with the detail tables still empty.
 
-**The last five files are not pure schema, and none of them is optional.** `001`…`005` leave a
-database that is structurally correct and cannot be used by anybody; `006`…`010` are what turn it
+**The last six files are not pure schema, and none of them is optional.** `001`…`005` leave a
+database that is structurally correct and cannot be used by anybody; `006`…`011` are what turn it
 into a running system, and each one is the sole source of something the application assumes exists.
-Stopping early does not raise an error on apply — it produces a specific, silent symptom later, and
-the five symptoms are listed in §6.1 and §6.2.
+Stopping early does not raise an error on apply — with the exception of `011`, it produces a
+specific, silent symptom later, and those symptoms are listed in §6.1 and §6.2.
 
 A note on failure messages, since none of them name the field that is wrong: a bad host is
 `ENOTFOUND`, a bare `postgres` username is `Tenant or user not found`, and port 5432 on the direct
@@ -415,7 +418,7 @@ SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN');
 
 Idempotent, returns the number of menus granted, and safe to run any time.
 
-### 6.2 `007`, `008`, `009`, `010` — the files whose absence is silent
+### 6.2 `007`, `008`, `009`, `010` — the files whose absence is silent (and `011`, whose absence is not)
 
 `006` gets one administrator in. These four are what the console assumes about the database once
 somebody is in, and they share a property worth stating before the detail: **skipping one produces no
@@ -430,6 +433,20 @@ of the symptom points away from the cause.
 | `008_admin.sql` | the `sys_menu` rows for 유지보수 and 사용자 관리 | both administrative screens are unreachable **by everyone, including the superuser**; the sidebar just has six entries |
 | `009_selfservice.sql` | `staff_self_register()` | the sign-up form submits and answers **500**, with the cause visible only in CloudWatch |
 | `010_currency.sql` | the `currency` rows every `*_coin` / `coin_code` foreign key points at | **every create in the system fails**, on a field nobody touched, reporting a constraint name |
+
+`011_job_types.sql` belongs to the same list by position and to none of it by behaviour, which is
+why it is called out separately rather than given a row above. **Its absence is the one that is
+loud.** The application selects `j.job_type` and joins `job_detail_linguistic`, so without `011`
+every job and purchase-order query — list, get, create, update, and every report — fails outright
+with `42703 column j.job_type does not exist` or `42P01 relation "job_detail_linguistic" does not
+exist`. Four of the six business screens are blank with a 500 behind them. Nothing about that is
+subtle, and nothing about it points away from the cause; it is in this section because it is the
+sixth file an operator has to remember, not because it hides.
+
+The converse is the part that does hide: `011` **drops** `job_slang`, `job_elang`, `po_slang` and
+`po_elang` after moving their contents into the detail tables, so the external LKTMS ETL must be
+changed to write `job_detail_linguistic` / `po_detail_linguistic` in the same deploy. An ETL still
+writing the old columns fails with `42703` on a column it has written for years.
 
 #### `007_codes.sql` — the dropdowns
 
@@ -630,7 +647,7 @@ docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
 for f in 001_extensions 002_tables 003_indexes 004_rollup 005_code_sequences 006_bootstrap \
-         007_codes 008_admin 009_selfservice 010_currency; do
+         007_codes 008_admin 009_selfservice 010_currency 011_job_types; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
@@ -871,7 +888,10 @@ no browser, so the properties most worth protecting here are not reachable by ex
   third reads the `?? 'KRW'` default out of each of the five registration modals and requires the
   seed to contain it. Drift in one direction makes a dropdown entry unsaveable; in the other it adds
   a currency that appears nowhere. Neither is a type error, and neither surfaces until somebody
-  picks the wrong row.
+  picks the wrong row. The report dimensions are a second such pair — `REPORT_DIMENSIONS` in
+  `NeotmsReport.dbops.ts`, the `groupBy` picklist in `ReportQuerySchema`, and `REPORT_GROUPS` on the
+  frontend — and a test compares all three, because an entry present in the dropdown and absent from
+  the picklist is a `400` on a selection the console itself offered.
 
 The tests that do this read whole files and match on statements rather than fragments — a lesson from
 writing them, since the prose comments in this codebase quote the code they are explaining, and an

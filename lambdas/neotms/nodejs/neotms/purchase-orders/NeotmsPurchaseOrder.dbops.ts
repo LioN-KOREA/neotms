@@ -23,6 +23,20 @@
 // A PO is visible to its own PM, to its job's PM, and to the project's sales manager and PM - four
 // columns across three tables, all ORed. Both joins are therefore on every read, including the
 // single-record one.
+//
+// ## `po_type` is the PO's own, not the job's
+//
+// A PO carries an 업무 구분 exactly as a job does, and its payload is in `po_detail_linguistic` or
+// `po_detail_non_linguistic` by the same rule (db/011_job_types.sql). What it does NOT do is inherit
+// its job's type: a MICE conference buys interpretation, and a translation project buys event
+// staffing, so tying the two together would make both unrecordable. The job's type is the DEFAULT
+// the manager fills in on create, and nothing more than that.
+//
+// Three columns here are easy to confuse with the new one and none of them is related:
+//
+//   * `po_lang` - which language the printed PO document is rendered in. Letterhead, not content.
+//   * `po_cat_use` / `po_cat_word` / `po_cat_mid` / `po_cat_stotal` - CAT-TOOL analysis, as in
+//     Trados. Nothing to do with 업무 분류, which is `po_category` and lives on the detail table.
 
 import {
   param,
@@ -33,9 +47,11 @@ import {
   type SortTarget,
   type SqlOps,
   type SqlRow,
+  type SqlWriteOps,
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { PO_CODE, codeExpression } from "../NeotmsCodes.js";
+import { isLinguistic, poDetailTable, type PoDetailTable } from "../NeotmsJobTypes.js";
 import {
   cursorClause,
   filterClause,
@@ -54,6 +70,7 @@ import {
   derivedUpdate,
   insertFragments,
   updateFragments,
+  upsertFragments,
   type DerivedSpec,
   type FieldSpec,
   type WriteContext,
@@ -84,8 +101,13 @@ export type PurchaseOrderRow = {
   poPmName: string | null;
   translatorId: string | null;
   poTranName: string | null;
+  /** 업무 구분 - a JOBTYPE code. Independent of the job's; see the module header. */
+  poType: string | null;
+  /** From `po_detail_linguistic`, and null for a PO that has no such row. */
   poSlang: string | null;
   poElang: string | null;
+  /** 업무 분류 - from `po_detail_non_linguistic`. Not `po_cat_*`, which is CAT-tool analysis. */
+  poCategory: string | null;
   poVolume: string | null;
   poUnitCode: string | null;
   poPriceSel: string | null;
@@ -118,6 +140,12 @@ export type PurchaseOrderRow = {
   updatedAt: string | null;
 };
 
+/**
+ * The PO's OWN columns. Interpolated into `RETURNING`, which is why the detail columns are not here.
+ *
+ * `po_cat_*` ARE here and belong here - they are CAT-tool analysis figures on `purchase_order`
+ * itself. The column that moved out is `po_slang` / `po_elang`; see `PO_DETAIL_COLUMNS`.
+ */
 const poColumns = (q: string): string => `
   ${q}.id               AS po_id,
   ${q}.po_code          AS po_code,
@@ -133,8 +161,7 @@ const poColumns = (q: string): string => `
   ${q}.po_pm_name       AS po_pm_name,
   ${q}.translator_id    AS translator_id,
   ${q}.po_tran_name     AS po_tran_name,
-  ${q}.po_slang         AS po_slang,
-  ${q}.po_elang         AS po_elang,
+  ${q}.po_type          AS po_type,
   ${q}.po_volume        AS po_volume,
   ${q}.po_unit_code     AS po_unit_code,
   ${q}.po_price_sel     AS po_price_sel,
@@ -181,6 +208,19 @@ const PO_PARENT_COLUMNS = `
   p.prj_name      AS prj_name
 `;
 
+/**
+ * The type-specific columns, from the two PO detail tables.
+ *
+ * At most one of the two rows exists and often neither does. Aliased to their own bare names, so
+ * `toPurchaseOrderRow` reads `po_slang` exactly as it did when the column was on `purchase_order` -
+ * the move is invisible above this module.
+ */
+const PO_DETAIL_COLUMNS = `
+  pdl.po_slang    AS po_slang,
+  pdl.po_elang    AS po_elang,
+  pdn.po_category AS po_category
+`;
+
 export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
   id: readId(row, "po_id") ?? "",
   poCode: readText(row, "po_code") ?? "",
@@ -200,8 +240,10 @@ export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
   poPmName: readText(row, "po_pm_name"),
   translatorId: readId(row, "translator_id"),
   poTranName: readText(row, "po_tran_name"),
+  poType: readText(row, "po_type"),
   poSlang: readText(row, "po_slang"),
   poElang: readText(row, "po_elang"),
+  poCategory: readText(row, "po_category"),
   poVolume: readMoney(row, "po_volume"),
   poUnitCode: readText(row, "po_unit_code"),
   poPriceSel: readText(row, "po_price_sel"),
@@ -298,8 +340,11 @@ const PO_FILTERS = {
   moneyState: { column: "po.po_money_state", kind: "text" },
   pmId: { column: "po.po_pm_id", kind: "id" },
   workCode: { column: "po.po_work_code", kind: "text" },
-  slang: { column: "po.po_slang", kind: "text" },
-  elang: { column: "po.po_elang", kind: "text" },
+  /** 업무 구분. The PO list does not expose this yet; the filter is here so that it can. */
+  poType: { column: "po.po_type", kind: "text" },
+  slang: { column: "pdl.po_slang", kind: "text" },
+  elang: { column: "pdl.po_elang", kind: "text" },
+  poCategory: { column: "pdn.po_category", kind: "text" },
   customerId: { column: "p.customer_id", kind: "id" },
   corpId: { column: "p.corp_id", kind: "id" },
 } as const satisfies Record<string, FilterSpec>;
@@ -314,10 +359,19 @@ export type PoFilters = Partial<Record<keyof typeof PO_FILTERS, string>> & {
 
 const PO_SCOPE_COLUMNS = ["po.po_pm_id", "j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
 
+/**
+ * The joins every read shares.
+ *
+ * `job` and `project` are INNER - a PO whose job or project is soft-deleted is not shown. The two
+ * detail joins are LEFT and one-row-at-most by key (`po_id` is each detail table's primary key), so
+ * they can neither drop a PO nor duplicate one.
+ */
 const PO_FROM = `
     FROM purchase_order po
     JOIN job j     ON j.id = po.job_id      AND j.deleted = false
     JOIN project p ON p.id = j.project_id   AND p.deleted = false
+    LEFT JOIN po_detail_linguistic pdl ON pdl.po_id = po.id
+    LEFT JOIN po_detail_non_linguistic pdn ON pdn.po_id = po.id
 `;
 
 /* -------------------------------------------------------------------------- */
@@ -350,7 +404,8 @@ export const PoListOps: (
   return {
     sql: `
       SELECT ${poColumns("po")},
-      ${PO_PARENT_COLUMNS}
+      ${PO_PARENT_COLUMNS},
+      ${PO_DETAIL_COLUMNS}
       ${PO_FROM}
        WHERE po.deleted = false
       ${where.fragment}
@@ -370,7 +425,8 @@ export const PoGetOps: (caller: NeotmsCaller, id: string) => SqlOps<PurchaseOrde
   return {
     sql: `
       SELECT ${poColumns("po")},
-      ${PO_PARENT_COLUMNS}
+      ${PO_PARENT_COLUMNS},
+      ${PO_DETAIL_COLUMNS}
       ${PO_FROM}
        WHERE po.id = :id
          AND po.deleted = false
@@ -404,8 +460,12 @@ const PO_FIELDS: readonly FieldSpec<PurchaseOrderUpdate & { jobId?: string }>[] 
   { column: "po_cat_stotal", kind: "money", read: (i) => i.poCatStotal },
   { column: "po_pm_id", kind: "id", read: (i) => i.poPmId },
   { column: "translator_id", kind: "id", read: (i) => i.translatorId },
-  { column: "po_slang", kind: "text", read: (i) => i.poSlang },
-  { column: "po_elang", kind: "text", read: (i) => i.poElang },
+  /**
+   * 업무 구분. `po_slang` / `po_elang` are NOT here any more and must not be re-added - they belong
+   * to `po_detail_linguistic`, and a spec for them would make every save fail with 42703. They are
+   * written by `PoDetailUpsertOps`, as is `po_category`.
+   */
+  { column: "po_type", kind: "text", read: (i) => i.poType },
   { column: "po_volume", kind: "money", read: (i) => i.poVolume },
   { column: "po_unit_code", kind: "text", read: (i) => i.poUnitCode },
   { column: "po_price_sel", kind: "text", read: (i) => i.poPriceSel },
@@ -541,6 +601,71 @@ export const PoUpdateOps: (
     mapper: (rows) => (rows.length > 0 ? toPurchaseOrderRow(rows[0]!) : null),
   };
 };
+
+/* -------------------------------------------------------------------------- */
+/* The type-specific detail rows                                              */
+/* -------------------------------------------------------------------------- */
+
+/** `po_detail_linguistic`'s writable columns. */
+const PO_LINGUISTIC_FIELDS: readonly FieldSpec<PurchaseOrderUpdate>[] = [
+  { column: "po_slang", kind: "text", read: (i) => i.poSlang },
+  { column: "po_elang", kind: "text", read: (i) => i.poElang },
+];
+
+/** `po_detail_non_linguistic`'s writable columns. */
+const PO_NON_LINGUISTIC_FIELDS: readonly FieldSpec<PurchaseOrderUpdate>[] = [
+  { column: "po_category", kind: "text", read: (i) => i.poCategory },
+];
+
+/**
+ * Write the detail row for a PO of this type - or null, meaning there is nothing to write.
+ *
+ * The job module's `JobDetailUpsertOps` is the same function over the other two tables, and the
+ * reasoning is recorded there in full. The short version: a PO with neither a language pair nor a
+ * category needs no detail row, so "nothing supplied" must produce no statement rather than an
+ * all-NULL row; and `po_type` is written alongside the payload because the composite FK can only
+ * check a value that is stored.
+ */
+export const PoDetailUpsertOps = (
+  poId: string,
+  poType: string,
+  input: PurchaseOrderUpdate,
+): SqlWriteOps | null => {
+  const linguistic = isLinguistic(poType);
+  const table: PoDetailTable = poDetailTable(poType);
+  const fields = upsertFragments(
+    linguistic ? PO_LINGUISTIC_FIELDS : PO_NON_LINGUISTIC_FIELDS,
+    input,
+  );
+  if (fields.columns.length === 0) return null;
+  return {
+    sql: `
+      INSERT INTO ${table} (po_id, po_type, ${fields.columns.join(", ")})
+      VALUES (:po_id, :po_type, ${fields.placeholders.join(", ")})
+      ON CONFLICT (po_id) DO UPDATE
+         SET po_type = EXCLUDED.po_type,
+             ${fields.assignments.join(",\n             ")}
+    `,
+    parameters: [
+      param("po_id", poId, "id"),
+      param("po_type", poType, "text"),
+      ...fields.parameters,
+    ],
+  };
+};
+
+/**
+ * Delete a PO's row from one detail table. Run before a type change.
+ *
+ * Unscoped, for the reason set out on `JobDetailClearOps`: the scope predicate here is four columns
+ * across three tables, and a copy of it in this statement would be the place it drifts. It runs only
+ * after `PoGetOps` or `PoUpdateOps` - both scoped - has returned a row for this caller, in the same
+ * transaction and on the same id.
+ */
+export const PoDetailClearOps = (poId: string, table: PoDetailTable): SqlWriteOps => ({
+  sql: `DELETE FROM ${table} WHERE po_id = :po_id`,
+  parameters: [param("po_id", poId, "id")],
+});
 
 export const PoSoftDeleteOps: (
   caller: NeotmsCaller,

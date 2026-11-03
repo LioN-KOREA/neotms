@@ -64,6 +64,11 @@
 // it now that the table is gone is the client: `dim_key` is what a drill-down sends back as
 // `?customerId=...`, and a key of `null` is not a thing a query string can carry. So `0` still
 // means "no customer", not "customer 0" - see `dimensionFilters`, which translates it back.
+//
+// `?` keeps its narrow meaning: a LINGUISTICS job whose languages were never recorded. Work that
+// has no language pair to record at all - MICE, IMC, anything else added to the 업무 구분 list later
+// - keys as `(비언어)` instead, so the `?` line stays readable as the data-entry gap it is. That
+// distinction is the one thing the rollup could not have expressed, because it predates the type.
 
 import {
   param,
@@ -75,6 +80,7 @@ import {
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { mergeClauses, rangeClause, scopeClause, type SqlClause } from "../NeotmsQuery.js";
+import { JOB_TYPE_LINGUISTIC } from "../NeotmsJobTypes.js";
 import type { ReportQuery } from "../neotms.schemas.js";
 
 /* -------------------------------------------------------------------------- */
@@ -82,7 +88,7 @@ import type { ReportQuery } from "../neotms.schemas.js";
 /* -------------------------------------------------------------------------- */
 
 export type ReportLine = {
-  /** The dimension value: a date, an id, or a language pair. '0' / '?' mean unassigned. */
+  /** The dimension value: a date, an id, a code, or a language pair. '0' / '?' mean unassigned. */
   key: string;
   /** What to print. Already resolved, including "(unassigned)" for a sentinel. */
   label: string;
@@ -181,7 +187,7 @@ const REPORT_MEASURES = `
  *
  * `key` and `label` are interpolated into the SQL, and `join` more so - so this map is an
  * allow-list in the strict sense. `ReportQuerySchema.groupBy` is a valibot `picklist`, so a request
- * can only name one of these seven; the object is keyed by those same names and nothing else
+ * can only name one of these nine; the object is keyed by those same names and nothing else
  * reaches here.
  *
  * `label` is cast to text in every case because the column it comes from varies - a date, a bigint
@@ -192,6 +198,12 @@ const REPORT_MEASURES = `
  * the one on the JOB (`job_pm_id`), which can differ from the project's own PM, while the sales
  * manager is the project's `prj_mgr_id`. Customer, corp and category are all project-level, so
  * every job in a project shares them.
+ *
+ * Two more are a level BELOW the job: `langPair` and `jobCategory` read the detail tables
+ * db/011_job_types.sql introduced, and each therefore carries its own LEFT JOIN in `join` rather
+ * than relying on `REPORT_FROM`. LEFT because a detail row is optional by design - see
+ * NeotmsJobTypes.ts - so a job missing one must still be counted at its sentinel, not dropped from
+ * the totals. `jobType` itself is on the job row and needs a join only to print its Korean name.
  */
 type Dimension = {
   /** The grouping key expression, with unset values mapped to the sentinel. */
@@ -233,6 +245,28 @@ const idKey = (column: string): string => `COALESCE(${column}, 0)::text`;
  * or several at the same round price.
  */
 const BY_REVENUE = "revenue DESC, dim_label ASC";
+
+/**
+ * The language pair, or `(비언어)` for work that has no such thing.
+ *
+ * Both halves live in `job_detail_linguistic` since db/011_job_types.sql, and a job of any other
+ * 업무 구분 has no row there at all - so without the `CASE` every MICE and IMC job would read
+ * `? > ?`, which already means something else entirely. `? > ?` is the data-entry gap this file's
+ * header documents: a linguistics job somebody delivered without recording the languages. Blending
+ * the two would put a growing business line inside a bucket managers are trained to read as "go and
+ * fix these records".
+ *
+ * The `ELSE` is keyed off `j.job_type` rather than off the absence of a `jdl` row, so it mirrors
+ * `isLinguistic` in NeotmsJobTypes.ts: a fourth type added later from 유지보수 lands in `(비언어)`,
+ * which is the honest answer until someone gives it a dimension of its own.
+ *
+ * Still no join to `sys_code` for the two codes themselves - resolving them to `code_name` would
+ * cost two more joins to print "한국어 > 영어" where the whole company says "KO > EN".
+ */
+const LANG_PAIR = `CASE WHEN j.job_type = '${JOB_TYPE_LINGUISTIC}'
+                  THEN COALESCE(NULLIF(jdl.job_slang, ''), '?') || ' > '
+                    || COALESCE(NULLIF(jdl.job_elang, ''), '?')
+                  ELSE '(비언어)' END`;
 
 const REPORT_DIMENSIONS = {
   /*
@@ -302,17 +336,56 @@ const REPORT_DIMENSIONS = {
     displayBy: BY_REVENUE,
   },
   /*
-   * The one composite dimension, and the only one whose key is not an id. Both halves are code
-   * strings on the job row, so there is no join: resolving them to `sys_code.code_name` would need
-   * two more joins to print "한국어 > 영어" where the codes the whole company already speaks in are
-   * "KO > EN". A missing half shows as `?` - `unassigned` cannot catch an empty string inside a
-   * concatenation, hence the NULLIF on each half, which also covers the NULL the column may hold.
+   * The one composite dimension, and the only one whose key is not an id. `unassigned` cannot catch
+   * an empty string inside a concatenation, hence the NULLIF on each half, which also covers the
+   * NULL the column may hold. See `LANG_PAIR` for the rest, including why the non-linguistic branch
+   * exists.
    */
   langPair: {
-    key: "(COALESCE(NULLIF(j.job_slang, ''), '?') || ' > ' || COALESCE(NULLIF(j.job_elang, ''), '?'))",
-    label:
-      "(COALESCE(NULLIF(j.job_slang, ''), '?') || ' > ' || COALESCE(NULLIF(j.job_elang, ''), '?'))",
-    join: "",
+    key: LANG_PAIR,
+    label: LANG_PAIR,
+    join: "LEFT JOIN job_detail_linguistic jdl ON jdl.job_id = j.id",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
+  },
+  /*
+   * 업무 구분 - which line of business the revenue came from, and the dimension `langPair` can no
+   * longer answer now that it folds all three non-linguistic types into one line.
+   *
+   * Keyed on the CODE, not on `sys_code.id` the way `category` is. The code is what `j.job_type`
+   * actually stores and what every other layer - the CHECK constraints, `isLinguistic`, the job
+   * list's filter - identifies a type by, so going through the id would add a join to the key
+   * expression and a fan-out risk for no gain. The label still resolves through `sys_code` to print
+   * "언어 및 통번역" rather than "LINGUISTICS", falling back to the raw code so that a retired code
+   * row degrades to `MICE` instead of to "(unassigned)" - the type is NOT NULL, so "(unassigned)"
+   * would be a lie here.
+   *
+   * Alias `sct`, because `sc` is taken by `category` above and two joins to `sys_code` under one
+   * alias is a syntax error rather than a wrong number.
+   */
+  jobType: {
+    key: "j.job_type",
+    label: "COALESCE(NULLIF(sct.code_name, ''), j.job_type)",
+    join: "LEFT JOIN sys_code sct ON sct.code = j.job_type",
+    pickBy: BY_REVENUE,
+    displayBy: BY_REVENUE,
+  },
+  /*
+   * 업무 분류 - the MICE/IMC equivalent of a language pair, from `job_detail_non_linguistic`.
+   *
+   * Every linguistics job falls into "(unassigned)" here, and that is correct rather than a gap: a
+   * translation job has no 업무 분류 to record. Read this dimension with a 업무 구분 report beside
+   * it, or the unassigned bar reads as missing data.
+   *
+   * Two joins, both LEFT: the detail row is optional by design (a MICE job saved before its category
+   * was known has none), and the code row may have been retired.
+   */
+  jobCategory: {
+    key: unassigned("jdn.job_category"),
+    label: "COALESCE(NULLIF(sccat.code_name, ''), NULLIF(jdn.job_category, ''), '(unassigned)')",
+    join:
+      "LEFT JOIN job_detail_non_linguistic jdn ON jdn.job_id = j.id\n" +
+      "        LEFT JOIN sys_code sccat ON sccat.code = jdn.job_category",
     pickBy: BY_REVENUE,
     displayBy: BY_REVENUE,
   },

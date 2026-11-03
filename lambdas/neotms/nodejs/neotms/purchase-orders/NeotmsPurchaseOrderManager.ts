@@ -5,7 +5,10 @@
 import {
   paginate,
   pgExecute,
+  pgExecuteCount,
   pgQuery,
+  pgTransaction,
+  sqlConstraint,
   type SqlRow,
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
@@ -13,13 +16,16 @@ import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js"
 import { JobProjectOps } from "../jobs/NeotmsJob.dbops.js";
 import { TranslatorNameOps } from "../translators/NeotmsTranslator.dbops.js";
 import { readListQuery } from "../NeotmsQuery.js";
-import { created, notFound, ok, runDb, type ListPage } from "../NeotmsResult.js";
+import { JOB_TYPE_LINGUISTIC, poDetailTable, typeMismatchMessage } from "../NeotmsJobTypes.js";
+import { badRequest, created, notFound, ok, runDb, type ListPage } from "../NeotmsResult.js";
 import type { WriteContext } from "../NeotmsWrite.js";
 import type { PurchaseOrderCreate, PurchaseOrderUpdate } from "../neotms.schemas.js";
 import {
   PO_SORTS,
   PO_SORT_ALIASES,
   PoCreateOps,
+  PoDetailClearOps,
+  PoDetailUpsertOps,
   PoGetOps,
   PoListOps,
   PoSoftDeleteOps,
@@ -43,8 +49,10 @@ function readFilters(request: RequestData): PoFilters {
     moneyState: read("moneyState"),
     pmId: read("pmId"),
     workCode: read("workCode"),
+    poType: read("poType"),
     slang: read("slang"),
     elang: read("elang"),
+    poCategory: read("poCategory"),
     customerId: read("customerId"),
     corpId: read("corpId"),
     dueFrom: read("dueFrom"),
@@ -106,6 +114,11 @@ export async function getPurchaseOrder(
  *      open is a payment with no payee.
  *   3. An unspecified PM defaults to the caller, so a scoped PM does not create a PO they cannot
  *      then see.
+ *
+ * The job read also supplies the 업무 구분 the PO starts with. Defaulted from the job rather than to
+ * LINGUISTICS because a PO raised against a MICE job is far more often a MICE PO than not - but
+ * only defaulted: a request that names its own `poType` keeps it, which is how an interpretation PO
+ * gets raised against a MICE conference.
  */
 export async function createPurchaseOrder(
   caller: NeotmsCaller,
@@ -116,8 +129,8 @@ export async function createPurchaseOrder(
     ? input
     : { ...input, poPmId: caller.staffId };
   return runDb("create purchase order", async () => {
-    const projectId = (await pgQuery(JobProjectOps(caller, input.jobId))).data;
-    if (projectId === null) return notFound("job");
+    const job = (await pgQuery(JobProjectOps(caller, input.jobId))).data;
+    if (job === null) return notFound("job");
 
     if (assigned.translatorId) {
       const tranName = (await pgQuery(TranslatorNameOps(assigned.translatorId))).data;
@@ -126,14 +139,47 @@ export async function createPurchaseOrder(
       }
     }
 
-    const row = (await pgExecute(PoCreateOps(assigned, projectId, ctx))).data;
+    const poType = assigned.poType ?? job.jobType;
+    const typed: PurchaseOrderCreate = { ...assigned, poType };
+
+    // Transactional for the reason `createJob` is: the PO row and its detail row are one fact, and
+    // half of it is worse than none of it. The two reads above stay outside - see pgTransaction.
+    let row: PurchaseOrderRow | null;
+    try {
+      row = await pgTransaction(async (client) => {
+        const po = (await pgExecute(PoCreateOps(typed, job.projectId, ctx), client)).data;
+        if (!po) return null;
+        const detail = PoDetailUpsertOps(po.id, poType, typed);
+        if (detail) await pgExecuteCount(detail, client);
+        return po;
+      });
+    } catch (err) {
+      const mismatch = typeMismatchMessage(sqlConstraint(err));
+      if (mismatch) return badRequest(mismatch);
+      throw err;
+    }
     if (!row) return { status: 500, body: "The purchase order was not created" };
-    // Re-read for the job and project columns, which RETURNING cannot reach.
+
+    // Re-read for the job and project columns and for the detail row, none of which RETURNING can
+    // reach.
     const full = (await pgQuery(PoGetOps(caller, row.id))).data;
     return created(full ?? row);
   });
 }
 
+/**
+ * Edit a purchase order.
+ *
+ * Same ordering obligation as `updateJob`, and for the same reason: each detail row's `po_type` is
+ * pinned to its parent's by a composite FK, so the stale table's row has to go before the type on
+ * `purchase_order` changes. `PoGetOps` opens the transaction because it is scoped - it authorizes
+ * the unscoped clear that follows - and because the current type is what decides whether there is a
+ * stale row at all.
+ *
+ * The table cleared is the one belonging to the type being LEFT, for the reason spelled out on
+ * `updateJob` and on `poDetailTable`: MICE to IMC stays in `po_detail_non_linguistic`, so "the
+ * other table" is the wrong answer there.
+ */
 export async function updatePurchaseOrder(
   caller: NeotmsCaller,
   id: string,
@@ -150,10 +196,35 @@ export async function updatePurchaseOrder(
         return { status: 400, body: "That translator does not exist or has been deleted" };
       }
     }
-    const row = (await pgExecute(PoUpdateOps(caller, id, input, ctx))).data;
-    if (!row) return notFound("purchase order");
+
+    let updated: PurchaseOrderRow | null;
+    try {
+      updated = await pgTransaction(async (client) => {
+        const current = (await pgQuery(PoGetOps(caller, id), client)).data;
+        if (!current) return null;
+
+        const currentType = current.poType ?? JOB_TYPE_LINGUISTIC;
+        const nextType = input.poType ?? currentType;
+        if (nextType !== currentType) {
+          await pgExecuteCount(PoDetailClearOps(id, poDetailTable(currentType)), client);
+        }
+
+        const row = (await pgExecute(PoUpdateOps(caller, id, input, ctx), client)).data;
+        if (!row) return null;
+
+        const detail = PoDetailUpsertOps(id, nextType, input);
+        if (detail) await pgExecuteCount(detail, client);
+        return row;
+      });
+    } catch (err) {
+      const mismatch = typeMismatchMessage(sqlConstraint(err));
+      if (mismatch) return badRequest(mismatch);
+      throw err;
+    }
+    if (!updated) return notFound("purchase order");
+
     const full = (await pgQuery(PoGetOps(caller, id))).data;
-    return ok(full ?? row);
+    return ok(full ?? updated);
   });
 }
 

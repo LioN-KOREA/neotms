@@ -262,6 +262,16 @@ export interface JobListQuery extends ListQuery {
   projectId?: string | null
   state?: string | null
   workCode?: string | null
+  /** 업무 구분. `JOBTYPE` 코드 그대로 — 서버가 `j.job_type` 에 등호로 맞춘다. */
+  jobType?: string | null
+  /**
+   * 업무 분류. `jobType` 과 같이 보내면 교집합이다.
+   *
+   * 업무 분류는 비언어 작업에만 있으니 이것만 보내도 사실상 MICE·IMC 로 좁혀진다. 반대로
+   * `slang`·`elang` 은 언어 작업만 고르게 된다 — 상세 테이블이 다르기 때문이고, 그래서 둘을 한꺼번에
+   * 보내면 결과가 비는 것이 정상이다.
+   */
+  jobCategory?: string | null
   slang?: string | null
   elang?: string | null
   pmId?: string | null

@@ -46,18 +46,21 @@ import { insertFragments, updateFragments } from "../NeotmsWrite.js";
 import type { CodeCreate, CodeUpdate } from "../neotms.schemas.js";
 
 /**
- * The five domains db/007_codes.sql seeds, as the application names them.
+ * The seven seeded domains, as the application names them - five from db/007_codes.sql and two from
+ * db/011_job_types.sql.
  *
  * These are the literal `sys_code.code` values of the domain rows - the ones with `code_parent`
- * NULL - and they are ASCII while their children are Korean. The asymmetry is on purpose: a domain
- * code travels in a query string and gets compared against this constant, while a child's code is
- * the value that lands in `job.work_code` and is already Korean in both the frontend and the legacy
- * data.
+ * NULL - and they are ASCII while their children are mostly Korean. The asymmetry is on purpose: a
+ * domain code travels in a query string and gets compared against this constant, while a child's
+ * code is the value that lands in `job.work_code` and is already Korean in both the frontend and the
+ * legacy data. "Mostly", because the rule is really that a code is whatever the thing is called -
+ * UPRO's children are `Trados` and `memoQ`, and JOBTYPE's are `LINGUISTICS`, `MICE` and `IMC`.
  *
- * Nothing enforces that a `sys_code` row's parent is one of these. An administrator may add a sixth
- * domain from 유지보수 and it will be listed and maintained like the others; what it will NOT have
- * is a dropdown reading it, because that requires a line of frontend code naming it. This constant
- * exists so the ones with dropdowns are enumerable rather than scattered across form components.
+ * Nothing enforces that a `sys_code` row's parent is one of these. An administrator may add an
+ * eighth domain from 유지보수 and it will be listed and maintained like the others; what it will NOT
+ * have is a dropdown reading it, because that requires a line of frontend code naming it. This
+ * constant exists so the ones with dropdowns are enumerable rather than scattered across form
+ * components.
  */
 export const NeotmsCodeDomain = {
   /** 분야. customer.cus_field, project.prj_field, project.prj_field2, translator.tran_field, translator.tran_unfield */
@@ -70,6 +73,22 @@ export const NeotmsCodeDomain = {
   LANG: "LANG",
   /** 사용 프로그램 (CAT tool). translator.tran_upro, and customer.cus_upro which is read-only now. */
   UPRO: "UPRO",
+  /**
+   * 업무 구분. job.job_type, purchase_order.po_type - and the `job_type` / `po_type` columns the
+   * four detail tables repeat in order to pin themselves to one value (db/011_job_types.sql).
+   *
+   * The only domain whose absence breaks a save rather than just emptying a dropdown: `job_type` is
+   * NOT NULL. Its DEFAULT covers a request that omits it, but a form that offers no option cannot
+   * record a MICE job at all - hence its place in the frontend's CODE_FALLBACKS.
+   */
+  JOBTYPE: "JOBTYPE",
+  /**
+   * 업무 분류. job_detail_non_linguistic.job_category, po_detail_non_linguistic.po_category
+   *
+   * One shared list for both non-linguistic types: any of the four categories is valid on a MICE
+   * job and on an IMC job alike. There is no type-to-category mapping to encode.
+   */
+  JOBCAT: "JOBCAT",
 } as const;
 
 export type NeotmsCodeDomainId = (typeof NeotmsCodeDomain)[keyof typeof NeotmsCodeDomain];

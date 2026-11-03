@@ -1,10 +1,29 @@
 // SPDX-License-Identifier: MIT
 //
-// The job (legacy PRJTB_JOB). One deliverable: one language pair, one service, one price.
+// The job (legacy PRJTB_JOB). One deliverable: one service, one price, and - depending on its
+// 업무 구분 - either one language pair or one 업무 분류.
 //
 // REVENUE IS BOOKED HERE. `job_price_ksum` is the column the reports sum, which makes this module's
 // correctness a reporting concern rather than a screen concern - a job written wrong is a figure
 // wrong on every report that includes its delivery date.
+//
+// ## The type decides which side table the payload is in
+//
+// `job.job_type` is the discriminator (LINGUISTICS / MICE / IMC). The columns that only one type has
+// live in `job_detail_linguistic` (`job_slang`, `job_elang`) and `job_detail_non_linguistic`
+// (`job_category`), keyed one-row-per-job on `job_id`. db/011_job_types.sql has the full reasoning;
+// what this module has to honour is three things:
+//
+//   1. Both joins are LEFT and both detail rows are optional. A job with neither a language nor a
+//      category is normal - thousands exist - so nothing here may treat a missing detail row as an
+//      error or substitute a default for it.
+//   2. The detail columns cannot come from `RETURNING`. They are in another table, which is why
+//      `jobColumns` carries only the job's own columns and `JOB_DETAIL_COLUMNS` is added to the
+//      SELECTs separately, and why both write paths re-read.
+//   3. A detail row's `job_type` is pinned by a composite FK to its parent's. So a type change with
+//      a stale detail row still present FAILS (23503) - the stale row has to be deleted first, in
+//      the same transaction. `JobDetailClearOps` exists for that and the manager's `updateJob` is
+//      written in that order.
 //
 // ## The scope is inherited, which is why every read joins the project
 //
@@ -25,9 +44,16 @@ import {
   type SortTarget,
   type SqlOps,
   type SqlRow,
+  type SqlWriteOps,
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { JOB_CODE, codeExpression } from "../NeotmsCodes.js";
+import {
+  JOB_TYPE_LINGUISTIC,
+  isLinguistic,
+  jobDetailTable,
+  type JobDetailTable,
+} from "../NeotmsJobTypes.js";
 import {
   cursorClause,
   filterClause,
@@ -46,6 +72,7 @@ import {
   derivedUpdate,
   insertFragments,
   updateFragments,
+  upsertFragments,
   type DerivedSpec,
   type FieldSpec,
   type WriteContext,
@@ -68,8 +95,13 @@ export type JobRow = {
   workCode: string | null;
   jobPmId: string | null;
   jobPmName: string | null;
+  /** 업무 구분 - a JOBTYPE code. NOT NULL in the database, so only a create response can lack it. */
+  jobType: string | null;
+  /** From `job_detail_linguistic`, and null for a job that has no such row. */
   jobSlang: string | null;
   jobElang: string | null;
+  /** 업무 분류 - from `job_detail_non_linguistic`. Null on a linguistics job by definition. */
+  jobCategory: string | null;
   /** Decimal strings throughout. See neotms.schemas: no amount passes through a JS number. */
   jobVolume: string | null;
   unitCode: string | null;
@@ -92,6 +124,12 @@ export type JobRow = {
   updatedAt: string | null;
 };
 
+/**
+ * The job's OWN columns. Usable in a `RETURNING` clause, which is the constraint that shapes it.
+ *
+ * The language pair and the category are deliberately absent: they are in the two detail tables, so
+ * they can only be selected through a join - see `JOB_DETAIL_COLUMNS`.
+ */
 const jobColumns = (q: string): string => `
   ${q}.id             AS job_id,
   ${q}.job_code       AS job_code,
@@ -100,8 +138,7 @@ const jobColumns = (q: string): string => `
   ${q}.work_code      AS work_code,
   ${q}.job_pm_id      AS job_pm_id,
   ${q}.job_pm_name    AS job_pm_name,
-  ${q}.job_slang      AS job_slang,
-  ${q}.job_elang      AS job_elang,
+  ${q}.job_type       AS job_type,
   ${q}.job_volume     AS job_volume,
   ${q}.unit_code      AS unit_code,
   ${q}.job_price_sel  AS job_price_sel,
@@ -135,6 +172,23 @@ const JOB_PROJECT_COLUMNS = `
   p.cus_code_name AS prj_cus_code_name
 `;
 
+/**
+ * The type-specific columns, from the two detail tables.
+ *
+ * At most one of the two rows exists for any job and often neither does, so every column here can be
+ * null and none of them is aliased to anything but its own name - `toJobRow` reads `job_slang` the
+ * same way it did when the column was on `job`, which is what keeps the move invisible above this
+ * module.
+ *
+ * Separate from `jobColumns` because the write paths interpolate that into `RETURNING`, where a
+ * joined table is not in scope.
+ */
+const JOB_DETAIL_COLUMNS = `
+  jdl.job_slang   AS job_slang,
+  jdl.job_elang   AS job_elang,
+  jdn.job_category AS job_category
+`;
+
 export const toJobRow = (row: SqlRow): JobRow => ({
   id: readId(row, "job_id") ?? "",
   jobCode: readText(row, "job_code") ?? "",
@@ -146,8 +200,10 @@ export const toJobRow = (row: SqlRow): JobRow => ({
   workCode: readText(row, "work_code"),
   jobPmId: readId(row, "job_pm_id"),
   jobPmName: readText(row, "job_pm_name"),
+  jobType: readText(row, "job_type"),
   jobSlang: readText(row, "job_slang"),
   jobElang: readText(row, "job_elang"),
+  jobCategory: readText(row, "job_category"),
   jobVolume: readMoney(row, "job_volume"),
   unitCode: readText(row, "unit_code"),
   jobPriceSel: readText(row, "job_price_sel"),
@@ -198,8 +254,19 @@ const JOB_FILTERS = {
   projectId: { column: "j.project_id", kind: "id" },
   state: { column: "j.job_state", kind: "text" },
   workCode: { column: "j.work_code", kind: "text" },
-  slang: { column: "j.job_slang", kind: "text" },
-  elang: { column: "j.job_elang", kind: "text" },
+  /** 업무 구분. The one filter that identifies a MICE or IMC job as such. */
+  jobType: { column: "j.job_type", kind: "text" },
+  /**
+   * The language pair, now read through the detail table.
+   *
+   * Filtering on `jdl.*` through a LEFT JOIN narrows to jobs that HAVE that language, which is what
+   * both the old behaviour and the screen mean by the filter. A job with no detail row drops out,
+   * exactly as a job with a NULL `job_slang` used to.
+   */
+  slang: { column: "jdl.job_slang", kind: "text" },
+  elang: { column: "jdl.job_elang", kind: "text" },
+  /** 업무 분류 - the language pair's counterpart for the non-linguistic types. */
+  jobCategory: { column: "jdn.job_category", kind: "text" },
   pmId: { column: "j.job_pm_id", kind: "id" },
   /** Filters on the project's customer, which is where the customer actually lives. */
   customerId: { column: "p.customer_id", kind: "id" },
@@ -226,10 +293,21 @@ export type JobFilters = Partial<Record<keyof typeof JOB_FILTERS, string>> & {
  */
 export const JOB_SCOPE_COLUMNS = ["j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
 
-/** The join every read shares. See the module header for why it is an INNER join. */
+/**
+ * The joins every read shares. See the module header for why `project` is an INNER join.
+ *
+ * The two detail joins are LEFT and that is not a precaution - at most one of them matches, and for
+ * a job with neither a language nor a category neither does. An INNER join to either would make the
+ * job list silently drop rows.
+ *
+ * Both are one-row-at-most by key: `job_id` is the primary key of each detail table, so neither can
+ * fan a job out into duplicates the way a join to a list table would.
+ */
 const JOB_FROM = `
     FROM job j
     JOIN project p ON p.id = j.project_id AND p.deleted = false
+    LEFT JOIN job_detail_linguistic jdl ON jdl.job_id = j.id
+    LEFT JOIN job_detail_non_linguistic jdn ON jdn.job_id = j.id
 `;
 
 /* -------------------------------------------------------------------------- */
@@ -264,7 +342,8 @@ export const JobListOps: (
   return {
     sql: `
       SELECT ${jobColumns("j")},
-      ${JOB_PROJECT_COLUMNS}
+      ${JOB_PROJECT_COLUMNS},
+      ${JOB_DETAIL_COLUMNS}
       ${JOB_FROM}
        WHERE j.deleted = false
       ${where.fragment}
@@ -284,7 +363,8 @@ export const JobGetOps: (caller: NeotmsCaller, id: string) => SqlOps<JobRow | nu
   return {
     sql: `
       SELECT ${jobColumns("j")},
-      ${JOB_PROJECT_COLUMNS}
+      ${JOB_PROJECT_COLUMNS},
+      ${JOB_DETAIL_COLUMNS}
       ${JOB_FROM}
        WHERE j.id = :id
          AND j.deleted = false
@@ -296,22 +376,40 @@ export const JobGetOps: (caller: NeotmsCaller, id: string) => SqlOps<JobRow | nu
   };
 };
 
+/** What `JobProjectOps` answers: the job exists, is visible, and is this project's and this type's. */
+export type JobIdentity = {
+  projectId: string;
+  /** 업무 구분. Never null - the column is NOT NULL - but defaulted here against a pre-011 row. */
+  jobType: string;
+};
+
 /**
- * Whether this caller may act on this job, and which project it belongs to.
+ * Whether this caller may act on this job, which project it belongs to, and what type it is.
  *
  * Returns the project id because a PO needs it: a PO's `project_id` is derived from its job rather
  * than accepted from the request, so this one query answers "may they" and "where does it go" at
  * the same time. Null means either no such job or not visible - the same answer to both questions
  * being asked.
+ *
+ * It returns the type for two reasons, both of them about not writing a second scoped read:
+ *
+ *   - a new PO defaults its own 업무 구분 from its job's, and
+ *   - `updateJob` needs the CURRENT type to know whether the type is changing and therefore which
+ *     stale detail row to delete first.
+ *
+ * Being scoped, it also authorizes those writes. That matters more than it looks: the alternative
+ * was a fourth copy of `JOB_SCOPE_COLUMNS`, which is the drift this file's scope comment warns
+ * about.
  */
-export const JobProjectOps: (caller: NeotmsCaller, id: string) => SqlOps<string | null> = (
+export const JobProjectOps: (caller: NeotmsCaller, id: string) => SqlOps<JobIdentity | null> = (
   caller,
   id,
 ) => {
   const scope = scopeClauseForOne(caller, JOB_SCOPE_COLUMNS);
   return {
     sql: `
-      SELECT j.project_id AS project_id
+      SELECT j.project_id AS project_id,
+             j.job_type   AS job_type
       ${JOB_FROM}
        WHERE j.id = :id
          AND j.deleted = false
@@ -319,7 +417,13 @@ export const JobProjectOps: (caller: NeotmsCaller, id: string) => SqlOps<string 
        LIMIT 1
     `,
     parameters: [param("id", id, "id"), ...scope.parameters],
-    mapper: (rows) => (rows.length > 0 ? readId(rows[0]!, "project_id") : null),
+    mapper: (rows) => {
+      const row = rows[0];
+      if (!row) return null;
+      const projectId = readId(row, "project_id");
+      if (projectId === null) return null;
+      return { projectId, jobType: readText(row, "job_type") ?? JOB_TYPE_LINGUISTIC };
+    },
   };
 };
 
@@ -352,8 +456,12 @@ const JOB_FIELDS: readonly FieldSpec<JobUpdate & { projectId?: string }>[] = [
   { column: "job_name", kind: "text", read: (i) => i.jobName },
   { column: "work_code", kind: "text", read: (i) => i.workCode },
   { column: "job_pm_id", kind: "id", read: (i) => i.jobPmId },
-  { column: "job_slang", kind: "text", read: (i) => i.jobSlang },
-  { column: "job_elang", kind: "text", read: (i) => i.jobElang },
+  /**
+   * 업무 구분. `job_slang` and `job_elang` are NOT here any more and must not be re-added - they are
+   * columns of `job_detail_linguistic`, and a spec for them would make every save fail with 42703.
+   * They are written by `JobLinguisticUpsertOps` instead, and `job_category` likewise.
+   */
+  { column: "job_type", kind: "text", read: (i) => i.jobType },
   { column: "job_volume", kind: "money", read: (i) => i.jobVolume },
   { column: "unit_code", kind: "text", read: (i) => i.unitCode },
   { column: "job_price_sel", kind: "text", read: (i) => i.jobPriceSel },
@@ -456,6 +564,86 @@ export const JobUpdateOps: (
     mapper: (rows) => (rows.length > 0 ? toJobRow(rows[0]!) : null),
   };
 };
+
+/* -------------------------------------------------------------------------- */
+/* The type-specific detail rows                                              */
+/* -------------------------------------------------------------------------- */
+
+/** `job_detail_linguistic`'s writable columns. */
+const JOB_LINGUISTIC_FIELDS: readonly FieldSpec<JobUpdate>[] = [
+  { column: "job_slang", kind: "text", read: (i) => i.jobSlang },
+  { column: "job_elang", kind: "text", read: (i) => i.jobElang },
+];
+
+/** `job_detail_non_linguistic`'s writable columns. */
+const JOB_NON_LINGUISTIC_FIELDS: readonly FieldSpec<JobUpdate>[] = [
+  { column: "job_category", kind: "text", read: (i) => i.jobCategory },
+];
+
+/**
+ * Write the detail row for a job of this type - or return null, meaning there is nothing to write.
+ *
+ * Null rather than a statement that writes nothing, because "nothing to write" is the common case
+ * and it is also the CORRECT case: a job with no language pair and no category needs no detail row,
+ * and inserting an all-NULL one would turn "nobody has filled this in" into a row that exists.
+ * db/011_job_types.sql puts it as "constraints forbid, never require".
+ *
+ * `job_type` is written alongside the payload and is not optional in the statement. The detail
+ * table's composite FK to `job (id, job_type)` is what makes a language pair on a MICE job
+ * impossible, and the FK can only check a value that is actually stored.
+ *
+ * The caller must have established that it may write this job. There is no scope predicate here -
+ * see `JobDetailClearOps` for why that is a decision rather than an omission.
+ */
+export const JobDetailUpsertOps = (
+  jobId: string,
+  jobType: string,
+  input: JobUpdate,
+): SqlWriteOps | null => {
+  const linguistic = isLinguistic(jobType);
+  const table: JobDetailTable = jobDetailTable(jobType);
+  const fields = upsertFragments(
+    linguistic ? JOB_LINGUISTIC_FIELDS : JOB_NON_LINGUISTIC_FIELDS,
+    input,
+  );
+  if (fields.columns.length === 0) return null;
+  return {
+    sql: `
+      INSERT INTO ${table} (job_id, job_type, ${fields.columns.join(", ")})
+      VALUES (:job_id, :job_type, ${fields.placeholders.join(", ")})
+      ON CONFLICT (job_id) DO UPDATE
+         SET job_type = EXCLUDED.job_type,
+             ${fields.assignments.join(",\n             ")}
+    `,
+    parameters: [
+      param("job_id", jobId, "id"),
+      param("job_type", jobType, "text"),
+      ...fields.parameters,
+    ],
+  };
+};
+
+/**
+ * Delete a job's row from one detail table.
+ *
+ * Run before a type change, and required for correctness independently of any constraint: a job
+ * edited from LINGUISTICS to MICE and back would otherwise resurface its old language pair, having
+ * apparently remembered something the user cleared. The composite FK only makes forgetting this
+ * impossible - it turns a silent wrong answer into a 23503.
+ *
+ * DELIBERATELY UNSCOPED, and that is worth a sentence. Every other write in this module carries
+ * `JOB_SCOPE_COLUMNS`, and adding it here would need the project join an UPDATE-style `FROM` would
+ * give - a fourth copy of the predicate this file's scope comment names as the hazard. Instead this
+ * only ever runs after `JobProjectOps` has returned a row for this caller, inside the same
+ * transaction: the authorization is one statement earlier and cannot be skipped, because the id
+ * being deleted is the id that read proved.
+ *
+ * `table` is a closed union, not a string from anywhere near a request - see `jobDetailTables`.
+ */
+export const JobDetailClearOps = (jobId: string, table: JobDetailTable): SqlWriteOps => ({
+  sql: `DELETE FROM ${table} WHERE job_id = :job_id`,
+  parameters: [param("job_id", jobId, "id")],
+});
 
 export const JobSoftDeleteOps: (
   caller: NeotmsCaller,

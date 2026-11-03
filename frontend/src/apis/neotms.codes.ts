@@ -114,6 +114,37 @@ export const WORK_CODES: readonly CodeOption[] = [
   opt('기타', '기타'),
 ]
 
+/**
+ * 업무 구분. **db/011_job_types.sql 의 JOBTYPE 블록과 값이 같아야 한다** — `UNIT_CODES` 주석 참고.
+ *
+ * 다른 하드코딩 목록들보다 어긋났을 때의 피해가 크다. 업무 구분은 어느 상세 테이블에 출발어·도착어
+ * 혹은 업무 분류를 넣을지 결정하는 값이고, `job.job_type` 은 NOT NULL 이다. 그래서 이 목록은
+ * `CODE_FALLBACKS` 에 들어가 있다 — 서버가 JOBTYPE 도메인을 비워 보내면 작업 등록 자체가 막히므로,
+ * 빈 드롭다운을 사실대로 보여주는 것이 답이 되지 않는 유일한 도메인이다.
+ */
+export const JOBTYPE_CODES: readonly CodeOption[] = [
+  opt('LINGUISTICS', '언어 및 통번역 (LINGUISTICS)'),
+  opt('MICE', 'MICE'),
+  opt('IMC', 'IMC'),
+]
+
+/** 언어쌍을 가지는 업무 구분의 코드. `job.job_type`·`purchase_order.po_type` 의 DEFAULT 이기도 하다. */
+export const JOB_TYPE_LINGUISTIC = 'LINGUISTICS'
+
+/**
+ * 이 업무 구분이 언어쌍을 가지는가(아니라면 업무 분류를 가진다).
+ *
+ * 서버의 NeotmsJobTypes.ts 와 **같은 방향으로** 판정한다 — '언어 및 통번역' 인지를 묻고, 나머지는
+ * 모두 비언어로 본다. 반대로 비언어 목록을 열거하면, 유지보수 화면에서 네 번째 구분이 추가되는 순간
+ * 그 작업에 쓸데없는 언어쌍 입력란이 나오고 업무 분류는 입력할 수 없게 된다. 모르는 구분은 비언어로
+ * 두는 쪽이 피해가 작고, DB 의 CHECK 제약(`job_type <> 'LINGUISTICS'`)도 그 방향이다.
+ *
+ * 빈 값·`null` 은 'LINGUISTICS' 로 본다. 서버에서 NOT NULL DEFAULT 인 컬럼이라, 값이 없다는 것은
+ * 아직 아무것도 고르지 않았다는 뜻이고 그때 저장되는 값이 'LINGUISTICS' 다.
+ */
+export const isLinguistic = (jobType: string | null | undefined): boolean =>
+  (jobType?.trim() || JOB_TYPE_LINGUISTIC) === JOB_TYPE_LINGUISTIC
+
 /** 리포트 집계 기준. 서버의 ReportQuerySchema 의 picklist 와 **정확히** 같아야 한다. */
 export const REPORT_GROUPS: readonly CodeOption[] = [
   opt('date', '일자별'),
@@ -123,6 +154,8 @@ export const REPORT_GROUPS: readonly CodeOption[] = [
   opt('corp', '법인별'),
   opt('category', '분야별'),
   opt('langPair', '언어쌍별'),
+  opt('jobType', '업무 구분별'),
+  opt('jobCategory', '업무 분류별'),
 ]
 
 /**
@@ -153,9 +186,11 @@ export function codeOptions(
 /**
  * `sys_code` 의 도메인 코드. 서버의 `NeotmsCodeDomain` 과 같은 문자열이어야 한다.
  *
- * 도메인 코드만 ASCII 이고 자식 코드는 한국어다. 의도된 비대칭이고, 이유는 쓰임이 다르기
- * 때문이다 — 도메인 코드는 이렇게 상수와 비교되는 식별자이고, 자식 코드는 `job.work_code` 에
- * 실제로 저장되는 값이자 레거시 데이터에 이미 한국어로 들어 있는 값이다.
+ * 도메인 코드는 모두 ASCII 이고 자식 코드는 대부분 한국어다. 의도된 비대칭이고, 이유는 쓰임이
+ * 다르기 때문이다 — 도메인 코드는 이렇게 상수와 비교되는 식별자이고, 자식 코드는 `job.work_code`
+ * 에 실제로 저장되는 값이자 레거시 데이터에 이미 한국어로 들어 있는 값이다. 규칙은 "그 값이 실제로
+ * 불리는 이름을 쓴다" 이므로 `JOBTYPE`·`JOBCAT` 의 자식 코드들(`MICE`, `online_marketing`)처럼
+ * ASCII 인 자식 코드도 있다 — `UPRO` 의 `Trados`, `memoQ` 와 같은 경우다.
  */
 export const CODE_DOMAIN = {
   /** 분야. */
@@ -168,6 +203,16 @@ export const CODE_DOMAIN = {
   LANG: 'LANG',
   /** 사용 프로그램(CAT 툴). 번역가에게만 묻는다 — `CustomerRow.cusUpro` 주석 참고. */
   UPRO: 'UPRO',
+  /**
+   * 업무 구분. `job.job_type`·`purchase_order.po_type` 에 저장된다.
+   *
+   * 작업과 발주의 폼이 출발어·도착어를 물을지 업무 분류를 물을지 결정하는 값이다. 'LINGUISTICS'
+   * 하나만 언어쌍을 가지고, 나머지는 모두 업무 분류를 가진다 — 목록에 없는 네 번째 구분이 유지보수
+   * 화면에서 추가되더라도 그렇다(서버의 NeotmsJobTypes.ts 의 `isLinguistic` 과 같은 규칙).
+   */
+  JOBTYPE: 'JOBTYPE',
+  /** 업무 분류. MICE·IMC 작업의 `job_category`·`po_category`. 두 구분이 같은 목록을 공유한다. */
+  JOBCAT: 'JOBCAT',
 } as const
 
 export type CodeDomainId = (typeof CODE_DOMAIN)[keyof typeof CODE_DOMAIN]
@@ -179,12 +224,16 @@ export const CODE_DOMAIN_LABELS: Readonly<Record<CodeDomainId, string>> = {
   UNIT: '단가 단위',
   LANG: '언어',
   UPRO: '사용 프로그램',
+  JOBTYPE: '업무 구분',
+  JOBCAT: '업무 분류',
 }
 
 /** 서버가 그 도메인에 대해 아무 행도 주지 않았을 때 쓰는 대비책. 없는 도메인은 빈 목록이다. */
 const CODE_FALLBACKS: Readonly<Partial<Record<CodeDomainId, readonly CodeOption[]>>> = {
   WORK: WORK_CODES,
   UNIT: UNIT_CODES,
+  // 작업을 등록하는 데 반드시 필요한 도메인만 여기 둔다 — `JOBTYPE_CODES` 주석 참고.
+  JOBTYPE: JOBTYPE_CODES,
 }
 
 /**
@@ -196,16 +245,21 @@ const CODE_FALLBACKS: Readonly<Partial<Record<CodeDomainId, readonly CodeOption[
  * 드러나지 않지만, 담당자가 `code='의료기기'`, `codeName='의료기기(MD)'` 처럼 다르게 만들 수
  * 있다. 그럴 때만 라벨에 코드를 덧붙인다 — 같을 때 덧붙이면 모든 항목이 `번역 (번역)` 이 된다.
  *
- * ## 비어 있으면 하드코딩 목록으로 떨어진다 (작업 종류·단가 단위만)
+ * ## 비어 있으면 하드코딩 목록으로 떨어진다 (작업 종류·단가 단위·업무 구분만)
  *
  * `sys_code` 가 비어 있는 것은 가상의 상황이 아니다. db/007_codes.sql 을 적용하기 전까지 이
  * 시스템이 정확히 그 상태였고, 그 상태에서 분야를 자유 입력으로 받던 화면은 **어떤 값을 넣어도
  * 저장되지 않았다.** 그러니 빈 드롭다운은 거짓말이 아니라 사실의 보고다 — 고를 것이 없으면
  * 저장될 것도 없다.
  *
- * 그래도 작업 종류와 단가 단위에만 대비책을 두는 이유는 이 둘이 작업·발주 등록의 **필수**
- * 값이라는 것이다. 분야가 비면 분야 없는 고객사가 저장되지만, 작업 종류가 비면 작업을 아예
- * 만들 수 없다. 대비책의 값은 씨드 파일과 같으므로, 씨드를 적용하면 같은 목록이 서버에서 온다.
+ * 그래도 `CODE_FALLBACKS` 의 세 도메인에만 대비책을 두는 이유는 이들이 작업·발주 등록의
+ * **필수** 값이라는 것이다. 분야가 비면 분야 없는 고객사가 저장되지만, 작업 종류가 비면 작업을
+ * 아예 만들 수 없고, 업무 구분이 비면 언어쌍과 업무 분류 중 어느 칸을 보여 줄지조차 고를 수
+ * 없다. 대비책의 값은 씨드 파일과 같으므로, 씨드를 적용하면 같은 목록이 서버에서 온다.
+ *
+ * 업무 분류(`JOBCAT`)는 일부러 빼 두었다. 비언어 작업에서도 **필수가 아니고**(db/011 의
+ * "금지하되 요구하지 않는다"), 분류 없이도 저장된다. 대비책이 있으면 서버에 없는 코드를 고를
+ * 수 있게 되고, 그 저장은 외래키에서 거절된다.
  */
 export function codesToOptions(
   items: readonly CodeRow[] | undefined,
@@ -216,7 +270,7 @@ export function codesToOptions(
     .map((row) => {
       const name = row.codeName?.trim()
       if (!name) return opt(row.code)
-      return opt(row.code, name === row.code ? name : `${name} (${row.code})`)
+      return opt(row.code, name === row.code ? name : `${name}`)
     })
   // 서버 쪽에서 이미 ord_no, code 순으로 정렬해서 보내므로 여기서 다시 정렬하지 않는다.
   return inDomain.length > 0 ? inDomain : (CODE_FALLBACKS[domain] ?? [])

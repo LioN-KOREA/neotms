@@ -627,6 +627,25 @@ export function sqlState(err: unknown): string {
   return typeof err === "object" && err !== null && "code" in err ? String(err.code) : "";
 }
 
+/**
+ * The name of the constraint a violation names, or `""` when the error names none.
+ *
+ * Exported for the same reason and under the same rule as `sqlState`: a manager that needs to tell
+ * two violations of the SAME SQLSTATE apart has nowhere else to look. The case it exists for is
+ * 23503, which is raised both by an unknown `sys_code` reference and by the composite foreign key
+ * that pins a job's detail row to its type - two completely different mistakes, deserving two
+ * different sentences, and indistinguishable by status code alone.
+ *
+ * `err.constraint` is populated by `pg` from the server's error fields. It is absent on errors that
+ * are not constraint violations, which is why a caller must treat `""` as "not the one I mean"
+ * rather than as a match.
+ */
+export function sqlConstraint(err: unknown): string {
+  return typeof err === "object" && err !== null && "constraint" in err
+    ? String(err.constraint)
+    : "";
+}
+
 function errorMessage(err: unknown): string {
   return typeof err === "object" && err !== null && "message" in err ? String(err.message) : "";
 }
