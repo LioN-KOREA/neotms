@@ -78,13 +78,13 @@ export function PurchaseOrdersView() {
     const label = row.poName || row.poCode
     if (
       !window.confirm(
-        `${label} 발주를 삭제할까요?\n이 발주의 원가가 집계에서 빠지고, 해당 작업의 마진이 올라갑니다.`,
+        `${label} PO를 삭제할까요?`,
       )
     ) {
       return
     }
     await deletePo.mutateAsync(row.id)
-    setNotice(`${label} 발주를 삭제했습니다.`)
+    setNotice(`PO [${label}]를 삭제했습니다.`)
   }
 
   return (
@@ -101,7 +101,7 @@ export function PurchaseOrdersView() {
             onClick={() => setEditing(null)}
           >
             <Icon name="plus" size={13} />
-            발주 등록
+            PO 등록
           </button>
         ) : null}
       </div>
@@ -128,7 +128,7 @@ export function PurchaseOrdersView() {
               id="of-q"
               className={`${ui.input} ${ui.searchInput}`}
               type="search"
-              placeholder="발주명 · 코드 · 작업 · 번역가"
+              placeholder="PO명 · 코드 · 작업 · 번역가"
               value={draft.q}
               onChange={(e) => setDraft((p) => ({ ...p, q: e.target.value }))}
             />
@@ -208,7 +208,7 @@ export function PurchaseOrdersView() {
             <thead>
               <tr>
                 <th>코드</th>
-                <th>발주명</th>
+                <th>PO명</th>
                 <th>작업 · 프로젝트</th>
                 <th>번역가</th>
                 <th>물량 · 단가</th>
@@ -226,8 +226,8 @@ export function PurchaseOrdersView() {
                 isEmpty={rows.length === 0}
                 emptyText={
                   activeCount > 0
-                    ? '조건에 맞는 발주가 없습니다.'
-                    : '등록된 발주가 없습니다. 발주는 작업에 달립니다 — 작업을 먼저 등록합니다.'
+                    ? '조건에 맞는 PO가 없습니다.'
+                    : '등록된 PO가 없습니다.'
                 }
                 colSpan={10}
               />
@@ -251,6 +251,12 @@ export function PurchaseOrdersView() {
                       <span className={`${ui.badge} ${ui.badgeWarn}`}>미지정</span>
                     )}
                   </td>
+                  {/*
+                   * 물량/단가. **비언어 발주에서는 두 줄 모두 `-` 다.** 분기를 쓰지 않은 것이
+                   * 아니라, 분기가 필요 없다 — 네 값 모두 `po_detail_linguistic` 의 컬럼이므로
+                   * (db/012_job_pricing.sql) MICE·IMC 발주에는 그 행이 없고 서버가 null 을
+                   * 돌려준다. 그 발주의 금액은 다음 열(원가)에 있다.
+                   */}
                   <td className={ui.cellMuted}>
                     <div>
                       {row.poVolume ?? '-'} {row.poUnitCode ?? ''}

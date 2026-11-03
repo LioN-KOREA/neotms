@@ -78,8 +78,19 @@ export type PoDetailTable = "po_detail_linguistic" | "po_detail_non_linguistic";
  * `jdl_` / `jdn_` / `pdl_` / `pdn_` are the four tables' abbreviations, and every constraint of
  * theirs - the CHECK that pins the table to its one permitted type, and the composite FK that pins
  * the row's type to its parent's - is named with that prefix. Matching on the prefix rather than on
- * the eight names means a constraint added to one of those tables later is recognised too, which is
- * the right default: a refusal from a detail table is a type-mismatch refusal.
+ * the eight names means a HAND-named constraint added to one of those tables later is recognised
+ * too, which is the right default: a deliberate refusal from a detail table is a type-mismatch
+ * refusal.
+ *
+ * ## It does not catch the auto-named ones, and should not
+ *
+ * PostgreSQL names a constraint you do not name after the full table, so the `sys_code` FKs on these
+ * tables are `job_detail_linguistic_job_slang_fkey`, `job_detail_linguistic_unit_code_fkey` (added by
+ * db/012_job_pricing.sql when `unit_code` moved) and so on. None of those match this prefix, so an
+ * unrecognised unit code or language code still surfaces as a 500 rather than as a sentence about
+ * 업무 구분 - which is correct, because it is a different mistake with a different fix, and it read
+ * the same way before the columns moved. Hand-named means "this file put it there on purpose"; that
+ * is the line this regex is drawn along.
  */
 const DETAIL_CONSTRAINT = /^(?:jdl|jdn|pdl|pdn)_/;
 

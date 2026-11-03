@@ -67,7 +67,11 @@ export const NeotmsCodeDomain = {
   FIELD: "FIELD",
   /** 작업 종류. job.work_code, purchase_order.po_work_code, customer_contract.work_code, translator_lang.work_code, translator.tran_work_con */
   WORK: "WORK",
-  /** 단가 단위. job.unit_code, purchase_order.po_unit_code, translator_lang.tran_la_unit */
+  /**
+   * 단가 단위. job_detail_linguistic.unit_code, po_detail_linguistic.po_unit_code,
+   * translator_lang.tran_la_unit - the first two moved off their parents in
+   * db/012_job_pricing.sql, because only linguistic work is billed per unit.
+   */
   UNIT: "UNIT",
   /** 언어. eight columns across job, purchase_order, customer_contract and translator_lang */
   LANG: "LANG",

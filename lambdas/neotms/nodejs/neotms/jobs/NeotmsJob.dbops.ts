@@ -102,12 +102,26 @@ export type JobRow = {
   jobElang: string | null;
   /** 업무 분류 - from `job_detail_non_linguistic`. Null on a linguistics job by definition. */
   jobCategory: string | null;
-  /** Decimal strings throughout. See neotms.schemas: no amount passes through a JS number. */
+  /**
+   * How the amount was derived - also from `job_detail_linguistic`, and null on non-linguistic work.
+   *
+   * Decimal strings throughout. See neotms.schemas: no amount passes through a JS number.
+   *
+   * These five moved off `job` in db/012_job_pricing.sql. A MICE or IMC job is not billed per word,
+   * so it has no volume and no unit price; what it has is the total below, entered directly.
+   */
   jobVolume: string | null;
   unitCode: string | null;
   jobPriceSel: string | null;
   jobPrice: string | null;
   jobPriceDis: string | null;
+  /**
+   * The amount - on `job` itself, for every 업무 구분.
+   *
+   * It stays on the parent because a KRW total means the same thing on all three types, and because
+   * `job_price_ksum` is what the report sums, what `JOB_SORTS.amount` sorts by and what the project
+   * rollup aggregates. Moving it into a detail table would have changed all three at once.
+   */
   coinCode: string | null;
   /** The FX rate captured at transaction time, not today's. */
   coinRate: string | null;
@@ -127,8 +141,10 @@ export type JobRow = {
 /**
  * The job's OWN columns. Usable in a `RETURNING` clause, which is the constraint that shapes it.
  *
- * The language pair and the category are deliberately absent: they are in the two detail tables, so
- * they can only be selected through a join - see `JOB_DETAIL_COLUMNS`.
+ * The language pair, the category and the five pricing inputs are deliberately absent: they are in
+ * the two detail tables, so they can only be selected through a join - see `JOB_DETAIL_COLUMNS`.
+ * What IS still here is the money - `coin_code` through `job_price_ksum` - because the amount stays
+ * on the parent for every 업무 구분. db/012_job_pricing.sql has the reasoning.
  */
 const jobColumns = (q: string): string => `
   ${q}.id             AS job_id,
@@ -139,11 +155,6 @@ const jobColumns = (q: string): string => `
   ${q}.job_pm_id      AS job_pm_id,
   ${q}.job_pm_name    AS job_pm_name,
   ${q}.job_type       AS job_type,
-  ${q}.job_volume     AS job_volume,
-  ${q}.unit_code      AS unit_code,
-  ${q}.job_price_sel  AS job_price_sel,
-  ${q}.job_price      AS job_price,
-  ${q}.job_price_dis  AS job_price_dis,
   ${q}.coin_code      AS coin_code,
   ${q}.coin_rate      AS coin_rate,
   ${q}.job_price_sum  AS job_price_sum,
@@ -182,10 +193,19 @@ const JOB_PROJECT_COLUMNS = `
  *
  * Separate from `jobColumns` because the write paths interpolate that into `RETURNING`, where a
  * joined table is not in scope.
+ *
+ * The five pricing inputs sit on the linguistic side because only linguistic work is billed per
+ * word: a MICE or IMC job carries its total directly, and the total is on `job` itself. So a
+ * non-linguistic row reads `job_volume` as null, which is exactly what the 물량/단가 column wants.
  */
 const JOB_DETAIL_COLUMNS = `
-  jdl.job_slang   AS job_slang,
-  jdl.job_elang   AS job_elang,
+  jdl.job_slang    AS job_slang,
+  jdl.job_elang    AS job_elang,
+  jdl.job_volume   AS job_volume,
+  jdl.unit_code    AS unit_code,
+  jdl.job_price_sel AS job_price_sel,
+  jdl.job_price    AS job_price,
+  jdl.job_price_dis AS job_price_dis,
   jdn.job_category AS job_category
 `;
 
@@ -457,16 +477,18 @@ const JOB_FIELDS: readonly FieldSpec<JobUpdate & { projectId?: string }>[] = [
   { column: "work_code", kind: "text", read: (i) => i.workCode },
   { column: "job_pm_id", kind: "id", read: (i) => i.jobPmId },
   /**
-   * 업무 구분. `job_slang` and `job_elang` are NOT here any more and must not be re-added - they are
-   * columns of `job_detail_linguistic`, and a spec for them would make every save fail with 42703.
-   * They are written by `JobLinguisticUpsertOps` instead, and `job_category` likewise.
+   * 업무 구분. Seven columns are NOT here any more and must not be re-added, because a spec for a
+   * column `job` no longer has makes EVERY save fail with 42703:
+   *
+   * - `job_slang`, `job_elang` (db/011_job_types.sql) and `job_volume`, `unit_code`,
+   *   `job_price_sel`, `job_price`, `job_price_dis` (db/012_job_pricing.sql) belong to
+   *   `job_detail_linguistic` and are written by `JobLinguisticUpsertOps`;
+   * - `job_category` belongs to `job_detail_non_linguistic` and is written by the other upsert.
+   *
+   * The four money columns below DID stay, and are the reason the split works: a MICE job records
+   * no word count but still records a total.
    */
   { column: "job_type", kind: "text", read: (i) => i.jobType },
-  { column: "job_volume", kind: "money", read: (i) => i.jobVolume },
-  { column: "unit_code", kind: "text", read: (i) => i.unitCode },
-  { column: "job_price_sel", kind: "text", read: (i) => i.jobPriceSel },
-  { column: "job_price", kind: "money", read: (i) => i.jobPrice },
-  { column: "job_price_dis", kind: "money", read: (i) => i.jobPriceDis },
   { column: "coin_code", kind: "text", read: (i) => i.coinCode },
   { column: "coin_rate", kind: "money", read: (i) => i.coinRate },
   { column: "job_price_sum", kind: "money", read: (i) => i.jobPriceSum },
@@ -569,10 +591,26 @@ export const JobUpdateOps: (
 /* The type-specific detail rows                                              */
 /* -------------------------------------------------------------------------- */
 
-/** `job_detail_linguistic`'s writable columns. */
+/**
+ * `job_detail_linguistic`'s writable columns - the language pair and how the amount was derived.
+ *
+ * The five pricing inputs are here and not in `JOB_FIELDS` because only linguistic work is billed
+ * per word (db/012_job_pricing.sql). A MICE or IMC job submits `job_price_sum` and
+ * `job_price_ksum` directly, and those two never left `job`.
+ *
+ * Consequence worth knowing: re-typing a job to MICE drops this row, so the word count and unit
+ * price go with it while the total survives on the parent. That is the point - the legacy
+ * workaround stored a fabricated 한국어 > 한국어 pair and `1 단어` to make a non-linguistic job fit
+ * a linguistic form, and clearing it must not disturb the one number the report reads.
+ */
 const JOB_LINGUISTIC_FIELDS: readonly FieldSpec<JobUpdate>[] = [
   { column: "job_slang", kind: "text", read: (i) => i.jobSlang },
   { column: "job_elang", kind: "text", read: (i) => i.jobElang },
+  { column: "job_volume", kind: "money", read: (i) => i.jobVolume },
+  { column: "unit_code", kind: "text", read: (i) => i.unitCode },
+  { column: "job_price_sel", kind: "text", read: (i) => i.jobPriceSel },
+  { column: "job_price", kind: "money", read: (i) => i.jobPrice },
+  { column: "job_price_dis", kind: "money", read: (i) => i.jobPriceDis },
 ];
 
 /** `job_detail_non_linguistic`'s writable columns. */

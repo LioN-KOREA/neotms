@@ -386,6 +386,17 @@ export function JobsView() {
                       : [row.jobType, categoryName(row.jobCategory)].filter(Boolean).join(' · ') ||
                         '-'}
                   </td>
+                  {/*
+                   * 물량/단가. **비언어 작업에서는 두 줄이 모두 `-` 가 되고, 그게 의도한
+                   * 모습이다.** 분기가 없는 것은 빠뜨린 것이 아니다 — 네 값 모두
+                   * `job_detail_linguistic` 의 컬럼이므로(db/012_job_pricing.sql) MICE·IMC 작업은
+                   * 언어 상세 행 자체가 없고, 서버가 null 을 돌려주므로 아래 두 폴백이 그대로
+                   * 답이 된다.
+                   *
+                   * 비언어 작업의 업무량을 무엇으로 셀지는 아직 정해지지 않았다. 정해지면 그때
+                   * 이 칸에 분기가 생긴다. 그 전까지 `-` 는 "이 작업은 단위로 팔지 않는다" 라는
+                   * 정확한 진술이다.
+                   */}
                   <td className={ui.cellMuted}>
                     <div>
                       {row.jobVolume ?? '-'} {row.unitCode ?? ''}

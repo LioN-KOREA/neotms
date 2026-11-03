@@ -108,10 +108,23 @@ export type PurchaseOrderRow = {
   poElang: string | null;
   /** 업무 분류 - from `po_detail_non_linguistic`. Not `po_cat_*`, which is CAT-tool analysis. */
   poCategory: string | null;
+  /**
+   * How the cost was derived - also from `po_detail_linguistic`, so null on non-linguistic work.
+   *
+   * These four moved off `purchase_order` in db/012_job_pricing.sql. A MICE or IMC PO is not
+   * bought per word, so it has no volume and no unit price; what it has is the total below,
+   * entered directly. Note there is no discount column on the PO side - there never was one.
+   */
   poVolume: string | null;
   poUnitCode: string | null;
   poPriceSel: string | null;
   poPrice: string | null;
+  /**
+   * The amount - on `purchase_order` itself, for every 업무 구분.
+   *
+   * `po_price_ksum` is what the report sums as cost, what `PO_SORTS.amount` sorts by and what the
+   * project rollup aggregates, which is why it stayed put while the derivation moved.
+   */
   poCoinCode: string | null;
   poCoinRate: string | null;
   poPriceSum: string | null;
@@ -144,7 +157,9 @@ export type PurchaseOrderRow = {
  * The PO's OWN columns. Interpolated into `RETURNING`, which is why the detail columns are not here.
  *
  * `po_cat_*` ARE here and belong here - they are CAT-tool analysis figures on `purchase_order`
- * itself. The column that moved out is `po_slang` / `po_elang`; see `PO_DETAIL_COLUMNS`.
+ * itself, and nothing in the application multiplies them, which is why they did not follow
+ * `po_volume` into the detail table. What moved out is `po_slang` / `po_elang` plus the four
+ * pricing inputs; see `PO_DETAIL_COLUMNS`. `po_price_sum` and `po_price_ksum` stayed.
  */
 const poColumns = (q: string): string => `
   ${q}.id               AS po_id,
@@ -162,10 +177,6 @@ const poColumns = (q: string): string => `
   ${q}.translator_id    AS translator_id,
   ${q}.po_tran_name     AS po_tran_name,
   ${q}.po_type          AS po_type,
-  ${q}.po_volume        AS po_volume,
-  ${q}.po_unit_code     AS po_unit_code,
-  ${q}.po_price_sel     AS po_price_sel,
-  ${q}.po_price         AS po_price,
   ${q}.po_coin_code     AS po_coin_code,
   ${q}.po_coin_rate     AS po_coin_rate,
   ${q}.po_price_sum     AS po_price_sum,
@@ -214,11 +225,19 @@ const PO_PARENT_COLUMNS = `
  * At most one of the two rows exists and often neither does. Aliased to their own bare names, so
  * `toPurchaseOrderRow` reads `po_slang` exactly as it did when the column was on `purchase_order` -
  * the move is invisible above this module.
+ *
+ * The four pricing inputs are on the linguistic side because only linguistic work is bought per
+ * unit. A non-linguistic PO therefore reads `po_volume` as null, which is what makes the 물량/단가
+ * column render `-` with no change to the view at all.
  */
 const PO_DETAIL_COLUMNS = `
-  pdl.po_slang    AS po_slang,
-  pdl.po_elang    AS po_elang,
-  pdn.po_category AS po_category
+  pdl.po_slang     AS po_slang,
+  pdl.po_elang     AS po_elang,
+  pdl.po_volume    AS po_volume,
+  pdl.po_unit_code AS po_unit_code,
+  pdl.po_price_sel AS po_price_sel,
+  pdl.po_price     AS po_price,
+  pdn.po_category  AS po_category
 `;
 
 export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
@@ -461,15 +480,16 @@ const PO_FIELDS: readonly FieldSpec<PurchaseOrderUpdate & { jobId?: string }>[] 
   { column: "po_pm_id", kind: "id", read: (i) => i.poPmId },
   { column: "translator_id", kind: "id", read: (i) => i.translatorId },
   /**
-   * 업무 구분. `po_slang` / `po_elang` are NOT here any more and must not be re-added - they belong
-   * to `po_detail_linguistic`, and a spec for them would make every save fail with 42703. They are
-   * written by `PoDetailUpsertOps`, as is `po_category`.
+   * 업무 구분. Six columns are NOT here any more and must not be re-added, because a spec for a
+   * column `purchase_order` no longer has makes EVERY save fail with 42703:
+   *
+   * - `po_slang`, `po_elang` (db/011_job_types.sql) and `po_volume`, `po_unit_code`,
+   *   `po_price_sel`, `po_price` (db/012_job_pricing.sql) belong to `po_detail_linguistic`;
+   * - `po_category` belongs to `po_detail_non_linguistic`.
+   *
+   * All seven are written by `PoDetailUpsertOps`. The money below - and `po_cat_*` above - stayed.
    */
   { column: "po_type", kind: "text", read: (i) => i.poType },
-  { column: "po_volume", kind: "money", read: (i) => i.poVolume },
-  { column: "po_unit_code", kind: "text", read: (i) => i.poUnitCode },
-  { column: "po_price_sel", kind: "text", read: (i) => i.poPriceSel },
-  { column: "po_price", kind: "money", read: (i) => i.poPrice },
   { column: "po_coin_code", kind: "text", read: (i) => i.poCoinCode },
   { column: "po_coin_rate", kind: "money", read: (i) => i.poCoinRate },
   { column: "po_price_sum", kind: "money", read: (i) => i.poPriceSum },
@@ -606,10 +626,21 @@ export const PoUpdateOps: (
 /* The type-specific detail rows                                              */
 /* -------------------------------------------------------------------------- */
 
-/** `po_detail_linguistic`'s writable columns. */
+/**
+ * `po_detail_linguistic`'s writable columns - the language pair and how the cost was derived.
+ *
+ * The four pricing inputs are here and not in `PO_FIELDS` because only linguistic work is bought
+ * per unit (db/012_job_pricing.sql). A MICE or IMC PO submits `po_price_sum` and `po_price_ksum`
+ * directly, and those two never left `purchase_order`, so re-typing a PO away from LINGUISTICS
+ * drops the volume and the unit price without touching what it costs.
+ */
 const PO_LINGUISTIC_FIELDS: readonly FieldSpec<PurchaseOrderUpdate>[] = [
   { column: "po_slang", kind: "text", read: (i) => i.poSlang },
   { column: "po_elang", kind: "text", read: (i) => i.poElang },
+  { column: "po_volume", kind: "money", read: (i) => i.poVolume },
+  { column: "po_unit_code", kind: "text", read: (i) => i.poUnitCode },
+  { column: "po_price_sel", kind: "text", read: (i) => i.poPriceSel },
+  { column: "po_price", kind: "money", read: (i) => i.poPrice },
 ];
 
 /** `po_detail_non_linguistic`'s writable columns. */

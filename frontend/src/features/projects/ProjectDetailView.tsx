@@ -351,6 +351,11 @@ export function ProjectDetailView() {
                                 .filter(Boolean)
                                 .join(' · ') || '-'}
                         </td>
+                        {/*
+                         * 비언어 작업에서는 두 줄 모두 `-` 가 된다 — 의도한 모습이고, JobsView 의
+                         * 같은 칸에 이유가 적혀 있다. 네 값 모두 언어 상세 테이블의 컬럼이므로
+                         * (db/012_job_pricing.sql) 서버가 null 을 돌려준다.
+                         */}
                         <td className={ui.cellMuted}>
                           <div>
                             {job.jobVolume ?? '-'} {job.unitCode ?? ''}

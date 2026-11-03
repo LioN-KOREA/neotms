@@ -291,6 +291,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `009_selfservice.sql` | `staff_self_register()`, the function behind the sign-up form — **see §6.2** |
 | `010_currency.sql` | the five currencies the console can submit. Without it **every create in the system fails** — **see §6.2** |
 | `011_job_types.sql` | 업무 구분 (Linguistics / MICE / IMC) and 업무 분류: two `sys_code` domains, `job.job_type` / `purchase_order.po_type`, the four detail tables that replace the language columns, **and a migration that drops `job_slang` / `job_elang` / `po_slang` / `po_elang`** — **see §6.2** |
+| `012_job_pricing.sql` | moves the nine pricing *inputs* (`job_volume`, `unit_code`, `job_price_sel`, `job_price`, `job_price_dis`; `po_volume`, `po_unit_code`, `po_price_sel`, `po_price`) onto the linguistic detail tables, so a MICE or IMC job records a total without a fabricated word count. **The totals — `job_price_sum` / `job_price_ksum` / `po_price_sum` / `po_price_ksum` — stay on the parents.** Drops the nine columns it moved — **see §6.2** |
 
 Every file in `db/` is applicable **as-is**: plain DDL, no placeholders. That matters because the
 application's dbops modules write `:name` parameters (rewritten to `$1` by `toPositional` in
@@ -312,17 +313,20 @@ PGPASSWORD=$NEOTMS_DB_PASSWORD psql \
   -v ON_ERROR_STOP=1 -f db/001_extensions.sql
 ```
 
-Repeat for `002` … `011` **in order**; `001` must complete before `002`. Pass
+Repeat for `002` … `012` **in order**; `001` must complete before `002`. Pass
 `-v ON_ERROR_STOP=1` every time — without it `psql` reports a failed statement and carries on, so a
-half-applied schema looks like a successful run. That flag matters most on `011`, which is the only
-file that migrates existing data: it reads `job.job_slang` and then drops it, so a run that carries
-on past a failure can get as far as the drop with the detail tables still empty.
+half-applied schema looks like a successful run. That flag matters most on `011` and `012`, the two
+files that migrate existing data: each reads a column it then drops — `job.job_slang` in `011`,
+`job.job_volume` in `012` — so a run that carries on past a failure can get as far as the drop with
+the detail rows still unwritten. Both are **re-runnable** by construction, which is the mitigation:
+every backfill is guarded by an `information_schema` check on the column it reads, so repeating an
+interrupted file is the correct response and does not need the half-done state unpicked first.
 
-**The last six files are not pure schema, and none of them is optional.** `001`…`005` leave a
-database that is structurally correct and cannot be used by anybody; `006`…`011` are what turn it
+**The last seven files are not pure schema, and none of them is optional.** `001`…`005` leave a
+database that is structurally correct and cannot be used by anybody; `006`…`012` are what turn it
 into a running system, and each one is the sole source of something the application assumes exists.
-Stopping early does not raise an error on apply — with the exception of `011`, it produces a
-specific, silent symptom later, and those symptoms are listed in §6.1 and §6.2.
+Stopping early does not raise an error on apply — with the exception of `011` and `012`, it produces
+a specific, silent symptom later, and those symptoms are listed in §6.1 and §6.2.
 
 A note on failure messages, since none of them name the field that is wrong: a bad host is
 `ENOTFOUND`, a bare `postgres` username is `Tenant or user not found`, and port 5432 on the direct
@@ -418,7 +422,7 @@ SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN');
 
 Idempotent, returns the number of menus granted, and safe to run any time.
 
-### 6.2 `007`, `008`, `009`, `010` — the files whose absence is silent (and `011`, whose absence is not)
+### 6.2 `007`, `008`, `009`, `010` — the files whose absence is silent (and `011` / `012`, whose absence is not)
 
 `006` gets one administrator in. These four are what the console assumes about the database once
 somebody is in, and they share a property worth stating before the detail: **skipping one produces no
@@ -434,19 +438,35 @@ of the symptom points away from the cause.
 | `009_selfservice.sql` | `staff_self_register()` | the sign-up form submits and answers **500**, with the cause visible only in CloudWatch |
 | `010_currency.sql` | the `currency` rows every `*_coin` / `coin_code` foreign key points at | **every create in the system fails**, on a field nobody touched, reporting a constraint name |
 
-`011_job_types.sql` belongs to the same list by position and to none of it by behaviour, which is
-why it is called out separately rather than given a row above. **Its absence is the one that is
-loud.** The application selects `j.job_type` and joins `job_detail_linguistic`, so without `011`
-every job and purchase-order query — list, get, create, update, and every report — fails outright
-with `42703 column j.job_type does not exist` or `42P01 relation "job_detail_linguistic" does not
-exist`. Four of the six business screens are blank with a 500 behind them. Nothing about that is
-subtle, and nothing about it points away from the cause; it is in this section because it is the
-sixth file an operator has to remember, not because it hides.
+`011_job_types.sql` and `012_job_pricing.sql` belong to the same list by position and to none of it
+by behaviour, which is why they are called out separately rather than given rows above. **Their
+absence is the one that is loud.** The application selects `j.job_type` and joins
+`job_detail_linguistic`, so without `011` every job and purchase-order query — list, get, create,
+update, and every report — fails outright with `42703 column j.job_type does not exist` or `42P01
+relation "job_detail_linguistic" does not exist`. Without `012` the same queries fail the other way
+round, with `42703 column jdl.job_volume does not exist`: the join exists but the pricing columns
+are still on `job`, where the SELECT no longer looks for them. Four of the six business screens are
+blank with a 500 behind them either way. Nothing about that is subtle, and nothing about it points
+away from the cause; they are in this section because they are the fifth and sixth files an operator
+has to remember, not because they hide.
 
-The converse is the part that does hide: `011` **drops** `job_slang`, `job_elang`, `po_slang` and
-`po_elang` after moving their contents into the detail tables, so the external LKTMS ETL must be
-changed to write `job_detail_linguistic` / `po_detail_linguistic` in the same deploy. An ETL still
-writing the old columns fails with `42703` on a column it has written for years.
+The converse is the part that does hide, and it has now bitten twice. `011` **drops** `job_slang`,
+`job_elang`, `po_slang` and `po_elang`; `012` **drops** `job_volume`, `unit_code`, `job_price_sel`,
+`job_price`, `job_price_dis`, `po_volume`, `po_unit_code`, `po_price_sel` and `po_price` — thirteen
+columns in all, every one of them moved into `job_detail_linguistic` / `po_detail_linguistic` rather
+than deleted. So **the external LKTMS ETL must be changed to write the two linguistic detail tables**
+in the same deploy. An ETL still writing the old columns fails with `42703` on columns it has written
+for years. What it must NOT change is where it writes the money: `job_price_sum`, `job_price_ksum`,
+`po_price_sum` and `po_price_ksum` stay on `job` and `purchase_order`, because a KRW total means the
+same thing on all three 업무 구분 and the report, the list sorts and the project rollup all read it
+there.
+
+One ETL change `012` makes possible rather than necessary: legacy non-linguistic work was recorded
+as a linguistics job with a dummy 한국어 → 한국어 pair, a volume of 1 and the whole fee as the unit
+price. Those rows load correctly as they are. Re-typing one to MICE or IMC through the console drops
+its linguistic detail row — the fabricated pair and the `1 단어` go with it — while the total stays
+untouched on the parent, so the cleanup cannot introduce a transcription error into the one number
+the margin report reads.
 
 #### `007_codes.sql` — the dropdowns
 
@@ -647,7 +667,7 @@ docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
 for f in 001_extensions 002_tables 003_indexes 004_rollup 005_code_sequences 006_bootstrap \
-         007_codes 008_admin 009_selfservice 010_currency 011_job_types; do
+         007_codes 008_admin 009_selfservice 010_currency 011_job_types 012_job_pricing; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done

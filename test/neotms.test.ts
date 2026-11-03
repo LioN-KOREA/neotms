@@ -853,6 +853,7 @@ describe("the empty-database bootstrap", () => {
       "009_selfservice.sql",
       "010_currency.sql",
       "011_job_types.sql",
+      "012_job_pricing.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -1742,6 +1743,201 @@ describe("the 업무 구분 migration", () => {
     expect(code()).not.toMatch(/MICECAT|IMCCAT/);
     // Re-runnable, like every other seed in db/.
     expect(code().match(/ON CONFLICT \(code\) DO NOTHING/g)).toHaveLength(3);
+  });
+});
+
+describe("the pricing-model split", () => {
+  /** db/012_job_pricing.sql, comments stripped - same reason as 011's. */
+  const code = () => sqlCode("012_job_pricing.sql");
+
+  test("the derivation moves to the linguistic detail tables and nothing else does", () => {
+    /*
+     * The whole design in one assertion pair: HOW an amount was arrived at is type-specific and
+     * moves; the amount itself is not and stays.
+     *
+     * A MICE conference is not sold by the word. Before this file the only way to record one was the
+     * legacy workaround - a fabricated 한국어 → 한국어 pair, a volume of 1, and the whole fee in the
+     * unit price - which produced a row indistinguishable from a one-word translation and counted
+     * that fake pair in the 언어쌍별 report.
+     *
+     * Asserted as the exact SET of added columns, not as nine separate presences, so a tenth has to
+     * be justified here. In particular `job_price_sum` appearing in this list would be the mistake
+     * this file exists to avoid.
+     */
+    const added = [...code().matchAll(/ADD COLUMN IF NOT EXISTS (\w+)/g)].map((m) => m[1]!);
+    expect([...added].sort()).toEqual([
+      "job_price",
+      "job_price_dis",
+      "job_price_sel",
+      "job_volume",
+      "po_price",
+      "po_price_sel",
+      "po_unit_code",
+      "po_volume",
+      "unit_code",
+    ]);
+
+    // Onto the LINGUISTIC tables only. The non-linguistic tables gain nothing, because "total only"
+    // means there is no derivation to record - the two totals on the parent are the whole answer.
+    expect(code()).toMatch(/ALTER TABLE job_detail_linguistic\s+ADD COLUMN IF NOT EXISTS/);
+    expect(code()).toMatch(/ALTER TABLE po_detail_linguistic\s+ADD COLUMN IF NOT EXISTS/);
+    expect(code()).not.toMatch(/ALTER TABLE (job|po)_detail_non_linguistic\s+ADD COLUMN/);
+  });
+
+  test("the four amount columns are not moved, and not mentioned as being moved", () => {
+    /*
+     * `job_price_ksum` is summed by the margin report, sorted on by JOB_SORTS.amount and aggregated
+     * by the project rollup; `po_price_ksum` is the cost equivalent. Moving either would have
+     * changed REPORT_FROM, all nine report dimensions, both list sorts and the rollup at once, for
+     * no gain whatsoever - a KRW total means the same thing on all three 업무 구분.
+     *
+     * It also keeps the legacy cleanup lossless: re-typing a dummy row to MICE drops the fabricated
+     * pair and the `1 단어` while the money stays where it was. Nobody re-enters an amount, so
+     * nobody mistypes one.
+     *
+     * Checked against both the ADD and the DROP lists, because getting this wrong in either
+     * direction is equally bad and the two lists are edited at different times.
+     */
+    for (const column of [
+      "job_price_sum",
+      "job_price_ksum",
+      "po_price_sum",
+      "po_price_ksum",
+      "coin_code",
+      "coin_rate",
+      "po_coin_code",
+      "po_coin_rate",
+    ]) {
+      expect(code()).not.toMatch(new RegExp(`ADD COLUMN IF NOT EXISTS ${column}\\b`));
+      expect(code()).not.toMatch(new RegExp(`DROP COLUMN IF EXISTS ${column}\\b`));
+    }
+  });
+
+  test("the drop takes only the nine columns the backfill moved, and runs after it", () => {
+    /*
+     * Same ordering hazard as 011, one file later: section 2 reads `job.job_volume` and section 3
+     * drops it. Reversed, the file "succeeds" with the detail tables holding languages but no
+     * prices, and every job in the system reads as having no unit price - recoverable only from a
+     * backup, because the columns are gone by then.
+     *
+     * `po_cat_word` / `po_cat_mid` / `po_cat_stotal` must survive, and they are the likeliest
+     * casualty of a search-and-replace over this file: they look like pricing inputs and are not.
+     * 'cat' is Computer-Assisted Translation, their meaning is marked UNCONFIRMED in 002_tables.sql,
+     * and nothing in the application multiplies them by anything. `po_lang` - the printed PO's
+     * letterhead language - is the other one.
+     */
+    const dropped = [...code().matchAll(/DROP COLUMN IF EXISTS (\w+)/g)].map((m) => m[1]!);
+    expect([...dropped].sort()).toEqual([
+      "job_price",
+      "job_price_dis",
+      "job_price_sel",
+      "job_volume",
+      "po_price",
+      "po_price_sel",
+      "po_unit_code",
+      "po_volume",
+      "unit_code",
+    ]);
+    // The added and dropped sets are the same nine: everything that moved left its old home, and
+    // nothing was dropped that did not get a new one.
+    const added = [...code().matchAll(/ADD COLUMN IF NOT EXISTS (\w+)/g)].map((m) => m[1]!);
+    expect([...dropped].sort()).toEqual([...added].sort());
+
+    expect(code()).not.toMatch(/DROP COLUMN IF EXISTS po_cat_/);
+    expect(code()).not.toMatch(/DROP COLUMN IF EXISTS po_lang\b/);
+
+    const backfill = code().indexOf("INSERT INTO job_detail_linguistic");
+    const drop = code().indexOf("DROP COLUMN IF EXISTS job_volume");
+    expect(backfill).toBeGreaterThan(-1);
+    expect(drop).toBeGreaterThan(backfill);
+  });
+
+  test("the backfill is guarded the way 011's had to be", () => {
+    /*
+     * 011 shipped with a plain INSERT and the docker rehearsal in README.md found it on the SECOND
+     * run: the statement names a column the first run dropped, so PostgreSQL refuses it at PARSE
+     * time with 42703 - before ON CONFLICT or any WHERE clause can observe there is nothing left to
+     * move. The file then stops one section short of the end.
+     *
+     * This file was written with the guard from the start. Asserted because the guard looks like
+     * ceremony: the plain INSERT reads better, works on a first run, and is exactly what someone
+     * tidying this file would restore.
+     */
+    expect([...code().matchAll(/DO \$backfill_(?:job|po)_pricing\$/g)]).toHaveLength(2);
+    expect([...code().matchAll(/EXECUTE \$move_(?:job|po)_pricing\$/g)]).toHaveLength(2);
+    // Every dollar-quote tag opens and closes exactly once. An unbalanced one does not fail at parse
+    // time in any readable way - the rest of the file is swallowed into the string literal - so the
+    // pairing is worth asserting rather than eyeballing.
+    for (const tag of [
+      "backfill_job_pricing",
+      "backfill_po_pricing",
+      "move_job_pricing",
+      "move_po_pricing",
+    ]) {
+      expect([...code().matchAll(new RegExp(`\\$${tag}\\$`, "g"))]).toHaveLength(2);
+    }
+    expect(code()).toContain("information_schema.columns");
+    for (const table of ["job_detail_linguistic", "po_detail_linguistic"]) {
+      expect(code().indexOf(`INSERT INTO ${table}`)).toBeGreaterThan(
+        code().indexOf("DO $backfill_job_pricing$"),
+      );
+    }
+  });
+
+  test("the upsert fills blanks only - DO UPDATE here, unlike 011's DO NOTHING", () => {
+    /*
+     * The one place this file deliberately disagrees with its predecessor, and the reason is the
+     * state 011 leaves behind.
+     *
+     * 011 inserted into empty tables, so any conflicting row it met was newer than the columns it
+     * was reading and DO NOTHING was right. By the time 012 runs, a detail row already exists for
+     * every job that has a language - created by 011, necessarily with all five pricing columns
+     * NULL. DO NOTHING would therefore skip MOST jobs and silently lose their prices: the migration
+     * reports success, the job list shows every unit price blank, and the columns it would have read
+     * are dropped three sections later.
+     *
+     * The WHERE on the DO UPDATE is what keeps it safe to repeat. It fires only when all the target
+     * columns are still NULL, so a run that was interrupted after the backfill but before the drop -
+     * and then had prices edited through the console - cannot have those edits overwritten by the
+     * pre-migration values on the retry.
+     */
+    expect(code()).toMatch(/ON CONFLICT \(job_id\) DO UPDATE/);
+    expect(code()).toMatch(/ON CONFLICT \(po_id\) DO UPDATE/);
+    for (const column of [
+      "job_volume",
+      "unit_code",
+      "job_price_sel",
+      "job_price",
+      "job_price_dis",
+    ]) {
+      expect(code()).toMatch(
+        new RegExp(`job_detail_linguistic\\.${column}\\s+IS NULL`),
+      );
+    }
+    for (const column of ["po_volume", "po_unit_code", "po_price_sel", "po_price"]) {
+      expect(code()).toMatch(new RegExp(`po_detail_linguistic\\.${column}\\s+IS NULL`));
+    }
+    // Legacy empty strings normalise to NULL on the way in, as in 011, so the application has one
+    // kind of unset to handle rather than two.
+    expect(code()).toContain("NULLIF(unit_code, '')");
+    expect(code()).toContain("NULLIF(po_unit_code, '')");
+    // Only linguistic parents are read. A MICE job created through the new console before this file
+    // ran may hold a volume, and discarding it is correct - its money is on the parent regardless.
+    expect(code()).toContain("WHERE job_type = 'LINGUISTICS'");
+    expect(code()).toContain("WHERE po_type = 'LINGUISTICS'");
+  });
+
+  test("012 requires nothing and creates no trigger", () => {
+    // Same rule as 011: constraints forbid, they never require. A NOT NULL on `job_volume` would
+    // make the thousands of existing jobs with no volume unsaveable, and the type CHECKs 011 already
+    // put on these tables are what makes a word count on a MICE job impossible - so this file needs
+    // no constraint of its own.
+    // Scoped to the column definitions on purpose. A looser "no NOT NULL anywhere" would trip over
+    // section 5's verification SELECTs, which legitimately read `WHERE job_volume IS NOT NULL`.
+    expect(code()).not.toMatch(/ADD COLUMN IF NOT EXISTS\s+\w+\s+[^;]*NOT NULL/);
+    expect(code()).not.toMatch(/CREATE (OR REPLACE )?(TRIGGER|FUNCTION)/i);
+    expect(code()).not.toMatch(/ADD CONSTRAINT/);
+    expect(code()).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
   });
 });
 

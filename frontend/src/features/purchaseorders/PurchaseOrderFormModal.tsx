@@ -156,29 +156,59 @@ export function PurchaseOrderFormModal({
   /** 저장된 합계는 손으로 조정된 값일 수 있다 — `JobFormModal` 과 같은 판단. */
   const [sumEdited, setSumEdited] = useState(isEdit)
 
-  const compute = (volume: string, price: string, rate: string) => {
-    const sum = decimalMultiply(volume, price)
-    const ksum = sum === null ? null : decimalMultiply(sum, rate)
+  /**
+   * 합계와 원화 합계를 만든다. 출발점이 업무 구분에 따라 다르다 — `JobFormModal` 과 같은 규칙이다.
+   *
+   * 언어 발주: `물량 × 단가` 가 합계다. 발주에는 할인 칸이 없다(컬럼 자체가 없다).
+   * 비언어 발주: 합계는 담당자가 직접 넣는 값이고, 계산해 줄 수 있는 것은 환율 환산뿐이다
+   * (db/012_job_pricing.sql).
+   *
+   * 구분을 `form` 에서 읽지 않고 인자로 받는다. 발주의 구분은 `form.poType` 이 비어 있을 때
+   * 작업에서 상속되고(`inheritedType`), 그 값은 비동기 조회에서 온다 — `form` 안에 없다.
+   */
+  const compute = (f: typeof form, isLing: boolean) => {
+    if (!isLing) {
+      const sum = toDecimalInput(f.poPriceSum)
+      return { sum, ksum: sum === null ? null : decimalMultiply(sum, f.poCoinRate) }
+    }
+    const sum = decimalMultiply(f.poVolume, f.poPrice)
+    const ksum = sum === null ? null : decimalMultiply(sum, f.poCoinRate)
     return { sum, ksum }
   }
 
-  const suggestion = compute(form.poVolume, form.poPrice, form.poCoinRate)
+  const suggestion = compute(form, linguistic)
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setDirty(true)
     setForm((prev) => {
       const next = { ...prev, [key]: value }
-      if (!sumEdited && ['poVolume', 'poPrice', 'poCoinRate'].includes(key)) {
-        const { sum, ksum } = compute(next.poVolume, next.poPrice, next.poCoinRate)
-        next.poPriceSum = sum ?? ''
+      /*
+       * 무엇이 계산을 촉발하는지가 업무 구분에서 갈린다 — JobFormModal 의 같은 자리 주석에 이유가
+       * 전부 적혀 있다. 요약하면: 비언어에서 합계는 입력란이므로 촉발 목록에 넣되 **쓰지 않고**,
+       * 업무 구분 자체는 촉발 목록에 넣지 않는다(넣으면 구분을 되돌릴 때 금액이 지워진다).
+       */
+      const nextLinguistic = isLinguistic(next.poType || inheritedType)
+      const triggers = nextLinguistic
+        ? ['poVolume', 'poPrice', 'poCoinRate']
+        : ['poPriceSum', 'poCoinRate']
+      if (!sumEdited && triggers.includes(key)) {
+        const { sum, ksum } = compute(next, nextLinguistic)
+        if (nextLinguistic) next.poPriceSum = sum ?? ''
         next.poPriceKsum = ksum ?? ''
       }
-      // 업무 구분을 바꾸면 쓰지 않게 된 쪽을 여기서 비운다 — JobFormModal 의 같은 자리 주석 참고.
+      /*
+       * 업무 구분을 바꾸면 쓰지 않게 된 쪽을 여기서 비운다 — JobFormModal 의 같은 자리 주석 참고.
+       *
+       * 물량·단위·단가도 언어 쪽이므로 함께 비운다. 합계와 원화 합계는 `purchase_order` 에 그대로
+       * 있으므로 비우지 않는다 — 구분을 바꾼다고 발주 금액이 달라지지는 않는다.
+       */
       if (key === 'poType') {
-        if (isLinguistic(next.poType || inheritedType)) next.poCategory = ''
+        if (nextLinguistic) next.poCategory = ''
         else {
           next.poSlang = ''
           next.poElang = ''
+          next.poVolume = ''
+          next.poPrice = ''
         }
       }
       return next
@@ -211,9 +241,19 @@ export function PurchaseOrderFormModal({
 
     /*
      * 업무 구분에 맞는 쪽만 보낸다. 반대쪽을 같이 보내면 서버가 거절하거나(23514·23503) 버린다.
+     *
+     * 물량·단위·단가가 언어 쪽에 함께 있는 것이 db/012_job_pricing.sql 의 결과다. 비언어 발주가
+     * 보내는 금액은 아래 `poPriceSum`·`poPriceKsum` 둘뿐이고, 그 둘은 구분과 무관하게
+     * `purchase_order` 에 있다.
      */
     const detail: Partial<PurchaseOrderUpdate> = linguistic
-      ? { poSlang: form.poSlang.trim() || null, poElang: form.poElang.trim() || null }
+      ? {
+          poSlang: form.poSlang.trim() || null,
+          poElang: form.poElang.trim() || null,
+          poVolume: toDecimalInput(form.poVolume),
+          poUnitCode: form.poUnitCode.trim() || null,
+          poPrice: toDecimalInput(form.poPrice),
+        }
       : { poCategory: form.poCategory.trim() || null }
 
     /*
@@ -242,9 +282,6 @@ export function PurchaseOrderFormModal({
       translatorId: translator?.id ?? null,
       ...typed,
       ...detail,
-      poVolume: toDecimalInput(form.poVolume),
-      poUnitCode: form.poUnitCode.trim() || null,
-      poPrice: toDecimalInput(form.poPrice),
       poCoinCode: form.poCoinCode.trim() || null,
       poCoinRate: toDecimalInput(form.poCoinRate),
       poPriceSum: toDecimalInput(form.poPriceSum),
@@ -276,10 +313,17 @@ export function PurchaseOrderFormModal({
     onClose()
   }
 
+  /**
+   * 입력한 금액이 계산값과 다른지. 견주는 대상이 업무 구분에 따라 다르다 — `JobFormModal` 의 같은
+   * 자리 주석에 이유가 적혀 있다. 요약하면 비언어 발주에서 합계는 입력값이라 자기 자신과 견주게
+   * 되므로, 대신 원화 합계를 `합계 × 환율` 과 견준다.
+   */
+  const enteredAmount = linguistic ? form.poPriceSum : form.poPriceKsum
+  const computedAmount = linguistic ? suggestion.sum : suggestion.ksum
   const differs =
-    suggestion.sum !== null &&
-    toDecimalInput(form.poPriceSum) !== null &&
-    decimalSubtract(toDecimalInput(form.poPriceSum), suggestion.sum) !== '0.00'
+    computedAmount !== null &&
+    toDecimalInput(enteredAmount) !== null &&
+    decimalSubtract(toDecimalInput(enteredAmount), computedAmount) !== '0.00'
 
   return (
     <Modal
@@ -476,41 +520,49 @@ export function PurchaseOrderFormModal({
           </div>
         )}
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-volume">
-            물량
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="po-volume"
-              className={`${ui.input} ${ui.inputNum}`}
-              inputMode="decimal"
-              value={form.poVolume}
-              onChange={(e) => set('poVolume', e.target.value)}
-            />
-            <CodeSelect
-              ariaLabel="단위"
-              domain={CODE_DOMAIN.UNIT}
-              value={form.poUnitCode}
-              onChange={(v) => set('poUnitCode', v)}
-              placeholder="단위"
-              silent
-            />
-          </div>
-        </div>
+        {/*
+         * 물량·단위·단가 — **언어 발주에만 그린다.** 세 칸 모두 `po_detail_linguistic` 의
+         * 컬럼이고(db/012_job_pricing.sql), 비언어 발주는 아래 합계에 금액을 직접 넣는다.
+         */}
+        {linguistic ? (
+          <>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="po-volume">
+                물량
+              </label>
+              <div className={ui.inputRow}>
+                <input
+                  id="po-volume"
+                  className={`${ui.input} ${ui.inputNum}`}
+                  inputMode="decimal"
+                  value={form.poVolume}
+                  onChange={(e) => set('poVolume', e.target.value)}
+                />
+                <CodeSelect
+                  ariaLabel="단위"
+                  domain={CODE_DOMAIN.UNIT}
+                  value={form.poUnitCode}
+                  onChange={(v) => set('poUnitCode', v)}
+                  placeholder="단위"
+                  silent
+                />
+              </div>
+            </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-price">
-            단가
-          </label>
-          <input
-            id="po-price"
-            className={`${ui.input} ${ui.inputNum}`}
-            inputMode="decimal"
-            value={form.poPrice}
-            onChange={(e) => set('poPrice', e.target.value)}
-          />
-        </div>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="po-price">
+                단가
+              </label>
+              <input
+                id="po-price"
+                className={`${ui.input} ${ui.inputNum}`}
+                inputMode="decimal"
+                value={form.poPrice}
+                onChange={(e) => set('poPrice', e.target.value)}
+              />
+            </div>
+          </>
+        ) : null}
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-coin">
@@ -545,6 +597,11 @@ export function PurchaseOrderFormModal({
           />
         </div>
 
+        {/*
+         * 비언어 발주에서는 `setSumEdited(true)` 를 부르지 않는다 — 여기서 합계는 계산 결과가
+         * 아니라 출발점이고, 부르면 금액을 먼저 넣고 환율을 나중에 넣는 순서에서 원화 환산이
+         * 멈춘다. `JobFormModal` 의 같은 자리 주석에 전체 이유가 있다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-sum">
             합계 ({form.poCoinCode || '외화'})
@@ -555,10 +612,15 @@ export function PurchaseOrderFormModal({
             inputMode="decimal"
             value={form.poPriceSum}
             onChange={(e) => {
-              setSumEdited(true)
+              if (linguistic) setSumEdited(true)
               set('poPriceSum', e.target.value)
             }}
           />
+          {linguistic ? null : (
+            <span className={ui.hint}>
+              물량·단가 없이 전체 금액을 직접 넣습니다. 원화 환산 합계는 환율을 곱해 따라옵니다.
+            </span>
+          )}
         </div>
 
         <div className={ui.field}>
@@ -821,8 +883,18 @@ export function PurchaseOrderFormModal({
 
       {differs ? (
         <InfoNotice>
-          입력한 합계가 <strong>물량 × 단가</strong> 계산값({formatMoney(suggestion.sum)}{' '}
-          {form.poCoinCode})과 다릅니다. 의도한 조정이면 그대로 저장하세요.{' '}
+          {linguistic ? (
+            <>
+              입력한 합계가 <strong>물량 × 단가</strong> 계산값({formatMoney(suggestion.sum)}{' '}
+              {form.poCoinCode})과 다릅니다.
+            </>
+          ) : (
+            <>
+              입력한 원화 환산 합계가 <strong>합계 × 환율</strong> 계산값(
+              {formatMoney(suggestion.ksum)} KRW)과 다릅니다.
+            </>
+          )}{' '}
+          의도한 조정이면 그대로 저장하세요.{' '}
           <button type="button" className={ui.btnLink} onClick={applySuggestion}>
             계산값으로 되돌리기
           </button>

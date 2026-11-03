@@ -107,15 +107,29 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
    */
   const [sumEdited, setSumEdited] = useState(isEdit)
 
-  /** 물량·단가·할인으로 외화 합계를, 거기에 환율을 곱해 원화 합계를 만든다. */
-  const compute = (volume: string, price: string, discount: string, rate: string) => {
-    const sum = decimalSubtract(decimalMultiply(volume, price), discount)
+  /**
+   * 합계와 원화 합계를 만든다. **어디서 출발하는지가 업무 구분에 따라 다르다.**
+   *
+   * 언어 업무: `물량 × 단가 − 할인` 이 합계이고, 거기에 환율을 곱해 원화 합계가 된다.
+   * 비언어 업무: 합계는 **사용자가 직접 넣는 값**이다. MICE·IMC 작업은 단어 수로 팔지 않으므로
+   * 곱할 물량이 없고, 계산해 줄 수 있는 것은 환율 환산뿐이다(db/012_job_pricing.sql).
+   *
+   * 레거시 TMS 에서 비언어 작업을 기록하던 방법이 바로 이 분기가 없을 때의 모습이다 — 한국어 →
+   * 한국어 라는 가짜 언어쌍에 물량 1, 단가에 전체 금액. 금액은 맞지만 "1 단어" 라는 거짓이 함께
+   * 저장되고, 리포트의 언어쌍별 집계가 그 가짜 쌍을 진짜로 센다.
+   */
+  const compute = (f: typeof form) => {
+    if (!isLinguistic(f.jobType)) {
+      const sum = toDecimalInput(f.jobPriceSum)
+      return { sum, ksum: sum === null ? null : decimalMultiply(sum, f.coinRate) }
+    }
+    const sum = decimalSubtract(decimalMultiply(f.jobVolume, f.jobPrice), f.jobPriceDis)
     // 할인이 비어 있으면 `decimalSubtract` 가 곱셈 결과를 그대로 돌려준다(money.ts).
-    const ksum = sum === null ? null : decimalMultiply(sum, rate)
+    const ksum = sum === null ? null : decimalMultiply(sum, f.coinRate)
     return { sum, ksum }
   }
 
-  const suggestion = compute(form.jobVolume, form.jobPrice, form.jobPriceDis, form.coinRate)
+  const suggestion = compute(form)
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setDirty(true)
@@ -127,10 +141,26 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
        * `useEffect` 로 하지 않는다. 이펙트로 만들면 렌더가 한 번 더 돌고, 그 사이 상태에서
        * 사용자가 타이핑하면 입력이 되돌아가는 종류의 버그가 생긴다. 계산은 원인이 되는
        * 입력이 바뀌는 그 자리에서 한 번만 하면 된다.
+       *
+       * 무엇이 계산을 촉발하는지도 업무 구분에서 갈린다. **다음 상태의 구분**으로 판단한다 —
+       * `linguistic` 은 이 렌더 시점의 값이고, 구분 자체가 지금 바뀌는 중일 수 있다.
+       *
+       * 비언어 업무에서 합계는 입력란이지 계산 결과가 아니므로, 촉발 목록에 넣으면서 **쓰지는
+       * 않는다.** 쓰면 `toDecimalInput` 이 타이핑 중인 글자를 고쳐 버린다 — "1,0" 을 치는 도중에
+       * 칸이 "10" 으로 바뀐다.
+       *
+       * 업무 구분은 일부러 촉발 목록에 없다. 구분을 바꾸는 것으로 금액이 다시 계산되면, 언어
+       * 업무로 되돌리는 순간 비어 있는 물량에서 합계가 `null` 로 계산되어 사용자가 넣은 금액이
+       * 사라진다. 서버도 구분 변경으로 부모 행의 금액을 건드리지 않는다 — 화면이 그보다 더
+       * 적극적일 이유가 없다.
        */
-      if (!sumEdited && ['jobVolume', 'jobPrice', 'jobPriceDis', 'coinRate'].includes(key)) {
-        const { sum, ksum } = compute(next.jobVolume, next.jobPrice, next.jobPriceDis, next.coinRate)
-        next.jobPriceSum = sum ?? ''
+      const nextLinguistic = isLinguistic(next.jobType)
+      const triggers = nextLinguistic
+        ? ['jobVolume', 'jobPrice', 'jobPriceDis', 'coinRate']
+        : ['jobPriceSum', 'coinRate']
+      if (!sumEdited && triggers.includes(key)) {
+        const { sum, ksum } = compute(next)
+        if (nextLinguistic) next.jobPriceSum = sum ?? ''
         next.jobPriceKsum = ksum ?? ''
       }
       /*
@@ -145,12 +175,24 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
        * 비우는 쪽만 건드린다. MICE 로 바꿨다가 다시 언어로 되돌리면 출발어는 비어 있는데, 그게
        * 맞다 — 서버도 구분이 바뀔 때 반대쪽 상세 행을 지우므로, 되살아나는 것처럼 보이는 값이
        * 실제로는 저장되지 않은 값이 되는 상황을 만들지 않는다.
+       *
+       * 비언어로 바꿀 때 **물량·단가·할인도 같이 비운다.** 그 세 칸은 언어 상세 행의 컬럼이고
+       * (db/012_job_pricing.sql), 서버는 구분이 바뀌면 그 행을 지운다. 즉 남겨 두면 화면에만
+       * 있다가 저장과 함께 사라지는 값이 된다.
+       *
+       * **합계와 원화 합계는 비우지 않는다.** 그 둘은 구분과 무관하게 `job` 에 그대로 있고, 이
+       * 동작이 레거시 정리를 무손실로 만드는 지점이다 — 한국어 → 한국어 / 1 단어 로 기록된 행을
+       * MICE 로 바꾸면 가짜 언어쌍과 가짜 물량만 사라지고, 리포트가 읽는 금액은 손대지 않은
+       * 상태로 남는다. 금액을 다시 타이핑하게 만들면 거기서 오타가 생긴다.
        */
       if (key === 'jobType') {
-        if (isLinguistic(next.jobType)) next.jobCategory = ''
+        if (nextLinguistic) next.jobCategory = ''
         else {
           next.jobSlang = ''
           next.jobElang = ''
+          next.jobVolume = ''
+          next.jobPrice = ''
+          next.jobPriceDis = ''
         }
       }
       return next
@@ -183,9 +225,21 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
      * 반대쪽을 `null` 로 보내도 서버는 무시한다(상세 테이블이 다르므로 그 컬럼이 아예 없다).
      * 그래도 보내지 않는 쪽이 낫다 — 요청 본문만 보고도 이 작업이 무엇인지 읽히고, 언젠가 서버가
      * 모르는 필드를 거절하게 되더라도 그대로 통한다.
+     *
+     * 물량·단위·단가·할인이 **언어 쪽에 함께 있는** 것이 이번 변경의 핵심이다. 그 네 값은
+     * `job_detail_linguistic` 의 컬럼이고(db/012_job_pricing.sql), 비언어 작업에는 보낼 자리가
+     * 없다 — 비언어 작업이 보내는 금액은 아래 `jobPriceSum`·`jobPriceKsum` 둘뿐이고, 그 둘은
+     * 구분과 무관하게 `job` 에 있다.
      */
     const detail: Partial<JobUpdate> = linguistic
-      ? { jobSlang: form.jobSlang.trim() || null, jobElang: form.jobElang.trim() || null }
+      ? {
+          jobSlang: form.jobSlang.trim() || null,
+          jobElang: form.jobElang.trim() || null,
+          jobVolume: toDecimalInput(form.jobVolume),
+          unitCode: form.unitCode.trim() || null,
+          jobPrice: toDecimalInput(form.jobPrice),
+          jobPriceDis: toDecimalInput(form.jobPriceDis),
+        }
       : { jobCategory: form.jobCategory.trim() || null }
 
     const common: JobUpdate = {
@@ -193,10 +247,6 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
       workCode: form.workCode.trim() || null,
       jobType: form.jobType.trim() || null,
       ...detail,
-      jobVolume: toDecimalInput(form.jobVolume),
-      unitCode: form.unitCode.trim() || null,
-      jobPrice: toDecimalInput(form.jobPrice),
-      jobPriceDis: toDecimalInput(form.jobPriceDis),
       coinCode: form.coinCode.trim() || null,
       coinRate: toDecimalInput(form.coinRate),
       jobPriceSum: toDecimalInput(form.jobPriceSum),
@@ -220,11 +270,23 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
     onClose()
   }
 
-  /** 입력한 합계가 계산값과 다른지. 다르면 그 사실을 숨기지 않고 보여 준다. */
+  /**
+   * 입력한 금액이 계산값과 다른지. 다르면 그 사실을 숨기지 않고 보여 준다.
+   *
+   * **어느 금액을 견주는지가 업무 구분에 따라 다르다.** 언어 업무에서는 입력한 합계를
+   * `물량 × 단가 − 할인` 과 견준다(종전 동작). 비언어 업무에서는 합계가 곧 입력값이므로 그
+   * 비교가 자기 자신과의 비교가 되어 언제나 같다 — 대신 **원화 합계를 `합계 × 환율` 과** 견준다.
+   *
+   * 이 분기가 없으면 비언어 작업에는 경고가 하나도 남지 않는다. 수정 화면은 `sumEdited` 가 처음부터
+   * 참이므로, MICE 작업의 합계를 고쳐도 원화 합계는 따라오지 않는다 — 그 상태로 저장하면 리포트가
+   * 읽는 매출만 옛 금액으로 남고, 화면 어디에도 그 사실이 보이지 않는다.
+   */
+  const enteredAmount = linguistic ? form.jobPriceSum : form.jobPriceKsum
+  const computedAmount = linguistic ? suggestion.sum : suggestion.ksum
   const differs =
-    suggestion.sum !== null &&
-    toDecimalInput(form.jobPriceSum) !== null &&
-    decimalSubtract(toDecimalInput(form.jobPriceSum), suggestion.sum) !== '0.00'
+    computedAmount !== null &&
+    toDecimalInput(enteredAmount) !== null &&
+    decimalSubtract(toDecimalInput(enteredAmount), computedAmount) !== '0.00'
 
   return (
     <Modal
@@ -406,56 +468,70 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           </div>
         )}
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-volume">
-            물량
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="job-volume"
-              className={`${ui.input} ${ui.inputNum}`}
-              inputMode="decimal"
-              value={form.jobVolume}
-              onChange={(e) => set('jobVolume', e.target.value)}
-            />
-            {/* 가로로 붙는 자리라 설명을 그리지 않는다 — CodeSelect 의 `silent` 주석 참고. */}
-            <CodeSelect
-              ariaLabel="단위"
-              domain={CODE_DOMAIN.UNIT}
-              value={form.unitCode}
-              onChange={(v) => set('unitCode', v)}
-              placeholder="단위"
-              silent
-            />
-          </div>
-        </div>
+        {/*
+         * 물량·단위·단가·할인 — **언어 업무에만 그린다.**
+         *
+         * 네 칸 모두 `job_detail_linguistic` 의 컬럼이다(db/012_job_pricing.sql). MICE·IMC 작업은
+         * 단어나 시간으로 팔지 않으므로 곱할 물량이 없고, 아래 합계 칸에 금액을 직접 넣는다.
+         *
+         * 레거시에서는 이 칸들을 숨길 수 없었기 때문에 비언어 작업도 물량 1 / 단가 = 전체 금액으로
+         * 적어 넣었고, 그 행은 "1 단어 번역" 과 생긴 것이 같아졌다. 칸을 없애는 것이 그 관행을
+         * 없애는 유일한 방법이다 — 비워 두라고 안내하는 것으로는 안 된다.
+         */}
+        {linguistic ? (
+          <>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="job-volume">
+                물량
+              </label>
+              <div className={ui.inputRow}>
+                <input
+                  id="job-volume"
+                  className={`${ui.input} ${ui.inputNum}`}
+                  inputMode="decimal"
+                  value={form.jobVolume}
+                  onChange={(e) => set('jobVolume', e.target.value)}
+                />
+                {/* 가로로 붙는 자리라 설명을 그리지 않는다 — CodeSelect 의 `silent` 주석 참고. */}
+                <CodeSelect
+                  ariaLabel="단위"
+                  domain={CODE_DOMAIN.UNIT}
+                  value={form.unitCode}
+                  onChange={(v) => set('unitCode', v)}
+                  placeholder="단위"
+                  silent
+                />
+              </div>
+            </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-price">
-            단가
-          </label>
-          <input
-            id="job-price"
-            className={`${ui.input} ${ui.inputNum}`}
-            inputMode="decimal"
-            value={form.jobPrice}
-            onChange={(e) => set('jobPrice', e.target.value)}
-          />
-        </div>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="job-price">
+                단가
+              </label>
+              <input
+                id="job-price"
+                className={`${ui.input} ${ui.inputNum}`}
+                inputMode="decimal"
+                value={form.jobPrice}
+                onChange={(e) => set('jobPrice', e.target.value)}
+              />
+            </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-dis">
-            할인
-          </label>
-          <input
-            id="job-dis"
-            className={`${ui.input} ${ui.inputNum}`}
-            inputMode="decimal"
-            value={form.jobPriceDis}
-            onChange={(e) => set('jobPriceDis', e.target.value)}
-          />
-          <span className={ui.hint}>합계에서 빼는 금액입니다.</span>
-        </div>
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="job-dis">
+                할인
+              </label>
+              <input
+                id="job-dis"
+                className={`${ui.input} ${ui.inputNum}`}
+                inputMode="decimal"
+                value={form.jobPriceDis}
+                onChange={(e) => set('jobPriceDis', e.target.value)}
+              />
+              <span className={ui.hint}>합계에서 빼는 금액입니다.</span>
+            </div>
+          </>
+        ) : null}
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="job-coin">
@@ -490,6 +566,14 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           <span className={ui.hint}>원화는 1 입니다. 거래 시점의 환율을 그대로 보관합니다.</span>
         </div>
 
+        {/*
+         * 합계. 언어 업무에서는 계산 결과이고, 비언어 업무에서는 **출발점**이다.
+         *
+         * 그래서 비언어일 때는 `setSumEdited(true)` 를 부르지 않는다. 그 플래그의 뜻은 "계산된
+         * 합계를 사람이 덮어썼다" 인데, 여기서는 덮어쓸 계산값이 애초에 없다. 불러 버리면 금액을
+         * 먼저 넣고 환율을 나중에 넣는 흔한 순서에서 원화 환산이 멈춘다 — 그 상태로 저장하면
+         * 리포트가 읽는 매출만 빈 값으로 남는다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="job-sum">
             합계 ({form.coinCode || '외화'})
@@ -500,10 +584,15 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
             inputMode="decimal"
             value={form.jobPriceSum}
             onChange={(e) => {
-              setSumEdited(true)
+              if (linguistic) setSumEdited(true)
               set('jobPriceSum', e.target.value)
             }}
           />
+          {linguistic ? null : (
+            <span className={ui.hint}>
+              물량·단가 없이 전체 금액을 직접 넣습니다. 원화 환산 합계는 환율을 곱해 따라옵니다.
+            </span>
+          )}
         </div>
 
         <div className={ui.field}>
@@ -589,9 +678,18 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
        */}
       {differs ? (
         <InfoNotice>
-          입력한 합계가 <strong>물량 × 단가 − 할인</strong> 계산값(
-          {formatMoney(suggestion.sum)} {form.coinCode})과 다릅니다. 의도한 조정이면 그대로
-          저장하세요.{' '}
+          {linguistic ? (
+            <>
+              입력한 합계가 <strong>물량 × 단가 − 할인</strong> 계산값(
+              {formatMoney(suggestion.sum)} {form.coinCode})과 다릅니다.
+            </>
+          ) : (
+            <>
+              입력한 원화 환산 합계가 <strong>합계 × 환율</strong> 계산값(
+              {formatMoney(suggestion.ksum)} KRW)과 다릅니다.
+            </>
+          )}{' '}
+          의도한 조정이면 그대로 저장하세요.{' '}
           <button type="button" className={ui.btnLink} onClick={applySuggestion}>
             계산값으로 되돌리기
           </button>

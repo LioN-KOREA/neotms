@@ -472,11 +472,21 @@ describe("the discriminator's TypeScript mirror", () => {
      * fix. Hence the match on the name, and hence this test: translating `job_job_type_fkey` into
      * a sentence about 업무 구분 would hide a genuinely unknown code behind the wrong explanation.
      */
+    /*
+     * These eight are the names PostgreSQL actually reports, read off `pg_constraint` in the docker
+     * rehearsal rather than off db/011's source - `ADD CONSTRAINT jdl_job_type_fkey` is the written
+     * name and `jdn_is_not_linguistic` is NOT spelled `jdn_is_non_linguistic`, which is the kind of
+     * thing a test written from memory gets wrong in the direction that still passes.
+     */
     for (const name of [
       "jdl_is_linguistic",
-      "jdn_is_non_linguistic",
-      "jdl_job_type_fk",
-      "pdn_po_type_fk",
+      "jdl_job_type_fkey",
+      "jdn_is_not_linguistic",
+      "jdn_job_type_fkey",
+      "pdl_is_linguistic",
+      "pdl_po_type_fkey",
+      "pdn_is_not_linguistic",
+      "pdn_po_type_fkey",
     ]) {
       expect(typeMismatchMessage(name)).toContain("업무 구분");
     }
@@ -488,5 +498,218 @@ describe("the discriminator's TypeScript mirror", () => {
     ]) {
       expect(typeMismatchMessage(name)).toBeNull();
     }
+  });
+
+  test("a detail table's AUTO-named FKs are not type mismatches, prefix rule or not", () => {
+    /*
+     * The limit of the prefix rule, and db/012 is what put it on the map.
+     *
+     * The eight constraints above are named by hand, so they carry the table's abbreviation. Every
+     * other constraint on those same tables is named by PostgreSQL, which uses the full table name -
+     * so `job_detail_linguistic_unit_code_fkey`, the UNIT-domain FK db/012 added when `unit_code`
+     * moved, does not match `^(?:jdl|...)_` and falls through to a 500. That is the correct answer:
+     * an unrecognised unit code is a `sys_code` problem with a different fix, and it read as one
+     * before the column moved too (as `job_unit_code_fkey` on the parent).
+     *
+     * Asserted because the docstring on DETAIL_CONSTRAINT advertises "a constraint added to one of
+     * those tables later is recognised too", and these are the counter-examples to that sentence.
+     */
+    for (const name of [
+      "job_detail_linguistic_unit_code_fkey",
+      "po_detail_linguistic_po_unit_code_fkey",
+      "job_detail_linguistic_job_slang_fkey",
+      "job_detail_non_linguistic_job_category_fkey",
+      "job_detail_linguistic_pkey",
+    ]) {
+      expect(typeMismatchMessage(name)).toBeNull();
+    }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * db/012_job_pricing.sql, in the ops layer. The second move through the same five edit sites, and
+ * the one with a failure mode db/011 did not have.
+ *
+ * 011 moved columns nothing computes with. 012 moves the DERIVATION - volume, unit, unit price,
+ * discount - while deliberately LEAVING the AMOUNT (`coin_code`, `coin_rate`, `job_price_sum`,
+ * `job_price_ksum`) on the parent. That asymmetry is the whole design: a MICE job records no word
+ * count but still records a total, and the total is what the margin report sums, what the job list
+ * sorts on, and what the project rollup aggregates. Move it and all three change at once.
+ *
+ * So the assertions come in pairs - each moved column must have left the parent AND arrived at the
+ * detail table, and each kept column must still be on the parent. A half-done move is the quiet
+ * failure: taking `job_volume` out of `JOB_FIELDS` without adding it to `JOB_LINGUISTIC_FIELDS`
+ * loses every unit price the user types, with no error anywhere.
+ */
+describe("the pricing derivation is read and written through the detail tables", () => {
+  /** The five job columns db/012 moved, and the four PO ones. No discount exists on the PO side. */
+  const jobMoved = ["job_volume", "unit_code", "job_price_sel", "job_price", "job_price_dis"];
+  const poMoved = ["po_volume", "po_unit_code", "po_price_sel", "po_price"];
+
+  /** The money. These stayed, and the reason they stayed is that everything downstream reads them. */
+  const jobKept = ["coin_code", "coin_rate", "job_price_sum", "job_price_ksum"];
+  const poKept = ["po_coin_code", "po_coin_rate", "po_price_sum", "po_price_ksum"];
+
+  /*
+   * A whole-identifier match, because the two halves of the split share a prefix: `job_price` is a
+   * substring of `job_price_sum`, and `po_price` of `po_price_ksum`. A plain `toContain` therefore
+   * reads a statement that correctly writes only the total as though it also wrote the unit price -
+   * and the assertion that the derivation is absent fails on the very statement that proves it is.
+   * `_` is a word character, so `\b` lands where the identifier ends and nowhere inside it.
+   */
+  const word = (column: string): RegExp => new RegExp(`\\b${column}\\b`);
+
+  test("a read takes the derivation from the detail alias and the amount from the parent", () => {
+    const s = flat(JobGetOps(caller, "7").sql);
+    for (const column of jobMoved) {
+      expect(s).toContain(`jdl.${column} AS ${column}`);
+      // `j.job_volume` is a 42703 once db/012 has run.
+      expect(s).not.toMatch(new RegExp(`\\bj\\.${column}\\b`));
+    }
+    for (const column of jobKept) {
+      expect(s).toContain(`j.${column} AS ${column}`);
+      expect(s).not.toMatch(new RegExp(`\\bjdl\\.${column}\\b`));
+    }
+
+    const p = flat(PoGetOps(caller, "7").sql);
+    for (const column of poMoved) {
+      expect(p).toContain(`pdl.${column} AS ${column}`);
+      expect(p).not.toMatch(new RegExp(`\\bpo\\.${column}\\b`));
+    }
+    for (const column of poKept) {
+      expect(p).toContain(`po.${column} AS ${column}`);
+      expect(p).not.toMatch(new RegExp(`\\bpdl\\.${column}\\b`));
+    }
+  });
+
+  test("the list read carries them too, since the list is where the unit price is shown", () => {
+    const s = flat(JobListOps(caller, jobQuery, {}).sql);
+    for (const column of jobMoved) expect(s).toContain(`jdl.${column} AS ${column}`);
+    for (const column of jobKept) expect(s).toContain(`j.${column} AS ${column}`);
+
+    const p = flat(PoListOps(caller, poQuery, {}).sql);
+    for (const column of poMoved) expect(p).toContain(`pdl.${column} AS ${column}`);
+    for (const column of poKept) expect(p).toContain(`po.${column} AS ${column}`);
+  });
+
+  test("a parent save writes the amount and never the derivation", () => {
+    const input = {
+      jobName: "번역 작업",
+      jobVolume: "1200.00",
+      unitCode: "단어",
+      jobPriceSel: "A",
+      jobPrice: "90.00",
+      jobPriceDis: "0.00",
+      coinCode: "KRW",
+      coinRate: "1.00",
+      jobPriceSum: "108000.00",
+      jobPriceKsum: "108000.00",
+    };
+    const create = JobCreateOps(
+      { projectId: "3", jobType: JOB_TYPE_LINGUISTIC, ...input } as Parameters<
+        typeof JobCreateOps
+      >[0],
+      ctx,
+    );
+    const update = JobUpdateOps(caller, "7", input, ctx);
+
+    for (const ops of [create, update]) {
+      const s = flat(ops.sql);
+      /*
+       * A spec left behind in `JOB_FIELDS` is emitted unconditionally, so this is not "the pricing
+       * save breaks" - it is EVERY job save breaking with 42703, including a save that only renames
+       * the job.
+       */
+      for (const column of jobMoved) expect(s).not.toMatch(word(column));
+      for (const column of jobKept) expect(s).toMatch(word(column));
+    }
+  });
+
+  test("a PO parent save does the same, and keeps the CAT columns it never moved", () => {
+    const input = {
+      poName: "번역 발주",
+      poVolume: "1200.00",
+      poUnitCode: "단어",
+      poPriceSel: "A",
+      poPrice: "60.00",
+      poCoinCode: "KRW",
+      poCoinRate: "1.00",
+      poPriceSum: "72000.00",
+      poPriceKsum: "72000.00",
+      poCatStotal: "1180.00",
+    };
+    const update = PoUpdateOps(caller, "9", input, ctx);
+    const s = flat(update.sql);
+    for (const column of poMoved) expect(s).not.toMatch(word(column));
+    for (const column of poKept) expect(s).toMatch(word(column));
+    /*
+     * `po_cat_stotal` is a CAT-tool analysis figure, not a billing volume - nothing in the
+     * application multiplies it by anything, which is why it did not follow `po_volume`. It is one
+     * `_total` away from looking like a price, so it is asserted rather than assumed.
+     */
+    expect(s).toContain("po_cat_stotal");
+  });
+
+  test("the derivation goes to the linguistic detail row, alongside the pair", () => {
+    const ops = JobDetailUpsertOps("7", JOB_TYPE_LINGUISTIC, {
+      jobSlang: "한국어",
+      jobElang: "영어",
+      jobVolume: "1200.00",
+      unitCode: "단어",
+      jobPrice: "90.00",
+      jobPriceDis: "0.00",
+    } as Parameters<typeof JobDetailUpsertOps>[2]);
+    expect(ops).not.toBeNull();
+    const s = flat(ops!.sql);
+    expect(s).toContain("INSERT INTO job_detail_linguistic");
+    for (const column of ["job_volume", "unit_code", "job_price", "job_price_dis"]) {
+      expect(s).toContain(column);
+      expect(s).toContain(`${column} = EXCLUDED.${column}`);
+    }
+    // And the amount is not smuggled in here. It has exactly one home.
+    for (const column of jobKept) expect(s).not.toMatch(word(column));
+
+    const po = PoDetailUpsertOps("9", JOB_TYPE_LINGUISTIC, {
+      poVolume: "1200.00",
+      poUnitCode: "단어",
+      poPrice: "60.00",
+    } as Parameters<typeof PoDetailUpsertOps>[2]);
+    const ps = flat(po!.sql);
+    expect(ps).toContain("INSERT INTO po_detail_linguistic");
+    for (const column of poMoved.filter((c) => c !== "po_price_sel")) {
+      expect(ps).toContain(`${column} = EXCLUDED.${column}`);
+    }
+    for (const column of poKept) expect(ps).not.toMatch(word(column));
+  });
+
+  test("a non-linguistic job's detail row has no pricing at all - total only", () => {
+    /*
+     * "총액만" in one assertion. `job_detail_non_linguistic` gained nothing from db/012, because
+     * there is no derivation to record: a MICE job's cost IS the number the user typed. A volume
+     * sent for a MICE job is dropped here rather than redirected - the same rule the language pair
+     * follows - and the row it would have gone in is forbidden by db/011's CHECK anyway.
+     */
+    const ops = JobDetailUpsertOps("7", "MICE", {
+      jobCategory: "event_ceremony_management",
+      jobVolume: "1.00",
+      jobPrice: "5000000.00",
+    } as Parameters<typeof JobDetailUpsertOps>[2]);
+    expect(ops).not.toBeNull();
+    const s = flat(ops!.sql);
+    expect(s).toContain("INSERT INTO job_detail_non_linguistic (job_id, job_type, job_category)");
+    for (const column of jobMoved) expect(s).not.toMatch(word(column));
+
+    /*
+     * And the legacy shape this replaces: 한국어 to 한국어, volume 1, unit price = the whole fee.
+     * Re-typing such a job to MICE deletes its linguistic detail row and the money never moves, so
+     * the cleanup cannot mistype a total - the point of leaving the amount on the parent.
+     */
+    const dummy = JobDetailUpsertOps("7", "MICE", {
+      jobVolume: "1.00",
+      jobPrice: "5000000.00",
+    } as Parameters<typeof JobDetailUpsertOps>[2]);
+    expect(dummy).toBeNull();
   });
 });

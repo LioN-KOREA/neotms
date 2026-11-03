@@ -28,6 +28,21 @@
 --     사용   customer.cus_upro, translator.tran_upro
 --     프로그램
 --
+--   Six of those columns have since MOVED, and the list above is kept as
+--   written because it is the inventory this file was built from. The
+--   current homes are
+--
+--     job.job_slang, job.job_elang            -> job_detail_linguistic
+--     purchase_order.po_slang, po_elang       -> po_detail_linguistic
+--         (db/011_job_types.sql)
+--     job.unit_code                           -> job_detail_linguistic
+--     purchase_order.po_unit_code             -> po_detail_linguistic
+--         (db/012_job_pricing.sql)
+--
+--   Two domains were added after this file as well -- JOBTYPE and JOBCAT,
+--   seeded by db/011_job_types.sql -- so the count referenced by columns is
+--   now twenty-two columns across seven domains, not five.
+--
 --   So this is not only the customer-registration fix. Jobs, purchase
 --   orders, projects and translators all fail the same way the moment
 --   somebody fills in a language or a work type; customers are simply the
