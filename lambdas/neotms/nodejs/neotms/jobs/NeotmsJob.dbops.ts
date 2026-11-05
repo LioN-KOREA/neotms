@@ -48,6 +48,7 @@ import {
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { JOB_CODE, codeExpression } from "../NeotmsCodes.js";
+import { JOB_KRW, JOB_KRW_JOIN } from "../NeotmsMoney.js";
 import {
   JOB_TYPE_LINGUISTIC,
   isLinguistic,
@@ -123,11 +124,24 @@ export type JobRow = {
    * rollup aggregates. Moving it into a detail table would have changed all three at once.
    */
   coinCode: string | null;
-  /** The FX rate captured at transaction time, not today's. */
+  /**
+   * The rate this job was EXCHANGED at, or null if it has not been exchanged.
+   *
+   * Read it as a settlement flag with a value attached: null on a foreign-currency job means an
+   * open position, whose KRW worth is `jobPriceKrw` below and moves daily. db/014_fx_rates.sql.
+   */
   coinRate: string | null;
   jobPriceSum: string | null;
-  /** KRW total. This is revenue. */
+  /** KRW total as BOOKED. What the form edits, and what an issued invoice says. */
   jobPriceKsum: string | null;
+  /**
+   * KRW worth as of NOW - revenue. Equal to `jobPriceKsum` unless the job is an unexchanged
+   * foreign-currency one, in which case it is `jobPriceSum` at today's rate.
+   *
+   * Null on a row that came back from `RETURNING` rather than from the select path, because it is
+   * computed through a join. Every list and detail read has it.
+   */
+  jobPriceKrw: string | null;
   jobSday: string | null;
   jobSdayTime: string | null;
   jobEday: string | null;
@@ -206,7 +220,22 @@ const JOB_DETAIL_COLUMNS = `
   jdl.job_price_sel AS job_price_sel,
   jdl.job_price    AS job_price,
   jdl.job_price_dis AS job_price_dis,
-  jdn.job_category AS job_category
+  jdn.job_category AS job_category,
+  /*
+   * The job's worth in KRW RIGHT NOW, which is not always job_price_ksum.
+   *
+   * It is in this column set rather than in jobColumns for the same reason the detail columns are:
+   * it needs a join, and jobColumns goes into RETURNING. So a freshly inserted row reads it as
+   * null - harmless, because createJob re-reads the job through the select path before answering
+   * (see its comment), which is also where the detail columns come from.
+   *
+   * Two amounts on one row looks redundant and is not. They answer different questions, and the
+   * list screens need both: job_price_ksum is WHAT WAS BOOKED - the figure the form edits and the
+   * figure an already-issued invoice carries - while this is WHAT IT IS WORTH, which for an
+   * unexchanged foreign-currency job moves with the currency. They are equal for every KRW job and
+   * every settled one, i.e. for almost every row. NeotmsMoney's header has the rule.
+   */
+  ${JOB_KRW} AS job_price_krw
 `;
 
 export const toJobRow = (row: SqlRow): JobRow => ({
@@ -233,6 +262,7 @@ export const toJobRow = (row: SqlRow): JobRow => ({
   coinRate: readMoney(row, "coin_rate"),
   jobPriceSum: readMoney(row, "job_price_sum"),
   jobPriceKsum: readMoney(row, "job_price_ksum"),
+  jobPriceKrw: readMoney(row, "job_price_krw"),
   jobSday: readText(row, "job_sday"),
   jobSdayTime: readText(row, "job_sday_time"),
   jobEday: readText(row, "job_eday"),
@@ -254,7 +284,16 @@ export const JOB_SORTS = {
   /** Delivery date: the deadline a PM works from, and the business date revenue lands on. */
   due: { column: "j.job_eday", cast: "date" },
   start: { column: "j.job_sday", cast: "date" },
-  /** Largest jobs first. Sorted on the KRW total so mixed-currency lists compare meaningfully. */
+  /**
+   * Largest jobs first. Sorted on the KRW total so mixed-currency lists compare meaningfully.
+   *
+   * Deliberately the BOOKED figure (`job_price_ksum`) and not the live `job_price_krw` the row
+   * displays, so an open position can sort a place or two away from where its shown amount would put
+   * it. That is the lesser of two evils: `sortAlias` derives the cursor's row key by slicing after
+   * the first dot (NeotmsQuery.ts), so a sort target must be a real qualified column - point this at
+   * the `CASE` expression and the keyset cursor stops advancing SILENTLY, repeating the first page
+   * forever with no error. A slightly stale ordering is visible; a stalled cursor is not.
+   */
   amount: { column: "j.job_price_ksum", cast: "numeric" },
 } as const satisfies Record<string, SortTarget>;
 
@@ -322,12 +361,17 @@ export const JOB_SCOPE_COLUMNS = ["j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
  *
  * Both are one-row-at-most by key: `job_id` is the primary key of each detail table, so neither can
  * fan a job out into duplicates the way a join to a list table would.
+ *
+ * `JOB_KRW_JOIN` is here for the same reason and with the same guarantee - LEFT, and matching on
+ * `fx_rate_latest.currency_code`, which the view makes unique by construction. It is what
+ * `job_price_krw` reads; see NeotmsMoney.ts.
  */
 const JOB_FROM = `
     FROM job j
     JOIN project p ON p.id = j.project_id AND p.deleted = false
     LEFT JOIN job_detail_linguistic jdl ON jdl.job_id = j.id
     LEFT JOIN job_detail_non_linguistic jdn ON jdn.job_id = j.id
+    ${JOB_KRW_JOIN}
 `;
 
 /* -------------------------------------------------------------------------- */

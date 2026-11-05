@@ -140,6 +140,23 @@ const EnvSchema = v.object({
    */
   NEOTMS_BOOTSTRAP_AUTHORITY_ID: v.fallback(v.string(), ""),
 
+  // -------- 환율 (Korea Export-Import Bank open API) ------------------------
+  /**
+   * Name of the Secrets Manager secret holding the KEXIM API key - `neotms/erapikey`.
+   *
+   * The NAME, not the key. Same rule as the Mailgun and database secrets below and above: a Lambda
+   * environment variable is readable by anyone with `lambda:GetFunction` and cannot be rotated
+   * without a redeploy, so the key is read from Secrets Manager at first use (NeotmsFxSecret.ts).
+   *
+   * Read ONLY by the scheduled fetcher, never by the API function - which is why the API's
+   * environment does not set it and why its absence there is not a misconfiguration. BLANK IS A
+   * SUPPORTED SETTING for the same reason `NEOTMS_BOOTSTRAP_AUTHORITY_ID` is: it turns the fetcher
+   * into a no-op, `fx_rate` stays empty, and every amount reads exactly as it did before this
+   * feature shipped because an open position falls back to its stored KRW figure. So this is
+   * deliberately not part of any `is*ConfigComplete()` check.
+   */
+  NEOTMS_FX_SECRET_NAME: v.fallback(v.string(), ""),
+
   // -------- Mail (Mailgun, not SES) ----------------------------------------
   NEOTMS_MG_SECRET_NAME: v.fallback(v.string(), ""),
   NEOTMS_MG_EMAIL_DOMAIN: v.fallback(v.string(), ""),

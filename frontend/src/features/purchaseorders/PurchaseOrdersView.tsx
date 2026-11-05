@@ -12,7 +12,7 @@ import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Fe
 import { Icon } from '@/shared/ui/Icon'
 import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
-import { decimalSum } from '@/shared/utils/money'
+import { decimalSum, krwToShow } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
 import { PurchaseOrderFormModal } from './PurchaseOrderFormModal'
 
@@ -57,8 +57,15 @@ export function PurchaseOrdersView() {
 
   const rows = useMemo(() => posQuery.data?.pages.flatMap((p) => p.items) ?? [], [posQuery.data])
 
-  /** 화면에 올라온 행들의 원화 환산 원가 합계. 전체 합계가 아니라는 사실을 라벨에 쓴다. */
-  const cost = useMemo(() => decimalSum(rows.map((r) => r.poPriceKsum)), [rows])
+  /**
+   * 화면에 올라온 행들의 원화 환산 원가 합계. 전체 합계가 아니라는 사실을 라벨에 쓴다.
+   *
+   * 저장된 금액이 아니라 **지금 시점의 가치**를 더한다 — 이유는 `krwToShow` 에 적혀 있다.
+   */
+  const cost = useMemo(
+    () => decimalSum(rows.map((r) => krwToShow(r.poPriceKrw, r.poPriceKsum))),
+    [rows],
+  )
 
   const mayCreate = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'create')
   const mayUpdate = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'update')
@@ -266,7 +273,7 @@ export function PurchaseOrdersView() {
                     </div>
                   </td>
                   <td>
-                    <Amount value={row.poPriceKsum} kind="cost" />
+                    <Amount value={krwToShow(row.poPriceKrw, row.poPriceKsum)} kind="cost" />
                   </td>
                   <td
                     className={

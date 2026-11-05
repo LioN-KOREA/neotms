@@ -44,6 +44,7 @@
 
 import { param, readMoney, type SqlOps, type SqlParameter } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
+import { JOB_KRW, JOB_KRW_JOIN, PO_KRW, PO_KRW_JOIN } from "../NeotmsMoney.js";
 import { scopeClause } from "../NeotmsQuery.js";
 import {
   PROJECT_STATES,
@@ -190,14 +191,16 @@ export const DashboardSummaryOps: (
         COALESCE(sum(rev.revenue), 0) - COALESCE(sum(cst.cost), 0)  AS margin
         FROM project p
         LEFT JOIN LATERAL (
-               SELECT sum(j.job_price_ksum) AS revenue
+               SELECT sum(${JOB_KRW}) AS revenue
                  FROM job j
+                 ${JOB_KRW_JOIN}
                 WHERE j.project_id = p.id
                   AND j.deleted = false
              ) rev ON true
         LEFT JOIN LATERAL (
-               SELECT sum(po.po_price_ksum) AS cost
+               SELECT sum(${PO_KRW}) AS cost
                  FROM purchase_order po
+                 ${PO_KRW_JOIN}
                 WHERE po.project_id = p.id
                   AND po.deleted = false
              ) cst ON true

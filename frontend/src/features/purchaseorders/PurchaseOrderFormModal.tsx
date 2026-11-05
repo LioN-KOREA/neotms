@@ -3,7 +3,7 @@ import {
   useCreatePurchaseOrder,
   useUpdatePurchaseOrder,
 } from '@/apis/queries/neotms.mutation'
-import { useJob } from '@/apis/queries/neotms.query'
+import { useFxRate, useJob } from '@/apis/queries/neotms.query'
 import {
   CODE_DOMAIN,
   codeOptions,
@@ -23,11 +23,23 @@ import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
-import { toDateInputValue } from '@/shared/utils/format'
-import { decimalMultiply, decimalSubtract, formatMoney, toDecimalInput } from '@/shared/utils/money'
+import { formatDate, toDateInputValue } from '@/shared/utils/format'
+import {
+  decimalCompare,
+  decimalMultiply,
+  decimalSubtract,
+  formatMoney,
+  toDecimalInput,
+} from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
 import { JobPicker } from '@/features/jobs/JobPicker'
 import { TranslatorPicker } from '@/features/translators/TranslatorPicker'
+
+/**
+ * 금액을 바꾸는 칸. 바뀌면 저장된 원화 금액은 더 이상 그 금액에 대한 사실이 아니다 —
+ * `JobFormModal` 의 같은 상수 주석 참고.
+ */
+const MONEY_KEYS = ['poVolume', 'poPrice', 'poPriceSum', 'poCoinCode']
 
 interface Props {
   /** null 이면 신규. */
@@ -50,9 +62,17 @@ interface Props {
  *
  * ## 합계는 화면이 계산하고 사용자가 고칠 수 있다
  *
- * `po_price_sum`·`po_price_ksum` 도 작업과 똑같이 받은 값을 그대로 저장한다. 이유와 계산 방식은
- * `JobFormModal` 의 주석과 같다 — 계산은 `BigInt` 10진 연산으로 하고, 한 번 직접 고친 합계는
- * 그 뒤로 자동 갱신하지 않는다.
+ * `po_price_sum` 도 작업과 똑같이 받은 값을 그대로 저장한다. 이유와 계산 방식은 `JobFormModal`
+ * 의 주석과 같다 — 계산은 `BigInt` 10진 연산으로 하고, 한 번 직접 고친 합계는 그 뒤로 자동
+ * 갱신하지 않는다.
+ *
+ * ## 환율은 입력란이 아니다 — 환전은 동작이다
+ *
+ * `po_price_ksum` 은 예외다. **읽기 전용 파생값**이고, `poCoinRate` 는 사람이 적는 환율이 아니라
+ * 값이 붙은 정산 플래그다. 세 경우(원화 / 정산된 외화 / 미정산 외화)와 그 각각의 원화 금액,
+ * 그리고 **원화로 환산** 버튼이 왜 입력란을 대신하는지는 `JobFormModal` 의 같은 자리 주석과
+ * db/014_fx_rates.sql, NeotmsMoney.ts 에 적혀 있다. 여기서는 그 규칙을 그대로 따른다 — 매출과
+ * 원가가 서로 다른 규칙으로 원화가 되면 마진은 어느 쪽도 설명하지 못하는 숫자가 된다.
  *
  * ## 업무 구분이 언어쌍인지 업무 분류인지를 가른다
  *
@@ -112,7 +132,11 @@ export function PurchaseOrderFormModal({
     poUnitCode: po?.poUnitCode ?? '단어',
     poPrice: po?.poPrice ?? '',
     poCoinCode: po?.poCoinCode ?? 'KRW',
-    poCoinRate: po?.poCoinRate ?? '1',
+    /**
+     * 비어 있는 것이 **미정산**이라는 뜻이다. `?? '1'` 이 아닌 이유는 `JobFormModal` 의 같은
+     * 자리 주석에 있다 — 1 로 채우면 환전하지 않은 외화 발주가 "1 대 1 로 정산된 건" 이 된다.
+     */
+    poCoinRate: po?.poCoinRate ?? '',
     poPriceSum: po?.poPriceSum ?? '',
     poPriceKsum: po?.poPriceKsum ?? '',
     poTax: po?.poTax ?? '',
@@ -157,44 +181,49 @@ export function PurchaseOrderFormModal({
   const [sumEdited, setSumEdited] = useState(isEdit)
 
   /**
-   * 합계와 원화 합계를 만든다. 출발점이 업무 구분에 따라 다르다 — `JobFormModal` 과 같은 규칙이다.
+   * 금액에 영향을 주는 칸을 건드렸는지. 정산된 발주의 저장된 원화 금액을 지키는 자물쇠다 —
+   * 이유는 `JobFormModal` 의 같은 자리 주석에 전부 적혀 있다.
+   */
+  const [moneyTouched, setMoneyTouched] = useState(false)
+
+  /**
+   * 합계를 만든다. 출발점이 업무 구분에 따라 다르다 — `JobFormModal` 과 같은 규칙이다.
    *
    * 언어 발주: `물량 × 단가` 가 합계다. 발주에는 할인 칸이 없다(컬럼 자체가 없다).
-   * 비언어 발주: 합계는 담당자가 직접 넣는 값이고, 계산해 줄 수 있는 것은 환율 환산뿐이다
-   * (db/012_job_pricing.sql).
+   * 비언어 발주: 합계는 담당자가 직접 넣는 값이고, 계산해 줄 것이 없다(db/012_job_pricing.sql).
    *
    * 구분을 `form` 에서 읽지 않고 인자로 받는다. 발주의 구분은 `form.poType` 이 비어 있을 때
    * 작업에서 상속되고(`inheritedType`), 그 값은 비동기 조회에서 온다 — `form` 안에 없다.
+   *
+   * **원화 환산은 여기 없다.** 아래 `ksum` 이 렌더마다 계산한다 — 시세는 `set()` 이 불리지
+   * 않아도 도착하므로, 폼 상태에 담아 두면 늦거나 어긋난다.
    */
-  const compute = (f: typeof form, isLing: boolean) => {
-    if (!isLing) {
-      const sum = toDecimalInput(f.poPriceSum)
-      return { sum, ksum: sum === null ? null : decimalMultiply(sum, f.poCoinRate) }
-    }
-    const sum = decimalMultiply(f.poVolume, f.poPrice)
-    const ksum = sum === null ? null : decimalMultiply(sum, f.poCoinRate)
-    return { sum, ksum }
-  }
+  const computeSum = (f: typeof form, isLing: boolean) =>
+    isLing ? decimalMultiply(f.poVolume, f.poPrice) : toDecimalInput(f.poPriceSum)
 
-  const suggestion = compute(form, linguistic)
+  const suggestedSum = computeSum(form, linguistic)
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setDirty(true)
+    if (MONEY_KEYS.includes(key as string)) setMoneyTouched(true)
     setForm((prev) => {
       const next = { ...prev, [key]: value }
       /*
        * 무엇이 계산을 촉발하는지가 업무 구분에서 갈린다 — JobFormModal 의 같은 자리 주석에 이유가
-       * 전부 적혀 있다. 요약하면: 비언어에서 합계는 입력란이므로 촉발 목록에 넣되 **쓰지 않고**,
-       * 업무 구분 자체는 촉발 목록에 넣지 않는다(넣으면 구분을 되돌릴 때 금액이 지워진다).
+       * 전부 적혀 있다. 요약하면: 비언어에서 합계는 입력란이라 따라올 것이 없고, 업무 구분 자체는
+       * 촉발 목록에 넣지 않는다(넣으면 구분을 되돌릴 때 금액이 지워진다). 환율도 더 이상 목록에
+       * 없다 — 입력란이 아니고, 원화 금액은 상태가 아니라 파생값이다.
        */
       const nextLinguistic = isLinguistic(next.poType || inheritedType)
-      const triggers = nextLinguistic
-        ? ['poVolume', 'poPrice', 'poCoinRate']
-        : ['poPriceSum', 'poCoinRate']
-      if (!sumEdited && triggers.includes(key)) {
-        const { sum, ksum } = compute(next, nextLinguistic)
-        if (nextLinguistic) next.poPriceSum = sum ?? ''
-        next.poPriceKsum = ksum ?? ''
+      if (!sumEdited && nextLinguistic && ['poVolume', 'poPrice'].includes(key)) {
+        next.poPriceSum = computeSum(next, true) ?? ''
+      }
+      /*
+       * 통화를 바꾸면 환율을 같이 정리한다 — KRW 면 1, 외화면 비워서 **미정산**으로 돌린다.
+       * 합계는 건드리지 않는다. 이유는 `JobFormModal` 의 같은 자리 주석 참고.
+       */
+      if (key === 'poCoinCode') {
+        next.poCoinRate = (next.poCoinCode.trim().toUpperCase() || 'KRW') === 'KRW' ? '1' : ''
       }
       /*
        * 업무 구분을 바꾸면 쓰지 않게 된 쪽을 여기서 비운다 — JobFormModal 의 같은 자리 주석 참고.
@@ -218,10 +247,66 @@ export function PurchaseOrderFormModal({
   const applySuggestion = () => {
     setDirty(true)
     setSumEdited(false)
+    setMoneyTouched(true)
+    setForm((prev) => ({ ...prev, poPriceSum: suggestedSum ?? '' }))
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* 원화 환산 — 규칙은 JobFormModal 과 같다                                    */
+  /* ------------------------------------------------------------------------ */
+
+  /** 통화 코드. 빈 값은 원화로 읽는다 — 서버의 `COALESCE(po_coin_code, 'KRW')` 와 같은 규칙. */
+  const coin = form.poCoinCode.trim().toUpperCase() || 'KRW'
+  const isKrw = coin === 'KRW'
+  /** 환전된 환율. 있으면 그 자체가 "정산 끝" 이라는 뜻이다. */
+  const storedRate = toDecimalInput(form.poCoinRate)
+  /** 원화 금액이 사실로 고정되었는지. */
+  const settled = isKrw || storedRate !== null
+
+  const fx = useFxRate(form.poCoinCode)
+
+  /** 합계를 원화로 만드는 환율. `null` 은 "아직 알 수 없다" 이지 0 이 아니다. */
+  const effectiveRate = isKrw ? '1' : settled ? storedRate : fx.rate
+
+  /**
+   * 원화 환산 합계. **이 화면이 저장하는 원가이고, 사람이 타이핑하지 않는다.**
+   *
+   * 시세를 모를 때 저장된 값으로 물러나는 것은 서버의 `COALESCE(sum * rate, ksum)` 과 같은
+   * 선택이다(NeotmsMoney.ts). 나머지 판단은 `JobFormModal` 의 같은 자리 주석 참고.
+   */
+  const product =
+    effectiveRate !== null && (!settled || !isEdit || moneyTouched)
+      ? decimalMultiply(form.poPriceSum, effectiveRate)
+      : null
+
+  /**
+   * 미정산 외화에서 합계가 0 이면 환산 결과를 주장하지 않고 저장된 원화 금액으로 물러난다 —
+   * 서버의 `NULLIF(sum, 0)` 과 같은 선택이고(NeotmsMoney.ts), 이유는 `JobFormModal` 의 같은
+   * 자리 주석에 적혀 있다. 매출과 원가가 서로 다른 규칙으로 원화가 되면 마진이 깨지므로
+   * 여기서도 **똑같이** 막는다.
+   */
+  const ksum =
+    !settled && decimalCompare(toDecimalInput(form.poPriceSum), '0') === 0
+      ? toDecimalInput(form.poPriceKsum)
+      : (product ?? toDecimalInput(form.poPriceKsum))
+
+  /** 시세가 있어도 환산할 금액이 없으면 누를 수 없다 — 반응 없는 버튼은 고장으로 읽힌다. */
+  const convertible = fx.canConvert && toDecimalInput(form.poPriceSum) !== null
+
+  /** 환전하고 고정한다. 한 번의 `setForm` 으로 네 값을 같이 바꾼다 — `JobFormModal` 주석 참고. */
+  const convertToKrw = () => {
+    if (!convertible || fx.rate === null) return
+    const converted = decimalMultiply(form.poPriceSum, fx.rate)
+    if (converted === null) return
+    setDirty(true)
+    setSumEdited(true)
+    setMoneyTouched(true)
     setForm((prev) => ({
       ...prev,
-      poPriceSum: suggestion.sum ?? '',
-      poPriceKsum: suggestion.ksum ?? '',
+      poCoinCode: 'KRW',
+      poCoinRate: '1',
+      poPriceSum: converted,
+      poPriceKsum: converted,
     }))
   }
 
@@ -283,9 +368,15 @@ export function PurchaseOrderFormModal({
       ...typed,
       ...detail,
       poCoinCode: form.poCoinCode.trim() || null,
-      poCoinRate: toDecimalInput(form.poCoinRate),
+      /*
+       * 환율은 **정산 여부**로 결정된다. 미정산 외화는 `null` 을 보낸다 — 그 `null` 이 "읽을
+       * 때마다 현 시세로 계산하라" 는 지시이고, 대신 오늘 시세를 숫자로 박으면 환전하지도 않은
+       * 미지급금이 오늘 시세로 영구히 굳는다. 자세한 이유는 `JobFormModal` 의 같은 자리 주석 참고.
+       */
+      poCoinRate: settled ? effectiveRate : null,
       poPriceSum: toDecimalInput(form.poPriceSum),
-      poPriceKsum: toDecimalInput(form.poPriceKsum),
+      /** 폼 상태가 아니라 위에서 계산된 파생값. 미정산 행에서는 시세를 모를 때의 대비책이다. */
+      poPriceKsum: ksum,
       poTax: form.poTax.trim() || null,
       poTaxPrice: toDecimalInput(form.poTaxPrice),
       poTaxSum: toDecimalInput(form.poTaxSum),
@@ -314,16 +405,15 @@ export function PurchaseOrderFormModal({
   }
 
   /**
-   * 입력한 금액이 계산값과 다른지. 견주는 대상이 업무 구분에 따라 다르다 — `JobFormModal` 의 같은
-   * 자리 주석에 이유가 적혀 있다. 요약하면 비언어 발주에서 합계는 입력값이라 자기 자신과 견주게
-   * 되므로, 대신 원화 합계를 `합계 × 환율` 과 견준다.
+   * 입력한 합계가 `물량 × 단가` 와 다른지. **언어 발주에만 있는 비교다** — `JobFormModal` 의 같은
+   * 자리 주석 참고. 비언어 발주의 합계는 입력값이라 견줄 상대가 자기 자신이고, 전에 그 자리에
+   * 있던 `합계 × 환율` 비교는 원화 금액이 파생값이 된 지금 어긋날 수 없다.
    */
-  const enteredAmount = linguistic ? form.poPriceSum : form.poPriceKsum
-  const computedAmount = linguistic ? suggestion.sum : suggestion.ksum
   const differs =
-    computedAmount !== null &&
-    toDecimalInput(enteredAmount) !== null &&
-    decimalSubtract(toDecimalInput(enteredAmount), computedAmount) !== '0.00'
+    linguistic &&
+    suggestedSum !== null &&
+    toDecimalInput(form.poPriceSum) !== null &&
+    decimalSubtract(toDecimalInput(form.poPriceSum), suggestedSum) !== '0.00'
 
   return (
     <Modal
@@ -584,23 +674,52 @@ export function PurchaseOrderFormModal({
           <span className={ui.hint}>번역가의 정산 통화와 같아야 합니다.</span>
         </div>
 
+        {/*
+         * 환율 칸이 있던 자리. 세 모습이 파일 머리말의 세 경우에 대응한다 — `JobFormModal` 의
+         * 같은 자리 주석 참고.
+         */}
         <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-rate">
-            적용 환율
-          </label>
-          <input
-            id="po-rate"
-            className={`${ui.input} ${ui.inputNum}`}
-            inputMode="decimal"
-            value={form.poCoinRate}
-            onChange={(e) => set('poCoinRate', e.target.value)}
-          />
+          <span className={ui.label}>환율</span>
+          {isKrw ? (
+            <span className={ui.hint}>원화 금액입니다. 환산할 것이 없습니다.</span>
+          ) : settled ? (
+            <>
+              <output className={ui.hint} htmlFor="po-coin">
+                1 {coin} = <strong>{formatMoney(storedRate)}</strong> KRW
+              </output>
+              <span className={ui.hint}>
+                이미 원화로 환산된 건입니다. 이 환율과 아래 원화 금액은 그대로 보존합니다.
+              </span>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={`${ui.btn} ${ui.btnSm}`}
+                onClick={convertToKrw}
+                disabled={!convertible || pending}
+              >
+                원화로 환산
+              </button>
+              {/* 누를 수 없을 때 **왜 없는지**를 쓴다 — 이유가 셋이고 전부 오류가 아니다. */}
+              <span className={fx.canConvert ? ui.hint : ui.hintWarn}>
+                {fx.isLoading
+                  ? '시세를 읽고 있습니다…'
+                  : !fx.canConvert
+                    ? `${coin} 시세가 아직 수집되지 않아 환산할 수 없습니다. 금액은 ${coin} 기준으로 그대로 저장됩니다.`
+                    : toDecimalInput(form.poPriceSum) === null
+                      ? '환산할 합계를 먼저 입력하세요.'
+                      : `현 시세 1 ${coin} = ${formatMoney(fx.rate)} KRW${
+                          fx.effectiveDate ? ` (${formatDate(fx.effectiveDate)} 기준)` : ''
+                        }. 누르면 통화가 KRW 로 바뀌고 금액이 고정됩니다.`}
+              </span>
+            </>
+          )}
         </div>
 
         {/*
          * 비언어 발주에서는 `setSumEdited(true)` 를 부르지 않는다 — 여기서 합계는 계산 결과가
-         * 아니라 출발점이고, 부르면 금액을 먼저 넣고 환율을 나중에 넣는 순서에서 원화 환산이
-         * 멈춘다. `JobFormModal` 의 같은 자리 주석에 전체 이유가 있다.
+         * 아니라 출발점이고, 덮어쓸 계산값이 애초에 없다. `JobFormModal` 의 같은 자리 주석 참고.
          */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-sum">
@@ -623,6 +742,7 @@ export function PurchaseOrderFormModal({
           )}
         </div>
 
+        {/* 원화 환산 합계. **읽기 전용 파생값이다** — `JobFormModal` 의 같은 자리 주석 참고. */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-ksum">
             원화 환산 합계 = 원가
@@ -630,14 +750,19 @@ export function PurchaseOrderFormModal({
           <input
             id="po-ksum"
             className={`${ui.input} ${ui.inputNum}`}
-            inputMode="decimal"
-            value={form.poPriceKsum}
-            onChange={(e) => {
-              setSumEdited(true)
-              set('poPriceKsum', e.target.value)
-            }}
+            value={formatMoney(ksum)}
+            readOnly
           />
-          <span className={ui.hint}>리포트의 원가는 이 값의 합입니다.</span>
+          <span className={ui.hint}>
+            리포트의 원가는 이 값의 합입니다.
+            {settled ? null : effectiveRate === null ? null : (
+              <>
+                {' '}
+                합계 × {formatMoney(effectiveRate)}
+                {fx.effectiveDate ? ` (${formatDate(fx.effectiveDate)} 기준)` : ''}
+              </>
+            )}
+          </span>
         </div>
 
         <div className={ui.field}>
@@ -881,20 +1006,18 @@ export function PurchaseOrderFormModal({
         </div>
       </div>
 
+      {/* 미정산 외화라는 사실을 저장 전에 말한다 — `JobFormModal` 의 같은 자리 주석 참고. */}
+      {!settled && effectiveRate !== null ? (
+        <InfoNotice>
+          표시된 원화 환산 값은 현 시점의 환율이 적용된 값이며, 추후 환율에 따라 변동이 생길 수
+          있습니다. 금액을 고정하려면 <strong>원화로 환산</strong>을 누르세요.
+        </InfoNotice>
+      ) : null}
+
       {differs ? (
         <InfoNotice>
-          {linguistic ? (
-            <>
-              입력한 합계가 <strong>물량 × 단가</strong> 계산값({formatMoney(suggestion.sum)}{' '}
-              {form.poCoinCode})과 다릅니다.
-            </>
-          ) : (
-            <>
-              입력한 원화 환산 합계가 <strong>합계 × 환율</strong> 계산값(
-              {formatMoney(suggestion.ksum)} KRW)과 다릅니다.
-            </>
-          )}{' '}
-          의도한 조정이면 그대로 저장하세요.{' '}
+          입력한 합계가 <strong>물량 × 단가</strong> 계산값({formatMoney(suggestedSum)}{' '}
+          {form.poCoinCode})과 다릅니다. 의도한 조정이면 그대로 저장하세요.{' '}
           <button type="button" className={ui.btnLink} onClick={applySuggestion}>
             계산값으로 되돌리기
           </button>

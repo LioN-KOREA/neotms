@@ -100,6 +100,7 @@ import {
   listCodesForAdmin,
   updateCode,
 } from "./codes/NeotmsCodeManager.js";
+import { listFxRates } from "./fx/NeotmsFxRateManager.js";
 import { listRoles, listStaff, updateStaff } from "./staff/NeotmsStaffAdminManager.js";
 
 /* -------------------------------------------------------------------------- */
@@ -406,6 +407,14 @@ const handleGetPmDashboard: RRHandler = async (request) => getDashboard(callerOf
 const handleListCodes: RRHandler = async () => listCodes();
 const handleListCodesForAdmin: RRHandler = async () => listCodesForAdmin();
 
+/*
+ * 환율 - the current rate per currency.
+ *
+ * Takes no caller for the same reason the code listings do not: a rate is a fact about a currency,
+ * the same one for everybody, with no row-level scope to apply.
+ */
+const handleListFxRates: RRHandler = async () => listFxRates();
+
 const handleCreateCode: RRHandler = async (request) => {
   const parsed = parseBody(CodeCreateSchema, request.body);
   return parsed.ok ? createCode(parsed.value) : parsed.response;
@@ -463,11 +472,17 @@ export type NeotmsRoute = {
   /**
    * Every signed-in staff member may call this, whatever their role grants.
    *
-   * One route carries it, and it is something no form in the application can render without:
-   * `GET /api/v0/codes`, the code tables. 분야, 작업 종류, 단가 단위 and 언어 fill dropdowns on every
-   * form, so gating this on 유지보수 would leave a PM with the right to create a customer looking at
-   * empty dropdowns. Reading a list of category names is not a privilege worth gating; deciding what
-   * is IN the list is, and that is the `/admin/codes` half.
+   * Two routes carry it, and the test each had to pass is the same: a form in the application cannot
+   * render without it, and what it discloses is not worth gating.
+   *
+   *   * `GET /api/v0/codes` - the code tables. 분야, 작업 종류, 단가 단위 and 언어 fill dropdowns on
+   *     every form, so gating this on 유지보수 would leave a PM with the right to create a customer
+   *     looking at empty dropdowns. Reading a list of category names is not a privilege; deciding
+   *     what is IN the list is, and that is the `/admin/codes` half.
+   *   * `GET /api/v0/fx-rates` - the current rate per currency. The job and PO forms convert a
+   *     foreign-currency total to KRW on the client, so without this the 원화로 환산 button cannot
+   *     show the figure it is about to commit. An exchange rate published daily by a state bank is
+   *     not company information, so there is nothing here to protect.
    *
    * It has to exist as an explicit flag rather than as "no menu declared", because "no menu
    * declared" is also what a route whose author forgot looks like - and those two must not be the
@@ -510,6 +525,15 @@ const PURCHASE_ORDERS = "/api/v0/purchase-orders";
 const CODES = "/api/v0/codes";
 const ADMIN_CODES = "/api/v0/admin/codes";
 /*
+ * The rate table. Read-only, and the second route on the `anyStaff` tier.
+ *
+ * There is deliberately no `/api/v0/admin/fx-rates` to go with it. The 유지보수 screen edits the
+ * company's own taxonomy; an exchange rate is an upstream fact, and the one legitimate reason to
+ * write one by hand - correcting a day the fetcher got wrong - moves every open position's reported
+ * worth at once. That belongs in SQL, where it is deliberate, not behind a form.
+ */
+const FX_RATES = "/api/v0/fx-rates";
+/*
  * Both under `/admin/`, both gated on STAFF, including the role listing.
  *
  * `/admin/roles` could have been `anyStaff` - a role's name is not a secret, and the sidebar
@@ -540,6 +564,12 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
 
   // -- 코드 (dropdowns; authenticated, no menu) ------------------------------
   { path: CODES, method: "GET", handler: handleListCodes, anyStaff: true },
+
+  // -- 환율 (the job and PO forms' conversion button; authenticated, no menu) -
+  //
+  // The second and last `anyStaff` route. A PM entitled to create a job must be able to price it in
+  // USD, so this is in the same category as the dropdown feed: something no form can render without.
+  { path: FX_RATES, method: "GET", handler: handleListFxRates, anyStaff: true },
 
   // -- 고객사 ---------------------------------------------------------------
   { path: CUSTOMERS, method: "GET", handler: handleListCustomers, menu: NeotmsMenu.CUSTOMER, action: "read" },

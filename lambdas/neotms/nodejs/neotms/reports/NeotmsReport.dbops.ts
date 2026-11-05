@@ -34,15 +34,21 @@
 //   business date  job.job_eday            - delivery is the point of revenue recognition, so a job
 //                                            created in December and delivered in January belongs
 //                                            to January. NOT created_at, NOT the project's dates.
-//   revenue        job.job_price_ksum      - booked on the JOB
-//   cost           purchase_order.po_price_ksum - booked on the PO
+//   revenue        JOB_KRW over job        - booked on the JOB
+//   cost           PO_KRW over purchase_order - booked on the PO
 //   margin         revenue - cost          - derived in SQL, never stored
 //
-// Both amounts are the KRW-converted "KSUM" totals rather than the original-currency "SUM" totals,
-// because a report row aggregates across currencies and those figures have to be comparable. The
-// KRW value was computed with the FX rate captured at transaction time (`job.coin_rate`,
-// `purchase_order.po_coin_rate`), which is what makes re-running a report from three years ago
-// reproduce the original number instead of today's exchange rate applied to history.
+// Both amounts are KRW rather than original-currency totals, because a report row aggregates across
+// currencies and those figures have to be comparable.
+//
+// What produces the KRW figure is `NeotmsMoney.JOB_KRW` / `PO_KRW` rather than the bare
+// `*_price_ksum` columns, and the difference shows up in one case out of three: a foreign-currency
+// amount NOBODY HAS EXCHANGED YET is valued at today's rate, because its worth in KRW moves with
+// the currency until somebody converts it. An amount that HAS been exchanged keeps the figure it was
+// booked at, forever - so a report of a closed quarter still reproduces exactly on every run, which
+// is the property the captured `job.coin_rate` was introduced to guarantee and which this change
+// preserves rather than trades away. The full rule, and why it lives in one module, is in
+// NeotmsMoney's header; db/014_fx_rates.sql is the authority on the data model behind it.
 //
 // ## Revenue lives one level above cost
 //
@@ -81,6 +87,7 @@ import {
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { mergeClauses, rangeClause, scopeClause, type SqlClause } from "../NeotmsQuery.js";
 import { JOB_TYPE_LINGUISTIC } from "../NeotmsJobTypes.js";
+import { JOB_KRW, JOB_KRW_JOIN, PO_KRW, PO_KRW_JOIN } from "../NeotmsMoney.js";
 import type { ReportQuery } from "../neotms.schemas.js";
 
 /* -------------------------------------------------------------------------- */
@@ -150,13 +157,21 @@ const toReportLine = (row: SqlRow): ReportLine => ({
  *
  * `deleted = false` and not `NOT deleted`: `ix_job_eday` and `ix_po_job` are both partial indexes,
  * and this is the spelling the rest of the dbops layer uses.
+ *
+ * The two `fx_rate_latest` joins come from `NeotmsMoney`, and the PO's one is INSIDE the lateral
+ * because that is where its `po` alias is in scope. Both are LEFT and both match on a UNIQUE column
+ * (`fx_rate_latest` has one row per currency), so neither can drop a row or fan one out - the same
+ * reasoning the `sys_code` joins on the dimensions below record. At five currencies the view is a
+ * handful of rows the planner will hash once per query.
  */
 const REPORT_FROM = `
         FROM job j
         JOIN project p ON p.id = j.project_id AND p.deleted = false
+        ${JOB_KRW_JOIN}
         LEFT JOIN LATERAL (
-               SELECT sum(po.po_price_ksum) AS cost
+               SELECT sum(${PO_KRW}) AS cost
                  FROM purchase_order po
+                 ${PO_KRW_JOIN}
                 WHERE po.job_id = j.id
                   AND po.deleted = false
              ) poc ON true
@@ -172,10 +187,10 @@ const REPORT_FROM = `
  * of a bar, so a NULL here turns a correct zero-margin line into "unknown".
  */
 const REPORT_MEASURES = `
-               COALESCE(sum(j.job_price_ksum), 0) AS revenue,
-               COALESCE(sum(poc.cost), 0)         AS cost,
-               COALESCE(sum(j.job_price_ksum), 0)
-                 - COALESCE(sum(poc.cost), 0)     AS margin
+               COALESCE(sum(${JOB_KRW}), 0) AS revenue,
+               COALESCE(sum(poc.cost), 0)   AS cost,
+               COALESCE(sum(${JOB_KRW}), 0)
+                 - COALESCE(sum(poc.cost), 0) AS margin
 `;
 
 /* -------------------------------------------------------------------------- */

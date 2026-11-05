@@ -8,6 +8,7 @@ import type {
   CustomerRow,
   DashboardRole,
   DashboardSummary,
+  FxRateListView,
   JobInput,
   JobRow,
   JobUpdate,
@@ -111,6 +112,24 @@ export const updateCode = (id: string, input: CodeUpdateInput) =>
  */
 export const deleteCode = (id: string) =>
   neotmsApi<{ id: string }>(`/api/v0/admin/codes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/* -------------------------------------------------------------------------- */
+/* 환율                                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 통화별 최신 고시 환율. 코드 목록과 함께 `anyStaff` 로 열려 있는 둘뿐인 읽기다.
+ *
+ * `fetchCodes` 와 합치지 않았다. 읽는 쪽이 같고(작업·발주 폼이 둘 다 필요로 한다) 권한도 같아서
+ * 합치고 싶어지지만, **캐시 수명이 다르다** — 코드는 1년에 두 번 바뀌고 환율은 영업일마다
+ * 바뀐다. 합치면 30분 캐시인 코드 목록이 환율의 주기로 다시 읽히거나, 환율이 코드의 주기로
+ * 낡는다. 서버 쪽 판단도 같다(NeotmsFxRateManager.ts).
+ *
+ * **빈 목록은 오류가 아니다.** 수집기가 아직 한 번도 성공하지 못한 상태가 정상적인 초기 상태이고,
+ * 그때 화면이 할 일은 에러를 띄우는 것이 아니라 환산 버튼을 비활성화하는 것이다.
+ */
+export const fetchFxRates = (signal?: AbortSignal) =>
+  neotmsApi<FxRateListView>('/api/v0/fx-rates', { signal })
 
 /* -------------------------------------------------------------------------- */
 /* 직원·역할 — 사용자 관리                                                      */

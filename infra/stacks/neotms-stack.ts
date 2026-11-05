@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// One stack, four constructs.
+// One stack, five constructs.
 //
 // Not split into a data stack and an app stack, even though that is the usual shape. The reason is
 // that cross-stack references in CDK become CloudFormation exports, and an export cannot be changed
@@ -15,6 +15,11 @@
 // `/api/*` as a behaviour on its own distribution - which is what keeps the SPA and the API
 // same-origin and so keeps the `SameSite=Lax` session cookie working. See NeotmsSite's header.
 //
+// The rate fetcher hangs off the database and nothing else - no API, no storage, no site - which is
+// why it is constructed last and why nothing depends on it. That isolation is the shape of the thing
+// rather than an accident of ordering: it is reached by a schedule rather than by a caller, and if
+// it were deleted tomorrow every screen would keep working on stored KRW figures. See its header.
+//
 // Note what is NOT here any more: NeotmsAcuScheduler. It existed to move the Aurora Serverless v2
 // capacity floor between 0 and 0.5 ACU on a KST schedule, because the floor was the single largest
 // variable in the bill. Supabase bills a flat monthly compute price per project, so there is no
@@ -24,6 +29,7 @@ import * as cdk from "aws-cdk-lib/core";
 import { Construct } from "constructs";
 import { NeotmsStageConfig } from "../config/NeotmsConfig.js";
 import { NeotmsApi } from "../constructs/NeotmsApi.js";
+import { NeotmsFxRate } from "../constructs/NeotmsFxRate.js";
 import { NeotmsSite } from "../constructs/NeotmsSite.js";
 import { NeotmsStorage } from "../constructs/NeotmsStorage.js";
 import { NeotmsSupabase } from "../constructs/NeotmsSupabase.js";
@@ -37,6 +43,7 @@ export class NeotmsStack extends cdk.Stack {
   public readonly storage: NeotmsStorage;
   public readonly api: NeotmsApi;
   public readonly site: NeotmsSite;
+  public readonly fxRate: NeotmsFxRate;
 
   constructor(scope: Construct, id: string, props: NeotmsStackProps) {
     super(scope, id, props);
@@ -55,6 +62,11 @@ export class NeotmsStack extends cdk.Stack {
     this.site = new NeotmsSite(this, "Site", {
       config,
       api: this.api,
+    });
+
+    this.fxRate = new NeotmsFxRate(this, "FxRate", {
+      config,
+      database: this.database,
     });
 
     cdk.Tags.of(this).add("Project", "NEOTMS");

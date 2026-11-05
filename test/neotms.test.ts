@@ -31,6 +31,10 @@ import { NeotmsStack } from "../infra/stacks/neotms-stack.js";
 // and does not trip the Lambda's environment validation. It is imported rather than retyped because
 // the test below is precisely an assertion that these two lists agree.
 import { NeotmsMenu } from "../lambdas/neotms/nodejs/neotms/NeotmsMenus.js";
+// Likewise importable for free - a frozen list of seven strings with no imports of its own. It is
+// the third member of a set of three lists that have to agree and that nothing reconciles at
+// runtime; see `describe("the currency seed")`.
+import { CURRENCY_CODES, FX_CURRENCY_CODES } from "../lambdas/neotms/nodejs/neotms/NeotmsCurrency.js";
 
 /*
  * The synthesised template for a stage, built at most once per run.
@@ -892,6 +896,7 @@ describe("the empty-database bootstrap", () => {
       "011_job_types.sql",
       "012_job_pricing.sql",
       "013_dashboard_menus.sql",
+      "014_fx_rates.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -1477,20 +1482,58 @@ describe("the currency seed", () => {
     expect(seeded).toEqual(expect.arrayContaining(offered));
   });
 
-  test("the seed and COIN_CODES have not drifted apart in either direction", () => {
+  test("the console and the rate fetcher offer the same currencies", () => {
     /*
-     * The weaker converse, as a warning rather than as the security-shaped assertion above.
+     * The second half of the matched set, and the half with a live consequence.
      *
-     * A row here that `COIN_CODES` does not offer cannot break a save - it just sits unreachable,
-     * because there is no GET endpoint for currencies and no screen that reads the table. It is
-     * still worth failing on, for the reason 007's 작업/단위 blocks are worth keeping aligned: the
-     * moment the two lists differ, the next person has to work out which one is authoritative, and
-     * the answer ("the frontend constant, because the database list is invisible") is not something
-     * either file says on its own.
+     * `CURRENCY_CODES` in the lambda is what the scheduled fetcher collects quotes for (minus KRW).
+     * If it and `COIN_CODES` disagree, the effect is not a failed save - it is a currency the console
+     * happily books jobs in and the fetcher never asks the bank about, which means every open
+     * position in it reports its stored `*_price_ksum` forever while every other currency is revalued
+     * at today's rate. Two screens, one answer each, neither looking wrong: the exact failure
+     * NeotmsMoney.ts has one shared expression to prevent.
+     *
+     * Compared as sets, because the ORDER of `COIN_CODES` is the dropdown's running order and is a
+     * presentation decision the lambda has no business constraining.
      */
-    expect([...seededCurrencies()].sort()).toEqual(
-      [...optValues(frontendFile("apis", "neotms.codes.ts"), "COIN_CODES")].sort(),
+    const offered = optValues(frontendFile("apis", "neotms.codes.ts"), "COIN_CODES");
+    expect([...offered].sort()).toEqual([...CURRENCY_CODES].sort());
+
+    // And KRW is excluded from what the fetcher asks for, rather than asked for and dropped later.
+    // Nothing quotes KRW against itself, so requesting it would guarantee one permanent "currency in
+    // use with no quote" row in the diagnostic at the foot of db/014_fx_rates.sql.
+    expect(FX_CURRENCY_CODES).not.toContain("KRW");
+    expect([...FX_CURRENCY_CODES].sort()).toEqual(
+      [...CURRENCY_CODES].filter((c) => c !== "KRW").sort(),
     );
+  });
+
+  test("the only currency seeded but not offered is retired CNY", () => {
+    /*
+     * The converse of the first test, stated as "which extras are allowed" rather than as equality,
+     * because there is now exactly one legitimate extra and the reason it is legitimate must be
+     * recorded somewhere a change will trip over.
+     *
+     * A row seeded but not offered cannot break a save - nothing reads this table to build a
+     * dropdown. It is still worth pinning, for the reason 007's 작업/단위 blocks are worth keeping
+     * aligned: the moment the lists differ by something undocumented, the next person has to work
+     * out which one is authoritative.
+     *
+     * CNY is the documented exception. The console offers CNH (the offshore yuan) because that is
+     * what the bank quotes - `cur_unit` is "CNH" and CNY is absent from the upstream table
+     * altogether - and because a Chinese customer pays this company by international transfer, which
+     * settles offshore. The CNY ROW CANNOT SIMPLY BE DELETED: `coin_code` is referenced ON DELETE
+     * RESTRICT by ten columns across nine tables, so on any database holding a legacy CNY job the
+     * DELETE fails. Retiring it from `COIN_CODES` instead means no new row can be booked in it while
+     * an existing one still renders - `codeOptions` shows it as `CNY (등록되지 않은 값)` rather than
+     * snapping the field to KRW.
+     *
+     * If a currency is ever genuinely retired, add it here. If this fails because something was
+     * ADDED to the seed and forgotten in the console, that is the drift this test is for.
+     */
+    const offered = new Set(optValues(frontendFile("apis", "neotms.codes.ts"), "COIN_CODES"));
+    const seededOnly = seededCurrencies().filter((code) => !offered.has(code));
+    expect(seededOnly).toEqual(["CNY"]);
   });
 
   test("no registration form defaults to a currency that is not seeded", () => {
@@ -2288,6 +2331,269 @@ describe("the 대시보드 aggregate", () => {
       ...frontendFile("shared", "config.ts").matchAll(/^\s{2}(\w+): '(\w+)',$/gm),
     ].map((m) => m[2]);
     expect([...client].sort()).toEqual([...Object.values(NeotmsMenu)].sort());
+  });
+});
+
+describe("the floating KRW figure", () => {
+  /** db/014_fx_rates.sql, comments stripped - same reason as 011's and 012's. */
+  const code = () => sqlCode("014_fx_rates.sql");
+
+  test("the view is one row per currency and is not capped by age", () => {
+    /*
+     * `DISTINCT ON (currency_code)` with a matching ORDER BY is the whole view, and the two halves
+     * are asserted together because either one alone is wrong in a way that still returns rows.
+     * Without the DESC the view yields each currency's OLDEST quote - a number that is plausible,
+     * stable, and quietly years out of date. Without the DISTINCT ON it yields every quote ever
+     * collected, and then the LEFT JOIN in NeotmsMoney's expression FANS EVERY JOB OUT across its
+     * currency's entire rate history, multiplying reported revenue by the number of days the
+     * fetcher has been running. That one grows every day, which is the worst possible shape for a
+     * reporting bug.
+     *
+     * No age cap, asserted as an absence. The temptation is real - a quote from three weeks ago
+     * looks like something that should be filtered out - but filtering it produces NULL, which the
+     * expression's COALESCE turns into the stored ksum, which is the figure this whole file exists
+     * to stop quoting. The design decision is to SHOW staleness through `effective_date` rather
+     * than hide it, so `current_date` must not appear in the view at all.
+     */
+    expect(code()).toMatch(
+      /CREATE OR REPLACE VIEW fx_rate_latest AS\s+SELECT DISTINCT ON \(currency_code\)/,
+    );
+    expect(code()).toMatch(/ORDER BY currency_code, effective_date DESC/);
+    const view = /CREATE OR REPLACE VIEW fx_rate_latest AS([\s\S]*?);/.exec(code())?.[1] ?? "";
+    expect(view).not.toMatch(/current_date|now\(\)|INTERVAL/i);
+    // `effective_date` is selected, not just ordered by - it is what the console prints beside the
+    // converted amount, and without it in the projection the staleness is invisible.
+    expect(view).toContain("effective_date");
+  });
+
+  test("the backfill pins a legacy rate and refuses to invent one", () => {
+    /*
+     * The invariant: A ROW THAT ALREADY HAS A BOOKED KRW FIGURE NEVER FLOATS.
+     *
+     * Legacy `COIN_RATE` was nvarchar and holds '' or '-' on some rows, which arrives as NULL. Such
+     * a row has an invoiced `job_price_ksum` and no rate, so the moment the view goes live it would
+     * start floating - restating a figure a customer has already been billed for. Deriving the rate
+     * from `ksum / sum` and storing it changes no reported figure; it only stops the figure from
+     * changing later.
+     *
+     * Every guard is asserted individually because each one admits a row class that genuinely
+     * occurs, and dropping any single one is a different silent corruption:
+     *
+     *   coin_rate IS NULL       - idempotence. Without it, a second run overwrites rates the
+     *                             console wrote, with a quotient that disagrees in the sixth
+     *                             decimal.
+     *   price_sum <> 0          - division by zero, which aborts the whole file mid-apply.
+     *   price_ksum IS NOT NULL  - the one that matters most, and the one that looks removable. A
+     *                             row with no booked figure has nothing to protect and SHOULD
+     *                             float; pinning it would freeze an open position at a rate nobody
+     *                             ever agreed to.
+     */
+    for (const [table, rate, sum, ksum] of [
+      ["job", "coin_rate", "job_price_sum", "job_price_ksum"],
+      ["purchase_order", "po_coin_rate", "po_price_sum", "po_price_ksum"],
+    ] as const) {
+      const stmt = new RegExp(`UPDATE ${table}\\s+SET ${rate} = round\\(([\\s\\S]*?);`).exec(
+        code(),
+      )?.[0];
+      expect(stmt).toBeDefined();
+      expect(stmt).toContain(`${ksum} / ${sum}`);
+      expect(stmt).toContain(`${rate} IS NULL`);
+      expect(stmt).toContain(`${sum} <> 0`);
+      expect(stmt).toContain(`${ksum} IS NOT NULL`);
+      expect(stmt).toContain("deleted = false");
+    }
+  });
+
+  test("the backfill is an UPDATE of the rate and never touches an amount", () => {
+    /*
+     * Stated as a prohibition because the file's own argument invites the opposite reading. Having
+     * established that `ksum / sum` is the rate, the next apparently-tidy step is to "normalise" the
+     * amounts to agree with it - and that would rewrite money. Nothing in this feature may ever
+     * change a booked figure: the whole point of pinning the rate is that the figure stays exactly
+     * where it is.
+     *
+     * So the only columns any SET in this file assigns are the two rate columns.
+     */
+    const assigned = [...code().matchAll(/SET\s+(\w+)\s*=/g)].map((m) => m[1]!);
+    expect([...new Set(assigned)].sort()).toEqual(["coin_rate", "po_coin_rate"]);
+  });
+
+  test("014 corrects the comments that state the old frozen-rate rule", () => {
+    /*
+     * 002_tables.sql says the opposite of this model - it had to, it was written when the rate was
+     * always captured - and the database's own column descriptions are what somebody inspecting the
+     * schema in psql or the Supabase table editor reads. Leaving them would mean the authoritative
+     * source on `coin_rate` tells the reader a rule the application no longer follows.
+     *
+     * The four columns the model actually redefines, by name. A COMMENT is documentation and so
+     * nothing breaks if one is missed, which is exactly why it needs a test rather than a reviewer.
+     */
+    for (const column of [
+      "job.coin_rate",
+      "job.job_price_ksum",
+      "purchase_order.po_coin_rate",
+      "purchase_order.po_price_ksum",
+    ]) {
+      expect(code()).toContain(`COMMENT ON COLUMN ${column} IS`);
+    }
+    expect(code()).toContain("COMMENT ON VIEW fx_rate_latest IS");
+    expect(code()).toContain("COMMENT ON TABLE fx_rate IS");
+  });
+
+  test("014 creates no table and drops nothing", () => {
+    /*
+     * `fx_rate` and `ix_fx_rate_lookup` already exist - 002 and 003 created them, and this file only
+     * starts USING them. Asserted because a re-reading of the header ("the table nothing populates")
+     * naturally suggests the table is new here, and a `CREATE TABLE fx_rate` added on that
+     * assumption would be silently skipped by `IF NOT EXISTS` on a real database and would mask a
+     * schema divergence on a fresh one.
+     *
+     * No DROP of any kind: unlike 011, this file migrates no structure. A `DROP COLUMN coin_rate`
+     * would be the catastrophic version of "the rate is no longer what someone typed".
+     */
+    expect(code()).not.toMatch(/CREATE\s+TABLE/i);
+    expect(code()).not.toMatch(/DROP\s+(TABLE|COLUMN|VIEW|INDEX)/i);
+  });
+});
+
+describe("the rate fetcher", () => {
+  test("it is a second function with its own log group, not a route on the API", () => {
+    /*
+     * Two Lambdas in this stack and no more. The API is deliberately monolithic (see NeotmsApi's
+     * header), so a third function appearing here means that argument has been abandoned without
+     * the header being updated - and the reasons this one is separate are specific and do not
+     * generalise: it has no caller to route, its failure must not consume the API's reserved
+     * concurrency, and it holds a grant the API must not.
+     *
+     * Its own log group is the third of those reasons made concrete. "Did the rate update today" is
+     * a question about this schedule; answered in the API's group it would mean filtering a day of
+     * requests for a `[fxrate]` prefix.
+     *
+     * Counted by the functions this repository NAMES, not by `resourceCountIs`. The template also
+     * holds CDK's own custom-resource handlers - the S3 bucket deployment's, for one - which are
+     * unnamed, come and go with CDK versions, and are nothing to do with this decision. A raw count
+     * would fail on a library upgrade and say "a third Lambda appeared", which is both true and
+     * useless.
+     */
+    const template = synth();
+    const named = Object.values(template.findResources("AWS::Lambda::Function"))
+      .map((r) => (r as { Properties: { FunctionName?: string } }).Properties.FunctionName)
+      .filter((n): n is string => typeof n === "string");
+    expect([...named].sort()).toEqual(["neotms-api", "neotms-fxrate"]);
+    template.hasResourceProperties("AWS::Logs::LogGroup", {
+      LogGroupName: "/aws/lambda/neotms-fxrate",
+    });
+  });
+
+  test("the schedule is a flat rate and its target does not retry", () => {
+    /*
+     * `rate(5 minutes)` rather than a cron expression, and the difference is about RECOVERY rather
+     * than about the data. KEXIM publishes once per business day around 11:00 KST, so a cron at
+     * 11:05 would be the obvious encoding - and a cron that happens to fire during an upstream
+     * outage leaves every report a day stale until tomorrow. It would also need a timezone and a
+     * holiday calendar to be correct. A flat rate needs neither.
+     *
+     * `MaximumRetryAttempts: 0` asserted explicitly, because the DEFAULT is the dangerous value:
+     * EventBridge retries a failed invocation for up to 24 hours, so a KEXIM outage would build a
+     * backlog of identical attempts competing with the five-minute schedule that already supersedes
+     * them. Zero is correct precisely because the next scheduled run IS the retry.
+     */
+    synth().hasResourceProperties("AWS::Events::Rule", {
+      ScheduleExpression: "rate(5 minutes)",
+      State: "ENABLED",
+      Targets: Match.arrayWith([
+        Match.objectLike({ RetryPolicy: { MaximumRetryAttempts: 0 } }),
+      ]),
+    });
+  });
+
+  test("the fetcher is capped at one concurrent execution", () => {
+    /*
+     * A correctness ceiling, not prudence. Two concurrent runs write the same quotes for the same
+     * business day through the same upsert - harmless in itself - but each holds Supavisor client
+     * connections the API is waiting on, and a run that overlaps itself only happens when the
+     * upstream is hanging. The right response to a hanging upstream is one pending request, not a
+     * growing fleet.
+     *
+     * It also protects the API's own reservation: unreserved concurrency is drawn from the same
+     * account pool the API's 20 are carved out of, so an unbounded fetcher could starve it.
+     */
+    synth().hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "neotms-fxrate",
+      ReservedConcurrentExecutions: 1,
+      MemorySize: 256,
+    });
+  });
+
+  test("only the fetcher may read the KEXIM key, and only that one secret", () => {
+    /*
+     * The grant that justifies the second function, asserted from both sides.
+     *
+     * The fetcher's side: a `-??????` suffix, not a `*`. Secrets Manager appends six random
+     * characters to every secret's ARN, and IAM matches `?` as exactly one character - so this names
+     * the one secret called `neotms/erapikey`. A `*` would also match `neotms/erapikey-backup` or
+     * anything else sharing the prefix, which is the kind of over-grant that is invisible until it
+     * matters.
+     *
+     * The API's side is the half worth having a test for. Nothing the API serves needs this key, so
+     * holding it would be a pure expansion of what a compromised API function can read - and the way
+     * that happens is a `grantRead` added to the wrong construct during a refactor, which changes no
+     * behaviour and so passes every other check.
+     */
+    const policies = synth().findResources("AWS::IAM::Policy");
+    const forFetcher: string[] = [];
+    const forApi: string[] = [];
+    for (const [name, resource] of Object.entries(policies)) {
+      const statements = (
+        resource as { Properties: { PolicyDocument: { Statement: unknown[] } } }
+      ).Properties.PolicyDocument.Statement;
+      const text = JSON.stringify(statements);
+      if (!text.includes("erapikey")) continue;
+      (name.startsWith("FxRate") ? forFetcher : forApi).push(text);
+    }
+    expect(forFetcher).toHaveLength(1);
+    expect(forApi).toEqual([]);
+    expect(forFetcher[0]).toContain("secret:neotms/erapikey-??????");
+    expect(forFetcher[0]).not.toContain("erapikey*");
+  });
+
+  test("the key itself is never an environment variable", () => {
+    /*
+     * The NAME is configuration; the key is not. A Lambda environment variable is readable by
+     * anyone with `lambda:GetFunction`, it appears in the CloudFormation template - in plaintext, in
+     * this very assertion's input - and it cannot be rotated faster than a release. The same rule
+     * the database password follows.
+     *
+     * Checked across EVERY function's environment rather than just the fetcher's, because the shape
+     * of this mistake is a value pasted into the wrong block.
+     */
+    for (const resource of Object.values(synth().findResources("AWS::Lambda::Function"))) {
+      const env =
+        (resource as { Properties: { Environment?: { Variables: Record<string, unknown> } } })
+          .Properties.Environment?.Variables ?? {};
+      for (const [key, value] of Object.entries(env)) {
+        if (!/FX|ERAPI|EXCHANGE/i.test(key)) continue;
+        // The only FX variable permitted is the secret's NAME, and its value must be that name.
+        expect(key).toBe("NEOTMS_FX_SECRET_NAME");
+        expect(value).toBe("neotms/erapikey");
+      }
+    }
+  });
+
+  test("both stages read the same FX secret, deliberately", () => {
+    /*
+     * The one resource the two stages share on purpose, so that it reads as a decision here rather
+     * than as a copy-paste in the config.
+     *
+     * An exchange rate is a fact about a currency, not about a deployment - there is no "development
+     * USD" - and the key is read-only against a public government API, so a development stack
+     * reading it cannot affect production. The alternative is either a development stack with no
+     * rates at all, which means the 원화로 환산 button cannot be tested before it ships, or two KEXIM
+     * registrations maintained for one public data feed.
+     */
+    expect(NEOTMS_CONFIGS.dev.fx.secretName).toBe(NEOTMS_CONFIGS.prod.fx.secretName);
+    // And the schedule is the same on both, because the recovery argument does not depend on stage.
+    expect(NEOTMS_CONFIGS.dev.fx.scheduleMinutes).toBe(NEOTMS_CONFIGS.prod.fx.scheduleMinutes);
   });
 });
 

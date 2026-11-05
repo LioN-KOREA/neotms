@@ -63,8 +63,8 @@ const ROLE_TITLE: Record<DashboardRole, string> = {
 
 /** '내 것' 의 근거. 제목 아래 한 줄로 적는다 — 두 대시보드의 숫자가 다른 이유가 이것뿐이다. */
 const ROLE_BASIS: Record<DashboardRole, string> = {
-  sales: '영업담당자가 나인 프로젝트',
-  pm: 'PM 이 나인 프로젝트',
+  sales: '내 프로젝트(영업 담당자용)',
+  pm: '내 프로젝트(PM용)',
 }
 
 /**
@@ -164,15 +164,6 @@ export function DashboardView({ role }: DashboardViewProps) {
               <span className={ui.statValue}>{count(summary?.onHold)}</span>
             </div>
           </div>
-
-          {/*
-           * 겹친다는 사실을 타일 바로 아래에 적는다. 한 칸 떨어진 자리에 두면 타일을 읽는
-           * 사람의 시선에 들어오지 않는다.
-           */}
-          <p className={ui.hint}>
-            납기지연은 진행 · 보류와 겹칩니다(납기가 지난 진행 프로젝트는 양쪽에 모두 셉니다).
-            세 숫자를 더해도 전체 건수가 되지 않습니다.
-          </p>
         </div>
 
         {/*
@@ -188,7 +179,7 @@ export function DashboardView({ role }: DashboardViewProps) {
               margin={summary.margin}
               cost={summary.cost}
               totalLabel="내 프로젝트 전체 수주금액"
-              emptyHint="아직 매출로 잡힌 작업이 없어서 수익·원가 비중을 그릴 수 없습니다."
+              emptyHint="현재 프로젝트 매출이 없습니다."
             />
           </div>
         ) : null}
@@ -198,7 +189,7 @@ export function DashboardView({ role }: DashboardViewProps) {
         <div className={ui.cardHeader}>
           <span>나의 진행중인 프로젝트</span>
           {/* 왜 상한을 머리글에 적는지는 ACTIVE_ROWS 의 주석에 있다. */}
-          <span className={ui.hint}>납기일 빠른 순 최대 {ACTIVE_ROWS}건</span>
+          <span className={ui.hint}>{ACTIVE_ROWS}건 (마감일 순)</span>
         </div>
 
         <div className={`${ui.cardBodyFlush} ${ui.tableWrap}`}>

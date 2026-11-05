@@ -1,6 +1,6 @@
 # NEOTMS — infrastructure
 
-AWS CDK app for the NEOTMS console and API. One stack, four constructs, deployed to
+AWS CDK app for the NEOTMS console and API. One stack, five constructs, deployed to
 **ap-northeast-2 (Seoul)**. The database is **not** in AWS: it is a Supabase Postgres project,
 reached over the Supavisor connection pooler.
 
@@ -11,7 +11,15 @@ CloudFront ──┬── /*      → S3 (private, OAC)        the React consol
                                         ├── Supabase Postgres ── Supavisor :6543 (node-postgres)
                                         ├── DynamoDB                                    sessions
                                         └── S3                            attachments + exports
+
+EventBridge ── rate(5 min) → Lambda                 the exchange-rate fetcher
+                                        │
+                                        ├── Korea Export-Import Bank open API
+                                        └── Supabase Postgres                      fx_rate upsert
 ```
+
+The second function is the only thing in the stack that is not reached by a caller, and nothing
+depends on it: delete it and every screen keeps working on stored KRW figures. See §5.1 and `db/014`.
 
 Three things about this shape drive most of the instructions below:
 
@@ -88,8 +96,8 @@ automatically.
 ### What you edit in the repo
 
 Everything except seven values. Log retention, resource prefixes, mail settings, origins, the pooler
-port and the database name are decisions this repo owns, so changing them is a reviewed commit in
-`infra/config/NeotmsConfig.ts` — not a flag somebody typed once.
+port, the database name and the exchange-rate settings are decisions this repo owns, so changing
+them is a reviewed commit in `infra/config/NeotmsConfig.ts` — not a flag somebody typed once.
 
 `bootstrapAuthorityId` belongs to this group and is the one you are most likely to want to change:
 it holds `lpx.admin.access`, which lets an LPX superuser log in and bootstrap an empty NEOTMS. Setting
@@ -268,6 +276,51 @@ Worth doing properly when there is time: a Secrets Manager rotation Lambda calli
 Management API would make this automatic, and pinning `caCertPem` in `NeotmsConfig.ts` would add
 certificate verification on top of TLS. Both are deliberately deferred, not overlooked.
 
+### 5.1 The exchange-rate API key — the one secret CDK does not create
+
+Unlike the database password there is **no placeholder for this one.** The stack creates no secret
+and the deploy does not mention it; `NeotmsFxRate` grants `secretsmanager:GetSecretValue` on an ARN
+it *builds* from a name. The reason is that the value is a credential issued to a *person* by a
+government service — [the Korea Export-Import Bank open API](https://www.koreaexim.go.kr) — so there
+is nothing for CloudFormation to generate and nothing to import without hardcoding the six random
+characters Secrets Manager appends to every ARN.
+
+So create it by hand, once per account, before the first FX figure is expected:
+
+```bash
+# The name must match config.fx.secretName in NeotmsConfig.ts — `neotms/erapikey` on both stages.
+aws secretsmanager create-secret --name neotms/erapikey \
+  --description "Korea Export-Import Bank open API key, issued per person" \
+  --secret-string '{"exchangeRateApiKey":"<the-key-from-koreaexim>"}'
+```
+
+The field name must be exactly `exchangeRateApiKey` (`FX_SECRET_FIELD` in `NeotmsFxSecret.ts`),
+though a bare key with no JSON wrapper is also accepted — that is the forgivable paste, it is a
+working credential, and refusing it would turn a deployment one command from working into one that
+logs a parse error every five minutes.
+
+**Both stages deliberately share this secret**, which is the one place in this repo where `dev` and
+`prod` are not isolated. An exchange rate is a fact about a currency, not a property of a
+deployment; the access is read-only against a public API; and the alternative is either two keys for
+one feed or a dev console whose 원화로 환산 button cannot be tested. `NeotmsFxConfig.secretName`
+carries the same argument.
+
+Three things that are **not** failures:
+
+- **The secret missing entirely.** `readFxApiKey` returns null, the fetcher logs
+  `ResourceNotFoundException` once every five minutes and writes nothing, and every amount reads
+  exactly as it does today — an open position falls back to its stored `job_price_ksum`. A
+  half-configured stack is a supported state.
+- **`secretName` set to `""` in config.** The IAM grant is then skipped entirely rather than being
+  emitted with an ARN ending in `secret:-??????`, which would match every six-character secret name
+  in the account. The fetcher logs that it has no key to read.
+- **An empty `fx_rate` table.** Same fallback. The figures stay where they were until the first
+  quote lands.
+
+The one real failure is `AccessDeniedException` in the fetcher's log group
+(`/aws/lambda/<prefix>-fxrate`), which means the secret exists but the grant does not — almost always
+a `secretName` in config that does not match the secret's actual name.
+
 ---
 
 ## 6. Schema bootstrap
@@ -289,10 +342,11 @@ because Supavisor routes on the tenant encoded in the username.
 | `007_codes.sql` | the `sys_code` dropdown domains: 분야, 작업 종류, 단가 단위, 언어, 사용 프로그램 — **see §6.2** |
 | `008_admin.sql` | the two administrative menus (유지보수, 사용자 관리) and the re-grant that makes them usable — **see §6.2** |
 | `009_selfservice.sql` | `staff_self_register()`, the function behind the sign-up form — **see §6.2** |
-| `010_currency.sql` | the five currencies the console can submit. Without it **every create in the system fails** — **see §6.2** |
+| `010_currency.sql` | the seven currencies the console can submit (KRW USD EUR JPY CNH GBP HKD), plus retired CNY. Without it **every create in the system fails**; **re-apply it if your database predates CNH/GBP/HKD** — **see §6.2** |
 | `011_job_types.sql` | 업무 구분 (Linguistics / MICE / IMC) and 업무 분류: two `sys_code` domains, `job.job_type` / `purchase_order.po_type`, the four detail tables that replace the language columns, **and a migration that drops `job_slang` / `job_elang` / `po_slang` / `po_elang`** — **see §6.2** |
 | `012_job_pricing.sql` | moves the nine pricing *inputs* (`job_volume`, `unit_code`, `job_price_sel`, `job_price`, `job_price_dis`; `po_volume`, `po_unit_code`, `po_price_sel`, `po_price`) onto the linguistic detail tables, so a MICE or IMC job records a total without a fabricated word count. **The totals — `job_price_sum` / `job_price_ksum` / `po_price_sum` / `po_price_ksum` — stay on the parents.** Drops the nine columns it moved — **see §6.2** |
 | `013_dashboard_menus.sql` | the two 대시보드 menus (`DASHBOARD_SALES`, `DASHBOARD_PM`) and the re-grant that makes them usable. Without it the two dashboards are **unreachable by everyone**, including the superuser; nothing else is affected — **see §6.2** |
+| `014_fx_rates.sql` | `fx_rate_latest`, the view every KRW figure in the system reads through, plus a one-time `UPDATE` that pins `coin_rate` on legacy foreign-currency rows so their stored totals stop floating. **Without it every report, dashboard, rollup and list fails with `42P01 relation "fx_rate_latest" does not exist`** — **see §6.2** |
 
 Every file in `db/` is applicable **as-is**: plain DDL, no placeholders. That matters because the
 application's dbops modules write `:name` parameters (rewritten to `$1` by `toPositional` in
@@ -423,7 +477,7 @@ SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN');
 
 Idempotent, returns the number of menus granted, and safe to run any time.
 
-### 6.2 `007`, `008`, `009`, `010`, `013` — the files whose absence is silent (and `011` / `012`, whose absence is not)
+### 6.2 `007`, `008`, `009`, `010`, `013` — the files whose absence is silent (and `011` / `012` / `014`, whose absence is not)
 
 `006` gets one administrator in. These five are what the console assumes about the database once
 somebody is in, and they share a property worth stating before the detail: **skipping one produces no
@@ -458,8 +512,16 @@ relation "job_detail_linguistic" does not exist`. Without `012` the same queries
 round, with `42703 column jdl.job_volume does not exist`: the join exists but the pricing columns
 are still on `job`, where the SELECT no longer looks for them. Four of the six business screens are
 blank with a 500 behind them either way. Nothing about that is subtle, and nothing about it points
-away from the cause; they are in this section because they are the fifth and sixth files an operator
-has to remember, not because they hide.
+away from the cause; they are in this section because they are files an operator has to remember,
+not because they hide.
+
+`014_fx_rates.sql` is loud in the same way and broader, because the thing it creates is read by more
+queries than any other object in `db/`. Every KRW figure in the system — the margin report, both
+dashboards, the project rollup, the job list and the purchase-order list — now goes through one
+shared SQL expression that joins `fx_rate_latest` (see `NeotmsMoney.ts`). So without `014`, **those
+are not degraded, they are down**: `42P01 relation "fx_rate_latest" does not exist`, on every one of
+them, including the screens that have nothing to do with foreign currency. There is no partial mode
+and nothing to misread.
 
 The converse is the part that does hide, and it has now bitten twice. `011` **drops** `job_slang`,
 `job_elang`, `po_slang` and `po_elang`; `012` **drops** `job_volume`, `unit_code`, `job_price_sel`,
@@ -643,11 +705,37 @@ table before reading any frontend code.
 
 **The invariant.** Every currency the console can submit must exist here. There is no `GET` endpoint
 for currencies — unlike `sys_code`, the list is hardcoded in `frontend/src/apis/neotms.codes.ts` as
-`COIN_CODES` — so the two lists are a matched pair, and the seed is exactly its five values: `KRW`
-`USD` `JPY` `EUR` `CNY`. A test asserts the agreement **in both directions**, plus that no form
-defaults to a currency the seed lacks, because the failure mode of drift is a dropdown that offers a
-value which cannot be saved. Adding more rows here is harmless but invisible (nothing reads the table
-to build a dropdown); adding fewer breaks a save.
+`COIN_CODES`, and the rate fetcher's copy is `CURRENCY_CODES` in
+`lambdas/neotms/nodejs/neotms/NeotmsCurrency.ts` — so the three are a matched set, and the seed is
+exactly their seven values: `KRW` `USD` `EUR` `JPY` `CNH` `GBP` `HKD`. Tests assert the agreement in
+both directions, that the fetcher and the console offer the same list, and that no form defaults to a
+currency the seed lacks, because the failure mode of drift is a dropdown that offers a value which
+cannot be saved. Adding more rows here is harmless but invisible (nothing reads the table to build a
+dropdown); adding fewer breaks a save.
+
+**Why the fetcher's list is a constant and not `SELECT coin_code FROM currency`.** It was that query,
+on the reasonable-sounding ground that this table already *is* the list of what the console can
+submit. The hole: `currency` is also an **ETL target**, and legacy `COINTB_MAIN` is `nvarchar(20)`
+with nothing constraining its contents — so a house code, a typo or a blank-padded duplicate loaded
+out of it became, silently, a currency the fetcher asked the Korea Export-Import Bank about, and then
+warned about (`the upstream quotes no rate for: …`) on every one of its 288 daily runs. Which
+currencies the business trades in is a decision people make and review; it is not a fact to be
+discovered from whatever happens to be in a lookup table.
+
+**`CNH`, not `CNY`.** The bank quotes the **offshore** yuan — its `cur_unit` is `CNH` and `CNY` is
+absent from the upstream table altogether — so a job denominated in `CNY` could never receive a live
+rate. It is also the correct answer on the business facts rather than merely the available one: a
+Chinese customer pays this company by international transfer into a Korean account, not through a
+domestic Chinese service, and that settles offshore.
+
+`CNY` is therefore **retired, not deleted**. It stays seeded because it may already be a *parent* row
+— `coin_code` is referenced `ON DELETE RESTRICT` ten times over, so on any database holding a legacy
+`CNY` job the `DELETE` would simply fail — but it is absent from `COIN_CODES`. Three consequences,
+all wanted: no new row can be booked in it, an existing one renders as `CNY (등록되지 않은 값)`
+rather than snapping the field to `KRW` (`codeOptions`), and the fetcher stops asking for a quote
+that never existed. Such a position reports its stored `*_price_ksum`, which is the same figure it
+reported before this change, and the "currencies in use with no quote" query at the foot of
+`db/014_fx_rates.sql` is where it surfaces.
 
 `ON CONFLICT (coin_code) DO NOTHING`, never `DO UPDATE`: a pre-existing `USD` came from the ETL and
 carries the company's own wording in `coin_name`, and a re-runnable seed must not quietly relabel
@@ -655,17 +743,68 @@ migrated data to match a guess. Rows the file did not create are marked by `crea
 anything other than `'seed-010'` — after the ETL that is the list of legacy house codes from
 `COINTB_MAIN`, and any of them users should be able to pick needs adding to `COIN_CODES` too.
 
-The file's section 2 prints the five rows, then the check that actually matters:
+The file's section 2 prints the eight rows, then the check that actually matters:
 
 ```sql
 SELECT c.code AS console_offers_but_db_lacks
-  FROM (VALUES ('KRW'), ('USD'), ('JPY'), ('EUR'), ('CNY')) AS c(code)
+  FROM (VALUES ('KRW'), ('USD'), ('EUR'), ('JPY'), ('CNH'), ('GBP'), ('HKD')) AS c(code)
  WHERE NOT EXISTS (SELECT 1 FROM currency cur WHERE cur.coin_code = c.code);
 ```
 
 **Expect zero rows.** Anything it returns is selectable in the UI and unsaveable in the database, and
-a count below five means the file was not applied in full — which is harder to recognise than the
-original fault, because then saving only fails for whoever picks the missing currency.
+a count below seven means the file was not applied in full — which is harder to recognise than the
+original fault, because then saving only fails for whoever picks the missing currency. **On a
+database seeded before `CNH`, `GBP` and `HKD` were added, this query returns those three until `010`
+is re-applied** — `ON CONFLICT DO NOTHING` makes the re-apply add exactly them and touch nothing
+else.
+
+#### `014_fx_rates.sql` — the view every KRW figure reads through
+
+What changed is not a feature so much as the meaning of one column. `job.coin_rate` used to be "the
+적용 환율 somebody typed into the form"; it is now **"has this been exchanged, and at what rate"** —
+a settlement flag with a value attached:
+
+| Row | Position | Its KRW figure |
+|---|---|---|
+| `coin_code = 'KRW'` (or NULL) | — | `job_price_sum`. Frozen by its currency |
+| non-KRW, `coin_rate IS NOT NULL` | **SETTLED** | the stored `job_price_ksum`, frozen — possibly hand-adjusted after a negotiation, possibly already invoiced |
+| non-KRW, `coin_rate IS NULL` | **OPEN** | `job_price_sum` × today's rate, computed when the query runs and never stored |
+
+`purchase_order.po_coin_rate` / `po_price_ksum` are identical. The console's 원화로 환산 button does
+not set a flag or add a column — it rewrites the row into the first case (`coin_code` → `KRW`,
+`job_price_sum` → the converted amount, `coin_rate` → 1). **Exchanging and freezing are one act**,
+which is why this model needs no extra state to represent, and why a report re-run three years later
+still reproduces the figure that was invoiced.
+
+Two consequences worth knowing before you apply it:
+
+- **The view is not capped by age, deliberately.** The upstream publishes once per business day, so
+  Friday's quote is the correct answer on a Monday morning, and a month-old quote left behind by a
+  fetcher that has been failing unnoticed is still a better answer than NULL. Staleness is handled by
+  *showing* it — `effective_date` is in the view, the API hands it to the console, and the console
+  prints it beside the converted amount. The staleness `SELECT` at the foot of the file is the thing
+  to run when a figure looks wrong; more than about four days is a dead fetcher rather than a long
+  weekend.
+- **Section 2 is a correctness fix for legacy rows only.** A legacy `nvarchar COIN_RATE` holding `''`
+  or `'-'` arrives as NULL, so such a row would start *floating* the moment the view goes live —
+  silently restating a figure that has already been invoiced. The backfill derives the rate the row
+  was actually converted at (`ksum / sum`, which is not an estimate: it *is* the rate that produced
+  `ksum`) and writes it down. No reported figure changes; the figure merely stops being able to
+  change later. Rows entered through this console already satisfy the invariant, and a row with no
+  `ksum` at all is left alone, because it is genuinely unconverted and *should* float.
+
+**Nothing in `db/` ever puts a row in `fx_rate`.** That is the scheduled rate-fetcher Lambda
+(`lambdas/neotms/nodejs/fxrate.ts`), reached by an EventBridge rule every five minutes and reading
+the Korea Export-Import Bank open API with a key held in Secrets Manager under the name in
+`NeotmsFxConfig.secretName`. An empty `fx_rate` is **not** an outage: an open position falls back to
+its stored `job_price_ksum`, so every screen keeps showing the figures it showed yesterday until the
+first quote lands. That fallback is what makes it safe to apply `014` and deploy the API before the
+secret has a key in it.
+
+The ETL note from §6.2 applies here too, in reverse: the ETL must keep writing `job_price_ksum` and
+`job_price_sum` as it always has, and should **not** start writing `coin_rate` as 1 to "normalise"
+rows — that would mark unexchanged foreign-currency work as settled and freeze it at whatever rate
+happened to be stored.
 
 ### Rehearsing the bootstrap locally
 
@@ -679,7 +818,7 @@ docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
 docker cp db neotms-sqlcheck:/db
 for f in 001_extensions 002_tables 003_indexes 004_rollup 005_code_sequences 006_bootstrap \
          007_codes 008_admin 009_selfservice 010_currency 011_job_types 012_job_pricing \
-         013_dashboard_menus; do
+         013_dashboard_menus 014_fx_rates; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
@@ -884,7 +1023,7 @@ made on a laptop cannot be pointed at the wrong backend, because it carries no b
 |---|---|
 | `npm run build` | Type-check against `tsconfig.app.json` — the same gate every `cdk` command runs. |
 | `npm run watch` | The same, in watch mode. |
-| `npm test` | jest. 78 tests: CDK assertions against the synthesized template, plus ones that parse `db/*.sql`, the routing table and a few frontend files as text — see below. |
+| `npm test` | jest, four suites. CDK assertions against the synthesized template, plus ones that parse `db/*.sql`, the routing table, the generated SQL and a few frontend files as text — see below. |
 | `npx cdk diff` | Compare the deployed stack with local state. Add `-c stage=prod` for prod. |
 | `npx cdk synth` | Emit the CloudFormation template. |
 | `npm run build:site` | Install and build the console only. |
@@ -914,16 +1053,28 @@ no browser, so the properties most worth protecting here are not reachable by ex
   cannot be given yet. No type error, no runtime error, just the wrong screen. Likewise the two
   approval notices are asserted character-for-character, including a spacing difference between them
   that is intentional, because reflowing JSX is the sort of edit nobody re-reads.
-- **Lists in two files that have to stay equal.** The seed in `010_currency.sql` and the hardcoded
-  `COIN_CODES` in `frontend/src/apis/neotms.codes.ts` are a matched pair with no endpoint between
-  them to reconcile them, so a test parses both and compares them **in both directions**, and a
-  third reads the `?? 'KRW'` default out of each of the five registration modals and requires the
-  seed to contain it. Drift in one direction makes a dropdown entry unsaveable; in the other it adds
-  a currency that appears nowhere. Neither is a type error, and neither surfaces until somebody
-  picks the wrong row. The report dimensions are a second such pair — `REPORT_DIMENSIONS` in
+- **Lists in three files that have to stay equal.** The seed in `010_currency.sql`, the hardcoded
+  `COIN_CODES` in `frontend/src/apis/neotms.codes.ts` and `CURRENCY_CODES` in
+  `lambdas/neotms/nodejs/neotms/NeotmsCurrency.ts` are a matched set with no endpoint between them to
+  reconcile them, so tests parse all three and compare them in both directions (retired `CNY` being
+  the one documented exception, asserted by name), and another reads the `?? 'KRW'` default out of
+  each of the five registration modals and requires the seed to contain it. Each direction of drift
+  fails differently and none of them is a type error: a currency in the console but not the seed is a
+  dropdown entry that cannot be saved; in the seed but not the console, a row that appears nowhere;
+  and **in the console but not the fetcher's list, a currency the system books jobs in and never
+  collects a rate for** — so every open position in it reports its stored `*_price_ksum` forever
+  while every other currency is revalued at today's rate, which is two screens disagreeing with
+  neither looking wrong. The report dimensions are a second such set — `REPORT_DIMENSIONS` in
   `NeotmsReport.dbops.ts`, the `groupBy` picklist in `ReportQuerySchema`, and `REPORT_GROUPS` on the
   frontend — and a test compares all three, because an entry present in the dropdown and absent from
   the picklist is a `400` on a selection the console itself offered.
+- **One definition of revenue, asserted by importing it.** Every KRW figure comes from the four
+  constants in `NeotmsMoney.ts`, and the report, dashboard, rollup and list tests assert the
+  generated SQL **against the imported constant** rather than against a pasted literal. A literal
+  would be a second definition of revenue living in the test file, which is the exact failure the
+  module exists to prevent. The same suite also pins the list sorts to `*_price_ksum`: `sortAlias`
+  slices a sort target at the first dot, so pointing one at the converting `CASE` expression stalls
+  the keyset cursor **silently** — the page loads, and the second page is the first one again.
 
 The tests that do this read whole files and match on statements rather than fragments — a lesson from
 writing them, since the prose comments in this codebase quote the code they are explaining, and an
@@ -938,6 +1089,14 @@ writing them, since the prose comments in this codebase quote the code they are 
 client connections this function can hold. Raise either number without checking the Supabase
 project's connection limit and a traffic spike presents as **connection exhaustion rather than as
 slowness** — requests fail instead of queueing, which is a much worse failure for a user to meet.
+
+This is also why the rate fetcher carries `reservedConcurrentExecutions: 1`, which is a correctness
+ceiling and not a prudent one. Two concurrent runs write the same quotes for the same day through
+the same `ON CONFLICT` upsert — harmless in itself — but every pair of them holds two of the forty
+client connections the API is waiting on. More to the point, a run that overlaps itself means the
+previous one has not finished, which only happens when the upstream is hanging, and the right
+response to a hanging upstream is one pending request rather than a growing fleet of them. The
+reservation also keeps the fetcher out of the unreserved pool the API's twenty are carved from.
 
 This is also why **sessions are in DynamoDB, not in Postgres.** A cookie check on every authenticated
 request would spend that budget on requests that end in a 401 and read nothing. On the Aurora variant
@@ -976,6 +1135,21 @@ be a known trade rather than a discovered one.
 created by CDK nor granted to the function's role, `mailgunEmailDomain` and `mailFromAddress` are
 empty, and no application code reads them. Creating the secret and adding the grant are both
 outstanding.
+
+**The rate fetcher has no dead-letter queue, no retries and no alarm, deliberately.** The next run is
+five minutes away and will do exactly the same work against the same upstream, so a retry only makes
+a failed fetch cost two API calls instead of one; and a DLQ would collect events whose payload is
+empty, because EventBridge sends a schedule tick rather than data — there is nothing in the message
+to reprocess. `retryAttempts: 0` is set explicitly on the target too, since EventBridge otherwise
+retries a failed invocation for up to 24 hours, which during a KEXIM outage means a backlog of
+identical attempts competing with the schedule that supersedes them.
+
+What is actually worth watching is **not an error at all**: `fx_rate_latest` going stale while every
+invocation reports success, which is what happens if the upstream starts answering with an empty
+result set. That is a query against the database, not a Lambda metric — the staleness `SELECT` at the
+foot of `db/014_fx_rates.sql`. More than about four days is a dead fetcher rather than a long
+weekend. The handler rethrows rather than swallowing, so genuine faults (an unreachable database, a
+refused secret) do show up in the function's error metric.
 
 **`prod` retains data on destroy — but "data" no longer means the database.** `protectData: true`
 sets `RETAIN` on the buckets, the session table and the password secret. The database itself is at

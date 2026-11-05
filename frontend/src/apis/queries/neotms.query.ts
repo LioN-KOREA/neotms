@@ -5,6 +5,7 @@ import {
   fetchCustomer,
   fetchCustomers,
   fetchDashboard,
+  fetchFxRates,
   fetchJob,
   fetchJobs,
   fetchProfile,
@@ -25,6 +26,7 @@ import {
 } from '../neotms.api'
 import { codeOptions, codesToOptions, type CodeDomainId, type CodeOption } from '../neotms.codes'
 import type { DashboardRole, ListPage, ListQuery, ReportQuery } from '../neotms.types'
+import { isDecimalString } from '../../shared/utils/money'
 import { neotmsKeys } from './neotms.keys'
 
 /**
@@ -184,6 +186,70 @@ export function useCodeNames(domain: CodeDomainId): (code: string | null | undef
     if (!value) return ''
     const row = items?.find((r) => r.codeParent === domain && r.code === value)
     return row?.codeName?.trim() || value
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* 환율                                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 통화별 최신 고시 환율.
+ *
+ * `staleTime` 이 5분이고, 이 앱에서 **가장 짧은 값이 아니라 가장 짧은 축**인 이유가 숫자 자체에
+ * 있다: 수집기 람다가 5분마다 도므로 그보다 짧게 잡아도 새 값이 있을 수 없다. 즉 이 5분은
+ * "얼마나 자주 확인할까" 가 아니라 **상류의 주기를 그대로 옮긴 값**이다.
+ *
+ * `refetchOnWindowFocus` 를 따로 켜지 않는다. 환산 버튼을 누르는 순간의 환율이 중요한 것이
+ * 맞지만, 그 순간에 다시 읽어도 5분 전 값일 확률이 높고(상류가 영업일마다 한 번 바뀐다), 무엇보다
+ * **사용자가 본 숫자와 저장되는 숫자가 같아야** 한다 — 버튼 바로 밑에서 환율이 갈리면 미리 본
+ * 금액과 저장된 금액이 달라진다. 화면은 `effectiveDate` 를 같이 보여 주므로 어느 날 환율인지는
+ * 숨지 않는다.
+ */
+export function useFxRates(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.fxRates,
+    queryFn: ({ signal }) => fetchFxRates(signal),
+    enabled,
+    staleTime: 1000 * 60 * 5,
+  })
+}
+
+/**
+ * 한 통화의 환산 상태. 폼이 쓰는 형태다.
+ *
+ * `canConvert` 를 따로 돌려주는 것이 이 훅의 요점이다. 환산할 수 없는 경우가 **세 가지**이고 셋 다
+ * 오류가 아니다:
+ *
+ *   * 이미 KRW 다 — 환산이 항등이므로 버튼이 할 일이 없다. `rate` 는 `'1'` 로 둔다.
+ *   * 수집기가 아직 한 번도 성공하지 못했다 — 목록이 비어 있다. 시스템의 정상적인 초기 상태다.
+ *   * 그 통화를 수집하지 않는다 — 영구히 없다(레거시 사내 통화 코드 등).
+ *
+ * 세 경우 모두 화면이 할 일은 같다: 버튼을 비활성화하고, 사용자가 **원래 통화로 금액을 기록하게**
+ * 둔다. 그것이 열린 포지션 모델이 있는 이유이고, 리포트는 그런 행을 저장된 원화 금액으로 집계해
+ * 어제와 같은 숫자를 보여 준다(db/014_fx_rates.sql). 그래서 오류 문구를 띄우지 않는다.
+ *
+ * `isLoading` 과 "없다" 를 구분해 주는 이유: 불러오는 중에 '환산 불가' 라고 적어 두면 통화를
+ * 바꾸는 순간 1초쯤 그 문구가 깜빡이고, 그걸 본 사용자는 통화 선택이 잘못된 줄 안다.
+ */
+export function useFxRate(coinCode: string | null | undefined): {
+  rate: string | null
+  effectiveDate: string | null
+  canConvert: boolean
+  isKrw: boolean
+  isLoading: boolean
+} {
+  const fxQuery = useFxRates()
+  const code = coinCode?.trim().toUpperCase() || 'KRW'
+  const isKrw = code === 'KRW'
+  const row = fxQuery.data?.items.find((r) => r.currencyCode === code)
+  const rate = isKrw ? '1' : (row?.rate ?? null)
+  return {
+    rate,
+    effectiveDate: isKrw ? null : (row?.effectiveDate ?? null),
+    canConvert: !isKrw && isDecimalString(rate),
+    isKrw,
+    isLoading: fxQuery.isLoading,
   }
 }
 

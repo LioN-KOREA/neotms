@@ -34,6 +34,7 @@ import {
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { PROJECT_CODE, codeExpression } from "../NeotmsCodes.js";
+import { JOB_KRW, JOB_KRW_JOIN, PO_KRW, PO_KRW_JOIN } from "../NeotmsMoney.js";
 import {
   cursorClause,
   filterClause,
@@ -350,6 +351,10 @@ export const ProjectLiveJobCountOps: (id: string) => SqlOps<number> = (id) => ({
  * multiply each job's revenue by its number of POs - a job split between three translators would
  * report three times its real revenue - which is the classic fan-out error in exactly this shape of
  * query, and it reads as "our margins improved" rather than as a bug.
+ *
+ * Each side converts to KRW through `NeotmsMoney` rather than reading `*_price_ksum` directly, so
+ * this screen's margin agrees with the margin report and with both dashboards. An unexchanged
+ * foreign-currency amount is valued at today's rate here too - see that module's header.
  */
 export const ProjectTotalsOps: (id: string) => SqlOps<{
   revenue: string;
@@ -360,12 +365,14 @@ export const ProjectTotalsOps: (id: string) => SqlOps<{
     SELECT revenue, cost, (revenue - cost) AS margin
       FROM (
         SELECT
-          COALESCE((SELECT sum(j.job_price_ksum)
+          COALESCE((SELECT sum(${JOB_KRW})
                       FROM job j
+                      ${JOB_KRW_JOIN}
                      WHERE j.project_id = :id
                        AND j.deleted = false), 0) AS revenue,
-          COALESCE((SELECT sum(po.po_price_ksum)
+          COALESCE((SELECT sum(${PO_KRW})
                       FROM purchase_order po
+                      ${PO_KRW_JOIN}
                      WHERE po.project_id = :id
                        AND po.deleted = false), 0) AS cost
       ) t

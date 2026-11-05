@@ -129,6 +129,37 @@ export interface NeotmsMailConfig {
   readonly mailFromName: string;
 }
 
+export interface NeotmsFxConfig {
+  /**
+   * Secrets Manager secret holding the Korea Export-Import Bank API key.
+   *
+   * The NAME is configuration; the key never is. See NeotmsFxSecret.ts - a Lambda environment
+   * variable is readable by anyone with `lambda:GetFunction` and appears in the CloudFormation
+   * template, so the same rule the database password follows applies here.
+   *
+   * THE SECRET IS CREATED OUT OF BAND, not by this app. It holds one credential issued to a person,
+   * not a resource this stack owns, and CDK cannot be given a value it must not see. That is why
+   * NeotmsFxRate grants on an ARN it BUILDS from this name rather than on a `Secret` construct, and
+   * why an absent secret is a warning in the fetcher's log rather than a failed deploy.
+   *
+   * Empty is a supported value: it disables the fetcher's read, every amount keeps reading from its
+   * stored KRW figure, and nothing else changes. A freshly deployed stack is in exactly that state
+   * until somebody populates the secret.
+   */
+  readonly secretName: string;
+  /**
+   * Minutes between fetch attempts.
+   *
+   * Five, which is not about the data - the upstream publishes once per business day, around 11:00
+   * KST. It is about RECOVERY. A once-a-day schedule that happens to run while the upstream is down
+   * leaves every report a day stale until tomorrow; at five minutes the same outage costs one
+   * attempt. The cost of being wrong in this direction is 288 requests a day against a free
+   * government API and ~287 upserts that rewrite the same numbers, which is why the write is an
+   * upsert (see FxRateUpsertManyOps).
+   */
+  readonly scheduleMinutes: number;
+}
+
 export interface NeotmsStageConfig {
   readonly stage: string;
   /** Prefix for every physical resource name, so two stages can share an account if it comes to that. */
@@ -147,6 +178,7 @@ export interface NeotmsStageConfig {
   readonly supabase: NeotmsSupabaseConfig;
   readonly auth: NeotmsAuthConfig;
   readonly mail: NeotmsMailConfig;
+  readonly fx: NeotmsFxConfig;
   /**
    * How long CloudWatch keeps logs before the subscription hands them to S3, and how long S3 keeps
    * them in Standard before Glacier. Q14 asked for six months hot, archive after that.
@@ -245,6 +277,17 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
       mailFromAddress: "",
       mailFromName: "라이온코리아 TMS",
     },
+    /*
+     * The SAME secret name as production, which is deliberate and is the one place in this file
+     * where the two stages deliberately share a resource.
+     *
+     * An FX rate is a fact about a currency, not about a deployment - there is no "development
+     * exchange rate" - and the key is read-only against a public government API, so a development
+     * stack reading it cannot affect production. The alternative, a second KEXIM registration, means
+     * either the development stack has no rates at all (and the convert-to-KRW button cannot be
+     * tested) or somebody maintains two keys for one public data feed.
+     */
+    fx: { secretName: "neotms/erapikey", scheduleMinutes: 5 },
     logRetentionDays: 30,
     logGlacierAfterDays: 90,
     protectData: false,
@@ -307,6 +350,7 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
       mailFromAddress: "",
       mailFromName: "라이온코리아 TMS",
     },
+    fx: { secretName: "neotms/erapikey", scheduleMinutes: 5 },
     // Six months hot in CloudWatch, then the archive copy ages into Glacier (Q14).
     logRetentionDays: 180,
     logGlacierAfterDays: 180,

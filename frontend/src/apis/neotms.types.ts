@@ -192,6 +192,58 @@ export interface CodeInput {
 export type CodeUpdateInput = Partial<Omit<CodeInput, 'code'>>
 
 /* -------------------------------------------------------------------------- */
+/* 환율 (fx_rate_latest)                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 통화 하나의 최신 고시 환율. `sys_code` 와 함께 `anyStaff` 로 열려 있는 둘뿐인 읽기다.
+ *
+ * ## 화면이 환율을 직접 받는 이유
+ *
+ * **리포트에 집계되는 금액은 전부 서버가 SQL 에서 환산한다**(`fx_rate_latest` 조인). 그런데도
+ * 클라이언트가 환율을 받는 이유는 버튼 하나 때문이다 — '원화로 환산' 은 서버에 "이게 얼마냐" 를
+ * 묻는 것이 아니라 **행을 다시 쓴다**(`coinCode` → KRW, 합계 → 환산액, `coinRate` → 1). 사용자가
+ * 그 숫자를 **확정하기 전에 봐야** 하고, 폼은 금액을 입력하는 동안 원화 환산 합계를 실시간으로
+ * 미리 보여준다. 둘 다 저장된 행에 대한 질의로는 답할 수 없는 값이다.
+ */
+export interface FxRateRow {
+  /** ISO 4217 세 글자. `JobRow.coinCode` 와 정확히 같은 값이다. */
+  currencyCode: string
+  /**
+   * 1 단위당 원화. 10진 문자열.
+   *
+   * `number` 가 아닌 이유는 이 파일 머리말과 같다 — 게다가 환율은 시스템에서 유일하게 **합계에
+   * 곱해지는** 값이라, 정밀도 손실이 금액에 그대로 증폭된다. 쓰는 곳에서 파싱한다.
+   *
+   * JPY 도 1엔당 값이다. 고시 원문은 100엔당이지만 수집기가 나누어 넣으므로, 어떤 통화가 100
+   * 단위로 고시되는지를 화면이 알 필요가 없다.
+   */
+  rate: string
+  /**
+   * 이 고시가 적용되는 영업일(KST).
+   *
+   * **화면에 반드시 같이 보여준다.** 뷰는 의도적으로 기간 제한이 없어서(db/014_fx_rates.sql),
+   * 수집기가 조용히 죽으면 "환율 없음" 이 아니라 **오래된 환율**이 나온다. 그것이 안전한 유일한
+   * 이유가 날짜가 금액 옆에 보인다는 점이다.
+   */
+  effectiveDate: string | null
+  /** `'koreaexim'`, 또는 운영자가 직접 넣은 행이면 `'manual'`. */
+  source: string | null
+}
+
+/**
+ * `GET /api/v0/fx-rates` 의 응답. 커서가 없다 — 통화는 많아도 다섯 개다.
+ *
+ * **빈 배열은 오류가 아니라 정상 응답이다.** 수집기가 한 번도 성공하지 못했으면 비어 있고,
+ * 수집 대상이 아닌 통화는 영구히 없다. 두 경우 모두 화면의 올바른 반응은 에러를 띄우는 것이
+ * 아니라 **그 통화의 환산 버튼을 비활성화**하는 것이다 — 사용자는 원래 통화로 금액을 기록할 수
+ * 있고, 열린 포지션 모델이 정확히 그것을 위해 있다.
+ */
+export interface FxRateListView {
+  items: FxRateRow[]
+}
+
+/* -------------------------------------------------------------------------- */
 /* 직원·역할 (staff, sys_role) — 사용자 관리                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -472,12 +524,30 @@ export interface JobRow {
   /** 할인. 10진 문자열. */
   jobPriceDis: string | null
   coinCode: string | null
-  /** 적용 환율. 10진 문자열. 거래 시점에 고정된 값이다. */
+  /**
+   * **환전된 환율. 환전하지 않았으면 `null`.** 값이 붙은 정산 플래그로 읽는다.
+   *
+   * 외화 작업인데 이 값이 `null` 이면 아직 환전하지 않은 **열린 포지션**이고, 그 원화 가치는
+   * 아래 `jobPriceKrw` 이며 매일 움직인다. `null` 이 아니면 **정산 완료**이고 `jobPriceKsum` 이
+   * 그대로 고정된 금액이다. 콘솔의 '원화로 환산' 버튼이 `coinCode` 를 KRW 로 바꾸는 것과 동시에
+   * 이 값을 1 로 쓴다 — 환전과 고정이 한 동작이다. db/014_fx_rates.sql 참고.
+   */
   coinRate: string | null
   /** 외화 기준 합계. 10진 문자열. */
   jobPriceSum: string | null
-  /** **원화 환산 합계 = 이 작업의 매출.** 리포트의 revenue 가 이 값의 합이다. */
+  /** **장부상 원화 합계.** 폼이 편집하는 값이고, 발행된 계산서에 적힌 금액이다. */
   jobPriceKsum: string | null
+  /**
+   * **지금 시점의 원화 가치 = 이 작업의 매출.** 리포트의 revenue 가 이 값의 합이다.
+   *
+   * 정산된 작업에서는 `jobPriceKsum` 과 같다. 환전하지 않은 외화 작업에서만 다르고, 그때는
+   * `jobPriceSum` × 오늘 환율이다 — 서버가 `fx_rate_latest` 를 조인해 **읽을 때마다** 계산하므로
+   * 저장된 컬럼이 아니다.
+   *
+   * 등록·수정 응답(`RETURNING` 경로)에서는 `null` 이다. 목록과 상세 조회에는 항상 있다. 화면에
+   * 금액을 보여줄 때는 이 값을, 폼에서 편집할 때는 `jobPriceKsum` 을 쓴다.
+   */
+  jobPriceKrw: string | null
   jobSday: string | null
   jobSdayTime: string | null
   jobEday: string | null
@@ -562,10 +632,18 @@ export interface PurchaseOrderRow {
   /** 단가. 10진 문자열. */
   poPrice: string | null
   poCoinCode: string | null
+  /** 환전된 환율. 환전하지 않았으면 `null`. `JobRow.coinRate` 와 의미가 완전히 같다. */
   poCoinRate: string | null
   poPriceSum: string | null
-  /** **원화 환산 합계 = 이 발주의 원가.** 리포트의 cost 가 이 값의 합이다. */
+  /** **장부상 원화 합계.** 폼이 편집하는 값이다. */
   poPriceKsum: string | null
+  /**
+   * **지금 시점의 원화 가치 = 이 발주의 원가.** 리포트의 cost 가 이 값의 합이다.
+   *
+   * `JobRow.jobPriceKrw` 와 같은 규칙이다 — 정산된 발주에서는 `poPriceKsum` 과 같고, 환전하지
+   * 않은 외화 발주에서만 `poPriceSum` × 오늘 환율이다. 등록·수정 응답에서는 `null`.
+   */
+  poPriceKrw: string | null
   poTax: string | null
   poTaxPrice: string | null
   poTaxSum: string | null

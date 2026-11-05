@@ -13,7 +13,7 @@ import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Fe
 import { Icon } from '@/shared/ui/Icon'
 import { KindTag, StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
-import { decimalSum } from '@/shared/utils/money'
+import { decimalSum, krwToShow } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
 import { JobFormModal } from './JobFormModal'
 
@@ -90,8 +90,17 @@ export function JobsView() {
 
   const rows = useMemo(() => jobsQuery.data?.pages.flatMap((p) => p.items) ?? [], [jobsQuery.data])
 
-  /** 화면에 올라온 행들의 원화 환산 매출 합계. 위 주석 참고. */
-  const revenue = useMemo(() => decimalSum(rows.map((r) => r.jobPriceKsum)), [rows])
+  /**
+   * 화면에 올라온 행들의 원화 환산 매출 합계. 위 주석 참고.
+   *
+   * 저장된 금액(`jobPriceKsum`)이 아니라 **지금 시점의 가치**(`jobPriceKrw`)를 더한다 — 아래
+   * 금액 칸과 같은 값이어야 하고, 그 이유는 `krwToShow` 에 적혀 있다. 둘을 섞으면 칸의 합과
+   * 바닥의 합계가 다르다.
+   */
+  const revenue = useMemo(
+    () => decimalSum(rows.map((r) => krwToShow(r.jobPriceKrw, r.jobPriceKsum))),
+    [rows],
+  )
 
   const mayCreate = mayDo(profile, NeotmsMenuId.JOB, 'create')
   const mayUpdate = mayDo(profile, NeotmsMenuId.JOB, 'update')
@@ -411,7 +420,7 @@ export function JobsView() {
                     </div>
                   </td>
                   <td>
-                    <Amount value={row.jobPriceKsum} kind="revenue" />
+                    <Amount value={krwToShow(row.jobPriceKrw, row.jobPriceKsum)} kind="revenue" />
                   </td>
                   <td
                     className={

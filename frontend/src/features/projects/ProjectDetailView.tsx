@@ -18,7 +18,7 @@ import { Icon } from '@/shared/ui/Icon'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
 import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, formatDateTime, isOverdue } from '@/shared/utils/format'
-import { decimalSubtract, decimalSum } from '@/shared/utils/money'
+import { decimalSubtract, decimalSum, krwToShow } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
 import { JobFormModal } from '@/features/jobs/JobFormModal'
 import { PurchaseOrderFormModal } from '@/features/purchaseorders/PurchaseOrderFormModal'
@@ -72,8 +72,19 @@ export function ProjectDetailView() {
   const jobs = useMemo(() => jobsQuery.data?.pages.flatMap((p) => p.items) ?? [], [jobsQuery.data])
   const pos = useMemo(() => posQuery.data?.pages.flatMap((p) => p.items) ?? [], [posQuery.data])
 
-  const revenue = useMemo(() => decimalSum(jobs.map((j) => j.jobPriceKsum)), [jobs])
-  const cost = useMemo(() => decimalSum(pos.map((p) => p.poPriceKsum)), [pos])
+  /*
+   * 매출·원가·마진. 저장된 금액이 아니라 **지금 시점의 가치**를 더한다 — 이유는 `krwToShow` 에
+   * 적혀 있고, 여기서는 하나 더 있다: 마진은 이 둘의 차이다. 한쪽만 현 시세로 계산하면 마진이
+   * 어느 시점의 숫자도 아닌 값이 된다.
+   */
+  const revenue = useMemo(
+    () => decimalSum(jobs.map((j) => krwToShow(j.jobPriceKrw, j.jobPriceKsum))),
+    [jobs],
+  )
+  const cost = useMemo(
+    () => decimalSum(pos.map((p) => krwToShow(p.poPriceKrw, p.poPriceKsum))),
+    [pos],
+  )
   const margin = useMemo(() => decimalSubtract(revenue.total, cost.total), [revenue, cost])
 
   /** 작업별 PO 건수. 위 주석의 "PO 없는 작업" 을 세우기 위한 것이다. */
@@ -405,7 +416,10 @@ export function ProjectDetailView() {
                           </div>
                         </td>
                         <td>
-                          <Amount value={job.jobPriceKsum} kind="revenue" />
+                          <Amount
+                            value={krwToShow(job.jobPriceKrw, job.jobPriceKsum)}
+                            kind="revenue"
+                          />
                         </td>
                         <td>
                           {poCount > 0 ? (
@@ -533,7 +547,7 @@ export function ProjectDetailView() {
                         )}
                       </td>
                       <td>
-                        <Amount value={po.poPriceKsum} kind="cost" />
+                        <Amount value={krwToShow(po.poPriceKrw, po.poPriceKsum)} kind="cost" />
                       </td>
                       <td
                         className={

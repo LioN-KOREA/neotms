@@ -34,6 +34,12 @@ import {
 } from "../lambdas/neotms/nodejs/utils/PostgresUtils.js";
 import { JOB_SCOPE_COLUMNS } from "../lambdas/neotms/nodejs/neotms/jobs/NeotmsJob.dbops.js";
 import {
+  JOB_KRW,
+  JOB_KRW_JOIN,
+  PO_KRW,
+  PO_KRW_JOIN,
+} from "../lambdas/neotms/nodejs/neotms/NeotmsMoney.js";
+import {
   REPORT_LINE_CAP,
   REPORT_SCOPE_COLUMNS,
   ReportBreakdownOps,
@@ -243,10 +249,20 @@ describe("the definitions the rollup left behind", () => {
     }
   });
 
-  test("revenue is the job's KSUM and cost is the PO's, both COALESCEd", () => {
+  test("revenue and cost are the shared KRW expression, both COALESCEd", () => {
     /*
-     * The KRW-converted "KSUM" totals rather than the original-currency "SUM" ones, because a
-     * report row aggregates across currencies and those figures have to be comparable.
+     * A KRW-comparable figure rather than the original-currency "SUM" columns, because a report row
+     * aggregates across currencies and those figures have to be comparable.
+     *
+     * This used to assert the bare `sum(j.job_price_ksum)`. It no longer can, and the reason is the
+     * point of the change rather than a loosening of the test: an UNEXCHANGED foreign receivable has
+     * no fixed KRW worth, so `job_price_ksum` is only the right answer once the money has actually
+     * been converted. NeotmsMoney.ts holds the three cases; what this test now pins is that the
+     * report uses THAT definition and not a fourth copy of it.
+     *
+     * Compared against the imported constant, not against a pasted CASE expression. A literal here
+     * would be a second definition of revenue living in the test file - which is the very thing the
+     * module exists to prevent, and it would pass while disagreeing with the dashboards.
      *
      * `COALESCE` on each sum is not defensive noise. `sum()` over an empty set - or over a group
      * whose every amount is NULL, which is a job priced but not yet costed - is NULL, and
@@ -254,14 +270,30 @@ describe("the definitions the rollup left behind", () => {
      * explanatory note instead of a bar, so a NULL turns a correct zero-margin line into "unknown".
      */
     const sql = flat(ReportTotalsOps(scopedCaller, query()).sql);
-    expect(sql).toContain("COALESCE(sum(j.job_price_ksum), 0) AS revenue");
+    expect(sql).toContain(`COALESCE(sum(${flat(JOB_KRW)}), 0) AS revenue`);
     expect(sql).toContain("COALESCE(sum(poc.cost), 0) AS cost");
     expect(sql).toContain(
-      "COALESCE(sum(j.job_price_ksum), 0) - COALESCE(sum(poc.cost), 0) AS margin",
+      `COALESCE(sum(${flat(JOB_KRW)}), 0) - COALESCE(sum(poc.cost), 0) AS margin`,
     );
-    // No bare sum anywhere: `job_price_sum` / `po_price_sum` are the original-currency columns and
-    // summing those across currencies adds yen to won.
-    expect(sql).not.toMatch(/job_price_sum|po_price_sum/);
+    // The cost side is the PO expression, inside the lateral where its `pofx` join is in scope.
+    expect(sql).toContain(`sum(${flat(PO_KRW)}) AS cost`);
+    /*
+     * Both joins present, which is what keeps the two expressions from silently evaluating their
+     * fallback branch forever.
+     *
+     * Without `jfx` the query is a 42P01 and the failure is loud; WITH a mis-aliased one it would
+     * resolve, yield NULL for every rate, and fall back to the stored figure on every row - which
+     * reads as "the feature is not working yet" rather than as a bug, indefinitely.
+     */
+    expect(sql).toContain(flat(JOB_KRW_JOIN));
+    expect(sql).toContain(flat(PO_KRW_JOIN));
+    /*
+     * `*_price_sum` may now appear - it is the multiplicand of the open case - so the old blanket
+     * "no bare sum" assertion is gone. What must still never appear is an AGGREGATE over it:
+     * `sum(j.job_price_sum)` across currencies adds yen to won, which is the mistake the original
+     * assertion was really guarding against.
+     */
+    expect(sql).not.toMatch(/sum\(\s*(j\.job_price_sum|po\.po_price_sum)\s*\)/);
   });
 
   test("the breakdown and the totals are computed from the same rows", () => {
@@ -273,15 +305,23 @@ describe("the definitions the rollup left behind", () => {
      * So the only thing keeping the figure above the chart consistent with the chart is that both
      * were computed from the same rows with the same measures. Two hand-written copies would be two
      * definitions of revenue, and they would agree right up until one of them was edited.
+     *
+     * The `jfx` join is checked on both for a sharper reason than tidiness. Revenue is now a CASE
+     * that READS `jfx.rate`, so a join present in one query and absent from the other does not fail
+     * - the one without it is simply invalid SQL and errors, but the dangerous near-miss is a join
+     * added to the totals and forgotten on the breakdown's dimension-specific FROM. The figure above
+     * the chart would then convert and the chart would not.
      */
     const from = "FROM job j JOIN project p ON p.id = j.project_id AND p.deleted = false";
-    const revenue = "COALESCE(sum(j.job_price_ksum), 0) AS revenue";
+    const revenue = `COALESCE(sum(${flat(JOB_KRW)}), 0) AS revenue`;
     for (const ops of [
       ReportBreakdownOps(scopedCaller, query()),
       ReportTotalsOps(scopedCaller, query()),
     ]) {
       expect(flat(ops.sql)).toContain(from);
       expect(flat(ops.sql)).toContain(revenue);
+      expect(flat(ops.sql)).toContain(flat(JOB_KRW_JOIN));
+      expect(flat(ops.sql)).toContain(flat(PO_KRW_JOIN));
     }
   });
 

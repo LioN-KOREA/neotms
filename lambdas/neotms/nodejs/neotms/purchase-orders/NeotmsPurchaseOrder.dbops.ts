@@ -52,6 +52,7 @@ import {
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { PO_CODE, codeExpression } from "../NeotmsCodes.js";
 import { isLinguistic, poDetailTable, type PoDetailTable } from "../NeotmsJobTypes.js";
+import { PO_KRW, PO_KRW_JOIN } from "../NeotmsMoney.js";
 import {
   cursorClause,
   filterClause,
@@ -126,10 +127,24 @@ export type PurchaseOrderRow = {
    * project rollup aggregates, which is why it stayed put while the derivation moved.
    */
   poCoinCode: string | null;
+  /**
+   * The rate this PO was EXCHANGED at, or null if it has not been exchanged.
+   *
+   * Read it as a settlement flag with a value attached: null on a foreign-currency PO means an open
+   * position, whose KRW worth is `poPriceKrw` below and moves daily. db/014_fx_rates.sql.
+   */
   poCoinRate: string | null;
   poPriceSum: string | null;
-  /** KRW total. This is cost. */
+  /** KRW total as BOOKED. What the form edits, and what the supplier's invoice says. */
   poPriceKsum: string | null;
+  /**
+   * KRW worth as of NOW - cost. Equal to `poPriceKsum` unless the PO is an unexchanged
+   * foreign-currency one, in which case it is `poPriceSum` at today's rate.
+   *
+   * Null on a row that came back from `RETURNING` rather than from the select path, because it is
+   * computed through a join. Every list and detail read has it.
+   */
+  poPriceKrw: string | null;
   poTax: string | null;
   poTaxPrice: string | null;
   poTaxSum: string | null;
@@ -237,7 +252,19 @@ const PO_DETAIL_COLUMNS = `
   pdl.po_unit_code AS po_unit_code,
   pdl.po_price_sel AS po_price_sel,
   pdl.po_price     AS po_price,
-  pdn.po_category  AS po_category
+  pdn.po_category  AS po_category,
+  /*
+   * The PO's worth in KRW RIGHT NOW, which is not always po_price_ksum.
+   *
+   * Here rather than in poColumns for the same reason the detail columns are: it needs a join, and
+   * poColumns goes into RETURNING. A freshly inserted row therefore reads it as null - harmless,
+   * because the create path re-reads the PO through the select path before answering.
+   *
+   * po_price_ksum is WHAT WAS BOOKED - what the form edits, what the supplier invoiced - while this
+   * is WHAT IT IS WORTH, which for an unexchanged foreign-currency PO moves with the currency. They
+   * are equal for every KRW PO and every settled one. NeotmsMoney's header has the rule.
+   */
+  ${PO_KRW} AS po_price_krw
 `;
 
 export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
@@ -271,6 +298,7 @@ export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
   poCoinRate: readMoney(row, "po_coin_rate"),
   poPriceSum: readMoney(row, "po_price_sum"),
   poPriceKsum: readMoney(row, "po_price_ksum"),
+  poPriceKrw: readMoney(row, "po_price_krw"),
   poTax: readMoney(row, "po_tax"),
   poTaxPrice: readMoney(row, "po_tax_price"),
   poTaxSum: readMoney(row, "po_tax_sum"),
@@ -310,6 +338,14 @@ export const PO_SORTS = {
   /** The translator's deadline. */
   due: { column: "po.po_eday", cast: "date" },
   start: { column: "po.po_sday", cast: "date" },
+  /**
+   * Largest first, on the BOOKED KRW figure rather than on the live `po_price_krw` the row displays.
+   *
+   * Same reason as `JOB_SORTS.amount`: a sort target has to be a real qualified column, because the
+   * keyset cursor's row key is derived from the column name. An unexchanged PO can therefore sort a
+   * place away from where its shown amount would put it, which is visible - whereas pointing this at
+   * the `CASE` expression would stall the cursor silently.
+   */
   amount: { column: "po.po_price_ksum", cast: "numeric" },
   /** When the money was paid. The column the settlement screen is read by. */
   paid: { column: "po.po_money_day", cast: "date" },
@@ -384,6 +420,9 @@ const PO_SCOPE_COLUMNS = ["po.po_pm_id", "j.job_pm_id", "p.prj_mgr_id", "p.prj_p
  * `job` and `project` are INNER - a PO whose job or project is soft-deleted is not shown. The two
  * detail joins are LEFT and one-row-at-most by key (`po_id` is each detail table's primary key), so
  * they can neither drop a PO nor duplicate one.
+ *
+ * `PO_KRW_JOIN` is LEFT with the same guarantee - it matches on `fx_rate_latest.currency_code`,
+ * which the view makes unique by construction - and is what `po_price_krw` reads. NeotmsMoney.ts.
  */
 const PO_FROM = `
     FROM purchase_order po
@@ -391,6 +430,7 @@ const PO_FROM = `
     JOIN project p ON p.id = j.project_id   AND p.deleted = false
     LEFT JOIN po_detail_linguistic pdl ON pdl.po_id = po.id
     LEFT JOIN po_detail_non_linguistic pdn ON pdn.po_id = po.id
+    ${PO_KRW_JOIN}
 `;
 
 /* -------------------------------------------------------------------------- */

@@ -24,6 +24,28 @@
  * 때만, 그리고 정수부에만 쓴다.
  */
 
+/**
+ * 화면에 보여 줄 원화 금액을 고른다. **금액을 보여 주는 모든 자리가 이걸 통해야 한다.**
+ *
+ * 서버는 원화 금액을 두 개 준다 — `*_price_ksum`(장부에 저장된 금액)과 `*_price_krw`(지금 시점의
+ * 가치). 정산된 건에서는 둘이 같고, **환전하지 않은 외화 건에서만 다르다**: 뒤쪽은 읽을 때마다
+ * `합계 × 현 시세` 로 계산된 값이다(db/014_fx_rates.sql, 백엔드 NeotmsMoney.ts).
+ *
+ * 보여 줄 것은 언제나 뒤쪽이다. 앞쪽을 보여 주면 미환전 USD 작업의 원화 매출이 등록 시점의
+ * 숫자로 멈춰 있고, 같은 작업이 리포트에서는 다른 금액으로 집계된다 — 두 화면이 서로를 반박하는데
+ * 어느 쪽도 틀려 보이지 않는다.
+ *
+ * 그런데 `null` 일 수 있다. 등록·수정 응답은 `RETURNING` 으로 만들어지므로 조인으로 계산되는
+ * 이 컬럼이 없다. 그래서 저장된 금액으로 물러난다 — 저장 직후의 화면이 금액 자리에 `-` 를
+ * 보여 주는 것을 막기 위한 것이고, 목록·상세 조회에서는 이 분기가 쓰이지 않는다.
+ */
+export function krwToShow(
+  live: string | null | undefined,
+  stored: string | null | undefined,
+): string | null {
+  return live ?? stored ?? null
+}
+
 /** 10진 문자열인지. 빈 값·null 은 아니다. */
 export function isDecimalString(value: string | null | undefined): boolean {
   if (typeof value !== 'string') return false
