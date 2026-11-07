@@ -61,15 +61,70 @@ export const JOB_STATES: readonly CodeOption[] = [
   opt('취소', '취소'),
 ]
 
-/** 발주(PO) 진행 상태. */
+/*
+ * 발주 상태의 다섯 값. 화면이 이 값으로 **거르고 비교하기** 때문에 이름이 붙어 있다.
+ *
+ * `PROJECT_STATE_ACTIVE` 와 같은 이유다(위 주석 참고): 결제 화면이 `'납품'` 을 직접 적으면 이
+ * 파일의 목록과 그 화면이 서로 독립적인 추측이 되고, db/015_payment.sql 이 값을 바꿔 쓰는 순간
+ * 목록은 오류 없이 0건이 된다. 서버 쪽 한 벌은 NeotmsPoStates.ts 이고, 테스트가 둘을 맞대어 본다.
+ */
+
+/** 미승인 — 발주는 올라갔고, 금액을 승인할 사람을 기다리는 중. (레거시 '발주') */
+export const PO_STATE_UNAPPROVED = '미승인'
+
+/** 진행 — 번역가에게 가 있고, 작업 중. (레거시 '수락' 을 흡수했다) */
+export const PO_STATE_ACTIVE = '진행'
+
+/** 납품 — 일은 끝났고 돈은 아직. 인보이스를 뽑을 수 있는 칸이자, 일부 지급된 발주가 머무는 칸. */
+export const PO_STATE_DELIVERED = '납품'
+
+/** 완료 — 전액 지급됨. `poMoneyState` 가 '정산완료' 일 때만 도달한다. */
+export const PO_STATE_DONE = '완료'
+
+/** 취소 — 접힌 발주. 승인도 출력도 지급도 없다. 사다리의 끝이 아니라 사다리 밖이다. */
+export const PO_STATE_CANCELLED = '취소'
+
+/**
+ * 발주(PO) 진행 상태. **서버의 NeotmsPoStates.ts 와 같은 값·같은 순서다.**
+ *
+ * ## 이 목록은 한 가지만 답한다 — 일이 어디까지 갔는가
+ *
+ *     미승인 → 진행 → 납품 → 완료            (그리고 취소, 사다리 옆에)
+ *
+ * 돈에 관한 두 가지는 각자의 컬럼이 답한다. 금액이 승인되었는가는 `poApproved`, 지급되었는가는
+ * `poMoneyState` 다. 전에는 이 한 칸이 셋을 겸했다 — '발주' 와 '수락' 이 사실은 "승인 전/후" 로
+ * 읽히고 있었고, 그래서 **승인 없이 진행 중인 발주**를 표현할 방법이 없었다. 승인 관문이 잡아야
+ * 하는 바로 그 경우다.
+ *
+ * ## 완료 = 전액 지급됨
+ *
+ * 납품도 인보이스 발행도 아니다. 일부만 지급된 발주는 `poMoneyState = '부분정산'` 인 채로 **납품에
+ * 머문다**(업무 담당자들이 정한 규칙이다). 그래서 '부분정산' 은 오직 한 칸에만 있다 — 사다리에
+ * 따로 칸을 주면 같은 돈에 대해 서로 다른 말을 할 수 있는 칸이 둘이 되고, 어느 쪽이 맞는지는
+ * 아무도 적어 두지 않는다.
+ *
+ * db/015_payment.sql 이 운영 데이터의 발주 → 미승인, 수락 → 진행 을 바꿔 쓴다. 이름이 바뀌는
+ * 사건이야말로 어딘가에 추측으로 적힌 리터럴이 아무것과도 맞지 않게 되는 순간이므로, 이 목록과
+ * 서버 모듈을 테스트가 맞대어 본다.
+ */
 export const PO_STATES: readonly CodeOption[] = [
-  opt('발주', '발주'),
-  opt('수락', '수락'),
-  opt('진행', '진행'),
-  opt('납품', '납품'),
-  opt('완료', '완료'),
-  opt('취소', '취소'),
+  opt(PO_STATE_UNAPPROVED),
+  opt(PO_STATE_ACTIVE),
+  opt(PO_STATE_DELIVERED),
+  opt(PO_STATE_DONE),
+  opt(PO_STATE_CANCELLED),
 ]
+
+/**
+ * 인보이스를 발행할 수 있는 발주 상태. 서버의 `PO_STATES_INVOICEABLE` 과 같아야 한다.
+ *
+ * 결제 화면의 '발주 고르기' 가 이 값으로 **거른다**. 완료가 들어 있는 것이 의도다 — 이미 정산된
+ * 발주의 인보이스도 다시 뽑을 수 있어야 하고(보낸 문서의 사본을 나중에 달라는 요청이 실제로
+ * 온다), 한 인보이스에 묶인 발주들이 서로 다른 시점에 정산될 수 있다.
+ *
+ * 미승인·진행은 아직 청구할 것이 없어서, 취소는 앞으로도 없어서 빠진다.
+ */
+export const PO_STATES_INVOICEABLE: readonly string[] = [PO_STATE_DELIVERED, PO_STATE_DONE]
 
 /** 세금계산서 발행 상태. 프로젝트와 발주가 같은 집합을 쓴다. */
 export const INVOICE_STATES: readonly CodeOption[] = [
@@ -78,11 +133,30 @@ export const INVOICE_STATES: readonly CodeOption[] = [
   opt('보류', '보류'),
 ]
 
+/*
+ * 입·출금 상태의 세 값. 위 `PO_STATE_*` 와 같은 이유로 이름이 붙어 있다 — 결제 화면이 이 값으로
+ * **비교한다**.
+ *
+ * 비교하는 내용은 하나다: 발주의 진행 상태를 돈 상태에 맞추는 일. 완료는 전액 지급을 뜻하므로
+ * (NeotmsPoStates.ts) 정산완료는 완료로, 부분정산은 납품으로 간다. 그 규칙을 리터럴로 적으면
+ * 'ㅈ' 하나만 틀려도 조건이 영원히 거짓이 되고, 화면은 오류 없이 **아무것도 하지 않는다** —
+ * 담당자는 상태를 손으로 고치고, 왜 자동으로 안 따라오는지는 아무도 모른다.
+ */
+
+/** 미정산 — 아직 한 푼도 나가지 않았다. 모든 발주가 여기서 시작한다. */
+export const MONEY_STATE_UNPAID = '미정산'
+
+/** 부분정산 — 일부만 지급됨. 이 값을 가진 발주는 '납품' 에 머문다. */
+export const MONEY_STATE_PARTIAL = '부분정산'
+
+/** 정산완료 — 전액 지급됨. 발주가 '완료' 로 갈 수 있는 유일한 조건. */
+export const MONEY_STATE_PAID = '정산완료'
+
 /** 입·출금 상태. */
 export const MONEY_STATES: readonly CodeOption[] = [
-  opt('미정산', '미정산'),
-  opt('부분정산', '부분정산'),
-  opt('정산완료', '정산완료'),
+  opt(MONEY_STATE_UNPAID),
+  opt(MONEY_STATE_PARTIAL),
+  opt(MONEY_STATE_PAID),
 ]
 
 /**

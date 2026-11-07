@@ -10,6 +10,8 @@ import { CustomersView } from '@/features/customers/CustomersView'
 import { DashboardView } from '@/features/dashboard/DashboardView'
 import { JobsView } from '@/features/jobs/JobsView'
 import { MaintenanceView } from '@/features/maintenance/MaintenanceView'
+import { InvoicePaymentView } from '@/features/payment/InvoicePaymentView'
+import { PoPaymentView } from '@/features/payment/PoPaymentView'
 import { ProjectDetailView } from '@/features/projects/ProjectDetailView'
 import { ProjectsView } from '@/features/projects/ProjectsView'
 import { PurchaseOrdersView } from '@/features/purchaseorders/PurchaseOrdersView'
@@ -198,6 +200,42 @@ export const neotmsRouter = createBrowserRouter([
             <DashboardView role="pm" />
           </RequireMenu>
         ),
+      },
+      {
+        /*
+         * 결제. 두 경로이고 **게이트는 같다** — 대시보드와 정확히 반대의 경우다: 저쪽은 두 화면의
+         * 권한이 서로 달라서 경로를 나눴고, 여기는 두 화면의 권한이 같은데도 경로를 나눴다.
+         *
+         * 나눈 이유는 주소다. 한 화면의 두 탭으로 두면 두 화면의 **필터가 한 주소를 공유하고**,
+         * 그러면 "인보이스 조건이 걸린 PO 화면" 이라는 없는 상태가 링크로 공유될 수 있다. 두
+         * 화면 다 조건을 주소에 적고(기본 조건까지) 그 주소를 서로 보내는 것이 이 앱이 라우터를
+         * 쓰는 이유이므로, 주소 하나가 화면 하나를 가리켜야 한다. permissions.ts 의 결제 항목에
+         * 같은 판단이 적혀 있다.
+         */
+        path: 'payment/purchase-orders',
+        element: (
+          <RequireMenu menuId={NeotmsMenuId.PAYMENT}>
+            <PoPaymentView />
+          </RequireMenu>
+        ),
+      },
+      {
+        path: 'payment/invoices',
+        element: (
+          <RequireMenu menuId={NeotmsMenuId.PAYMENT}>
+            <InvoicePaymentView />
+          </RequireMenu>
+        ),
+      },
+      {
+        /*
+         * `/payment` 는 메뉴가 아니다. 그래도 라우트를 둔 이유는 **이미 공유된 주소** 때문이다 —
+         * 결제 화면이 한 메뉴였던 동안의 링크와 북마크가 있고, 그것들이 "페이지를 찾을 수
+         * 없습니다" 로 끝나면 사용자는 메뉴가 사라졌다고 읽는다. `replace` 로 보내므로 뒤로
+         * 가기가 다시 이 리다이렉트를 타지 않는다.
+         */
+        path: 'payment',
+        element: <Navigate to="/payment/purchase-orders" replace />,
       },
       {
         path: 'reports',

@@ -69,7 +69,7 @@ export function SignupView({
   /*
    * 초기값은 LPX `/userInfo` 에서 온 것이고, **이름까지 고칠 수 있다.**
    *
-   * 의도적이다. `mgr_name` 은 발주서와 청구서에 찍히는 담당자 이름이고, SSO 계정의 이름이 그
+   * 의도적이다. `mgr_name` 은 PO 문서와 청구서에 찍히는 담당자 이름이고, SSO 계정의 이름이 그
    * 사람이 업무에서 쓰는 이름과 항상 같지는 않다(영문 표기만 등록된 계정, 개명, 사내 통용명).
    * 고칠 수 있게 두는 것이 공식 문서로 보이는 서류와 잘못 보이는 서류의 차이다.
    *
@@ -159,7 +159,7 @@ export function SignupView({
               autoFocus
               maxLength={300}
             />
-            <span className={ui.hint}>발주서·청구서에 담당자로 표시되는 이름입니다.</span>
+            <span className={ui.hint}>PO 문서·청구서에 담당자로 표시되는 이름입니다.</span>
           </div>
 
           <div className={ui.field}>

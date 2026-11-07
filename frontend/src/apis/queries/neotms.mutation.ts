@@ -1,20 +1,25 @@
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import {
+  approvePurchaseOrder,
   createCode,
   createCustomer,
+  createInvoice,
   createJob,
   createProject,
   createPurchaseOrder,
   createTranslator,
   deleteCode,
   deleteCustomer,
+  deleteInvoice,
   deleteJob,
   deleteProject,
   deletePurchaseOrder,
   deleteTranslator,
   registerSelf,
+  settlePurchaseOrder,
   updateCode,
   updateCustomer,
+  updateInvoice,
   updateJob,
   updateProject,
   updatePurchaseOrder,
@@ -25,8 +30,12 @@ import type {
   CodeInput,
   CodeUpdateInput,
   CustomerInput,
+  InvoiceInput,
+  InvoiceUpdate,
   JobInput,
   JobUpdate,
+  PoApprovalInput,
+  PoSettlementInput,
   ProjectInput,
   PurchaseOrderInput,
   PurchaseOrderUpdate,
@@ -380,6 +389,14 @@ const PO_AFFECTS = [
   neotmsKeys.reports,
   // 발주는 원가다. 대시보드의 원가와 수익이 함께 달라진다 — JOB_AFFECTS 와 같은 이유.
   neotmsKeys.dashboards,
+  /*
+   * 인보이스 목록은 발주의 합계를 들고 있다(`InvoiceRow.poSum`·`poKsum`·`poCount`). 발주 금액을
+   * 고치면 그 발주가 올라간 인보이스 행의 "발주들이 말하는 금액" 이 달라지고, 그 숫자는 번역가가
+   * 청구한 금액과 **맞춰 보기 위해** 있는 값이다. 낡은 사본을 비교하면 비교의 뜻이 없어진다.
+   *
+   * 발주 삭제도 같은 이유로 여기 걸린다 — 삭제된 발주는 `poCount` 에서 빠진다.
+   */
+  neotmsKeys.invoices,
 ] as const
 
 export function useCreatePurchaseOrder() {
@@ -404,5 +421,65 @@ export function useDeletePurchaseOrder() {
   return useMutation({
     mutationFn: (id: string) => deletePurchaseOrder(id),
     onSuccess: () => invalidateAll(qc, PO_AFFECTS),
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 결제 — 승인·정산·인보이스                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 결제 쪽 쓰기의 영향 범위. `PO_AFFECTS` 와 **같다**.
+ *
+ * 따로 이름을 둔 이유는 범위가 다르기 때문이 아니라 **이유가 다르기** 때문이다. 발주 수정이
+ * 리포트를 무효화하는 것은 금액이 바뀌기 때문이고, 승인·정산·인보이스가 무효화하는 것은
+ * 그 세 가지가 전부 발주 행을 고치기 때문이다(`po_approved`, `po_money_state`,
+ * `invoice_translator_id`). 범위가 같으니 `PO_AFFECTS` 를 그대로 가리키고, 한쪽의 이유가 달라져
+ * 범위가 갈라지는 날 여기서 갈라지면 된다.
+ *
+ * 승인과 정산은 금액을 바꾸지 않으므로 리포트의 숫자는 그대로다. 그래도 범위를 좁히지 않는 것이
+ * 이 파일의 방침이다 — 좁히다 틀리면 증상이 "저장이 안 됐다" 로 나타난다(파일 머리 주석).
+ */
+const PAYMENT_AFFECTS = PO_AFFECTS
+
+export function useApprovePurchaseOrder() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: PoApprovalInput }) =>
+      approvePurchaseOrder(id, input),
+    onSuccess: () => invalidateAll(qc, PAYMENT_AFFECTS),
+  })
+}
+
+export function useSettlePurchaseOrder() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: PoSettlementInput }) =>
+      settlePurchaseOrder(id, input),
+    onSuccess: () => invalidateAll(qc, PAYMENT_AFFECTS),
+  })
+}
+
+export function useCreateInvoice() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: InvoiceInput) => createInvoice(input),
+    onSuccess: () => invalidateAll(qc, PAYMENT_AFFECTS),
+  })
+}
+
+export function useUpdateInvoice() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: InvoiceUpdate }) => updateInvoice(id, input),
+    onSuccess: () => invalidateAll(qc, PAYMENT_AFFECTS),
+  })
+}
+
+export function useDeleteInvoice() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deleteInvoice(id),
+    onSuccess: () => invalidateAll(qc, PAYMENT_AFFECTS),
   })
 }

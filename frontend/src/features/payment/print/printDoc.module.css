@@ -1,0 +1,285 @@
+/****************************************************
+ * 인쇄용 서식의 스타일. 레거시 base.css 에서 그대로 옮겨 왔다.
+ *
+ * ## 이 파일은 고쳐서 예쁘게 만들 대상이 아니다
+ *
+ * 발주서와 인보이스는 회사가 **합의한 서식**이고, 번역가와 거래처가 몇 년째 받아 온 모양이다.
+ * 글자 크기 18px, 고정 폭 1000px, 주황/청록 두 가지 강조색, 홀수 행 회색 — 전부 의도된 값이며
+ * 더 나은 값으로 바꾸는 것은 개선이 아니라 **다른 서식**이다. 출처는 레거시 `base.css` 의
+ * '프린트' 블록(506–555행)과 같은 파일의 `.ta_left`·`.ta_right`(26·28행)다.
+ *
+ * ## 전부 `.printWrap` 아래로 들어가 있다
+ *
+ * 레거시에서는 페이지 전체가 이 서식을 위한 페이지였으므로 `table{...}`, `body{...}` 같은 전역
+ * 리셋에 올라타 있었다. 여기서는 앱 화면 위에 띄우는 모달 안이다. 그래서 그 리셋들 —
+ * `border-spacing:0`, `table-layout:fixed`, `margin:0`, 글꼴과 글자색 — 을 **이 안으로 복사해
+ * 넣었다.** 복사하지 않으면 두 방향으로 깨진다: 앱의 전역 스타일이 서식 안으로 흘러들거나,
+ * 레거시가 전제하던 리셋이 없어서 `colgroup` 의 폭이 무시된다(`table-layout:fixed` 가 없으면
+ * 브라우저가 내용에 맞춰 열 폭을 다시 정한다).
+ *
+ * CSS 모듈이므로 클래스 이름은 해시된다. 즉 앱의 `.table` 과 이 파일의 `.table` 이 부딪힐 일은
+ * 없고, 반대로 **전역 요소 선택자**(`table`, `th`)만이 흘러들 수 있는 경로다 — 위의 복사가 막는
+ * 것이 정확히 그것이다.
+ *
+ * ## 글꼴
+ *
+ * 'Nanum Gothic' 은 레거시가 적어 둔 값 그대로다. 그 페이지도 웹폰트를 **싣지 않았으므로**,
+ * 설치된 PC 에서는 나눔고딕으로, 그렇지 않은 곳에서는 기본 sans-serif 로 보였다. 지금도 같다 —
+ * 웹폰트를 새로 들이면 PDF 의 줄바꿈 위치가 레거시와 달라진다.
+ ****************************************************/
+
+.printWrap {
+  /*
+   * 1000px 고정. 화면 폭에 반응하지 않는 것이 요점이다 — html2canvas 가 이 요소를 그대로
+   * 캡처하므로, 폭이 창 크기에 따라 달라지면 **같은 발주서가 노트북과 모니터에서 다른 PDF 로
+   * 나온다.** 모달 쪽에서 가로 스크롤로 감싼다.
+   */
+  width: 1000px;
+  padding: 50px;
+  margin: 0 auto;
+  font-size: 18px;
+
+  /* 위 주석의 '복사해 넣은 리셋'. 레거시 base.css 5–6행. */
+  font-family: 'Nanum Gothic', sans-serif;
+  color: #555;
+  text-align: left;
+
+  /* 캡처 결과가 투명 배경이 되지 않도록. 모달 배경이 어두우면 글자가 사라진다. */
+  background: #fff;
+}
+
+.printWrap * {
+  box-sizing: content-box;
+}
+
+.printWrap p,
+.printWrap h5,
+.printWrap ul,
+.printWrap li,
+.printWrap table,
+.printWrap th,
+.printWrap td {
+  margin: 0;
+  padding: 0;
+}
+
+.printWrap .txtOragne {
+  color: #ff9933;
+}
+
+.printWrap .txtCyan {
+  color: #33cccc;
+}
+
+.printWrap .txtWhite {
+  color: #fff;
+}
+
+.printWrap .txtred {
+  color: red;
+}
+
+/*
+ * 이름과 값이 맞지 않는다 — `txtSize15` 가 25px 이고 `txtSize20` 이 30px 이다. 레거시의 값
+ * 그대로다. 이름을 고치면 서식 컴포넌트의 클래스명도 같이 고쳐야 하고, 그러면 레거시 HTML 과
+ * 나란히 놓고 비교할 수가 없어진다.
+ */
+.printWrap .txtSize15 {
+  font-size: 25px;
+}
+
+.printWrap .txtSize20 {
+  font-size: 30px;
+}
+
+.printWrap .txtSize30 {
+  font-size: 35px;
+}
+
+.printWrap .bgOragne {
+  background-color: #ff9933;
+}
+
+.printWrap .bgCyan {
+  background-color: #33cccc;
+}
+
+.printWrap .bgGray {
+  background-color: #f2f2f2;
+}
+
+.printWrap .bgYellow {
+  background-color: #ffe699;
+}
+
+.printWrap .bgBlue {
+  background-color: #14a0c1;
+}
+
+.printWrap .ta_left {
+  text-align: left !important;
+}
+
+.printWrap .ta_right {
+  text-align: right !important;
+}
+
+.printWrap .pageHead {
+  padding-bottom: 20px;
+  border-bottom: 2px solid #000;
+  text-align: right;
+}
+
+.printWrap .pageHead::after {
+  display: block;
+  clear: both;
+  content: '';
+}
+
+.printWrap .pageHead img {
+  float: left;
+}
+
+.printWrap .pageHead strong {
+  display: inline-block;
+  height: 45px;
+  padding-left: 20px;
+  line-height: 45px;
+  text-align: right;
+  vertical-align: top;
+}
+
+.printWrap table {
+  width: 100%;
+  margin-bottom: 30px;
+  text-align: left;
+  border: 0;
+
+  /* 레거시 base.css 245행의 전역 리셋. `colgroup` 의 폭이 지켜지는 이유가 이 두 줄이다. */
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.printWrap table.oragne thead th {
+  color: #fff;
+  background-color: #ff9933;
+}
+
+.printWrap table.cyan thead th {
+  color: #fff;
+  background-color: #33cccc;
+}
+
+.printWrap table.gray thead th {
+  background-color: #f2f2f2;
+}
+
+.printWrap table.blue thead th {
+  color: #fff;
+  background-color: #14a0c1;
+}
+
+.printWrap table th,
+.printWrap table td {
+  padding: 10px;
+  font-size: 18px;
+}
+
+.printWrap table .bordertop {
+  border-top: 1px solid #000;
+}
+
+.printWrap table .borderbottom {
+  border-bottom: 1px solid #000;
+}
+
+.printWrap table.noPadding th,
+.printWrap table.noPadding td {
+  padding: 0;
+}
+
+.printWrap table.estimate {
+  margin-bottom: 0;
+  border-bottom: 1px solid #000;
+}
+
+.printWrap table.basic {
+  border-collapse: collapse;
+}
+
+.printWrap table.basic th,
+.printWrap table.basic td {
+  padding: 10px 5px;
+  text-align: center;
+  border-bottom: 1px solid #e5e6e7;
+}
+
+/*
+ * `companyInfo` 는 레거시에 **전용 규칙이 없다.** 위의 `.printWrap table` 과 th/td 규칙만 받는다.
+ * 빠뜨린 것이 아니라 원본이 그렇다는 뜻으로 이 주석을 남긴다 — 없는 줄을 찾아 헤매지 않도록.
+ *
+ * 그러므로 빈 규칙을 만들어 두지도 않는다. 빈 규칙은 최적화에서 사라질 수 있고(지워지면 내보내는
+ * 클래스 이름도 같이 사라져서, 참조하는 쪽이 `undefined` 를 받는다), 남아 있으면 "무언가 적용된다"
+ * 고 읽힌다. 컴포넌트 쪽은 이 표에 클래스를 아예 적지 않는다 — `InvoicePrintDoc` 의 같은 자리 주석.
+ */
+
+.printWrap table.estimateList {
+  margin-bottom: 0;
+}
+
+.printWrap table.estimateList th,
+.printWrap table.estimateList td {
+  height: 30px;
+  padding: 5px 10px;
+  text-align: center;
+}
+
+.printWrap table.estimateList tbody tr:nth-child(odd) {
+  background-color: #f2f2f2;
+}
+
+.printWrap table.estimateSum {
+  border-top: 1px solid #000;
+  border-bottom: 1px solid #000;
+}
+
+.printWrap table.estimateSum th,
+.printWrap table.estimateSum td {
+  height: 30px;
+  padding: 2px 0;
+  font-weight: bold;
+  text-align: right;
+}
+
+.printWrap table.estimateSum th {
+  padding-left: 10px;
+}
+
+.printWrap table.estimateSum td {
+  padding-right: 10px;
+}
+
+.printWrap h5 {
+  display: block;
+  padding: 5px 10px;
+  font-size: 18px;
+  font-weight: bold;
+  border-top: 1px solid #a6a6a6;
+  border-bottom: 1px solid #a6a6a6;
+}
+
+.printWrap .h5Section {
+  padding: 10px;
+  margin-bottom: 20px;
+  font-size: 18px;
+}
+
+.printWrap .pageTail {
+  padding-top: 20px;
+  text-align: right;
+}
+
+/*
+ * 레거시의 `.accountInfo` 는 옮기지 않았다. 네 서식 중 어느 것도 쓰지 않으며, 그 규칙은
+ * `url(/images/print_sign.gif)` — 이 앱에 없는 경로 — 를 배경으로 깔기 때문이다.
+ */

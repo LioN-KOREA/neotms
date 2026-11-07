@@ -61,6 +61,19 @@ export const neotmsKeys = {
   purchaseOrderList: (query: unknown) => ['purchase-orders', 'list', query] as const,
   purchaseOrder: (id: string) => ['purchase-orders', 'detail', id] as const,
 
+  /*
+   * 인보이스. `purchase-orders` 아래가 아니라 따로다.
+   *
+   * 둘이 서로를 무효화해야 하는 것은 맞지만, 그 방향은 **양쪽 모두**다 — 인보이스를 발행하면
+   * 발주의 `invoiceTranslatorId` 가 바뀌고, 발주를 정산하면 그 발주가 달린 인보이스 행의
+   * `poSum`·`poCount` 가 바뀐다. 한쪽을 다른 쪽의 접두사 아래 넣으면 한 방향만 공짜가 되고
+   * 반대 방향은 여전히 손으로 적어야 하므로, 둘을 나란히 두고 양쪽에서 서로를 적는다
+   * (neotms.mutation.ts 의 `PAYMENT_AFFECTS`).
+   */
+  invoices: ['invoices'] as const,
+  invoiceList: (query: unknown) => ['invoices', 'list', query] as const,
+  invoice: (id: string) => ['invoices', 'detail', id] as const,
+
   reports: ['reports'] as const,
   reportSummary: (query: unknown) => ['reports', 'summary', query] as const,
   workload: (range: unknown) => ['reports', 'workload', range] as const,

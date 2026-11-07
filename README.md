@@ -347,6 +347,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `012_job_pricing.sql` | moves the nine pricing *inputs* (`job_volume`, `unit_code`, `job_price_sel`, `job_price`, `job_price_dis`; `po_volume`, `po_unit_code`, `po_price_sel`, `po_price`) onto the linguistic detail tables, so a MICE or IMC job records a total without a fabricated word count. **The totals — `job_price_sum` / `job_price_ksum` / `po_price_sum` / `po_price_ksum` — stay on the parents.** Drops the nine columns it moved — **see §6.2** |
 | `013_dashboard_menus.sql` | the two 대시보드 menus (`DASHBOARD_SALES`, `DASHBOARD_PM`) and the re-grant that makes them usable. Without it the two dashboards are **unreachable by everyone**, including the superuser; nothing else is affected — **see §6.2** |
 | `014_fx_rates.sql` | `fx_rate_latest`, the view every KRW figure in the system reads through, plus a one-time `UPDATE` that pins `coin_rate` on legacy foreign-currency rows so their stored totals stop floating. **Without it every report, dashboard, rollup and list fails with `42P01 relation "fx_rate_latest" does not exist`** — **see §6.2** |
+| `015_payment.sql` | the 결제 section: the PO approval gate (`po_approved` / `po_approved_at` / `po_approved_by`), `purchase_order.invoice_translator_id` as a real FK so one invoice can group several POs, the two columns `invoice_translator` needed to be writable by an application (`updated_at`, `inv_pm_id`), the `POL_` invoice code sequence, the one `PAYMENT` menu plus its superuser re-grant (**one menu id, two rail entries** — see §6.2), **and a rename of two live `po_state` values — 발주 → 미승인 and 수락 → 진행.** Every PO read selects `po_approved`, so **without it the PO, project and job screens all fail with `42703`** — **see §6.2** |
 
 Every file in `db/` is applicable **as-is**: plain DDL, no placeholders. That matters because the
 application's dbops modules write `:name` parameters (rewritten to `$1` by `toPositional` in
@@ -477,7 +478,7 @@ SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN');
 
 Idempotent, returns the number of menus granted, and safe to run any time.
 
-### 6.2 `007`, `008`, `009`, `010`, `013` — the files whose absence is silent (and `011` / `012` / `014`, whose absence is not)
+### 6.2 `007`, `008`, `009`, `010`, `013` — the files whose absence is silent (and `011` / `012` / `014` / `015`, whose absence is not)
 
 `006` gets one administrator in. These five are what the console assumes about the database once
 somebody is in, and they share a property worth stating before the detail: **skipping one produces no
@@ -493,6 +494,7 @@ of the symptom points away from the cause.
 | `009_selfservice.sql` | `staff_self_register()` | the sign-up form submits and answers **500**, with the cause visible only in CloudWatch |
 | `010_currency.sql` | the `currency` rows every `*_coin` / `coin_code` foreign key points at | **every create in the system fails**, on a field nobody touched, reporting a constraint name |
 | `013_dashboard_menus.sql` | the `sys_menu` rows for 대시보드(영업) and 대시보드(PM) | both dashboards are unreachable **by everyone, including the superuser**, and 대시보드 — the first rail entry — is absent, so a signed-in user lands on 프로젝트 instead. Nothing else is affected: no table, column or other route is touched |
+| `015_payment.sql` **§5** | the `po_state` rename 발주 → 미승인, 수락 → 진행 | the only **quiet** part of an otherwise loud file. Apply `015` but skip its section 5 and everything still runs — but the two 결제 screens filter on 미승인 and 진행 while the rows still say 발주 and 수락, so a 진행 상태 filter lists **nothing** and reads as "there is nothing here" rather than as an error. Apply the file whole |
 
 `013` is the one of these an operator is most likely to defer, because the screens it unlocks are
 the only part of the application nobody's day depends on. It is in this table anyway for the reason
@@ -522,6 +524,22 @@ shared SQL expression that joins `fx_rate_latest` (see `NeotmsMoney.ts`). So wit
 are not degraded, they are down**: `42P01 relation "fx_rate_latest" does not exist`, on every one of
 them, including the screens that have nothing to do with foreign currency. There is no partial mode
 and nothing to misread.
+
+`015_payment.sql` is loud in the same way, and it is the reason it gets a row in the table above for
+one section only. Every purchase-order read selects `po.po_approved` and every invoice read selects
+`inv.updated_at`, so without `015` the PO list, the PO detail, the project detail and the job detail
+screens all fail with `42703 column po.po_approved does not exist` — the same shape as `011` and
+`012`, and the same consequence: **this file and the matching Lambda deploy together.** The two 결제
+menus themselves fail the `013` way, invisible and 403 to everybody including the bootstrap superuser
+— and they fail *together*, because both rail entries carry the one `PAYMENT` menu id. What
+hides is only §5's state rename, which is why that line is in the table and the rest of the file is
+here. Note also that `015` is the first file to **rename live data** rather than add or move columns:
+`po_state` is unconstrained text by design (see `project.prj_state`), so the rename cannot be caught
+by a constraint, and a value the application's vocabulary does not recognise still saves and still
+displays, marked unrecognised. A test pins the four-rung ladder — 미승인 → 진행 → 납품 → 완료, plus
+취소 — against both `NeotmsPoStates.ts` and the console's `PO_STATES`, so the two halves cannot drift
+apart again. **완료 means paid in full**; a partly-paid PO stays at 납품 with
+`po_money_state = '부분정산'`, so 부분정산 lives in one column instead of two that can disagree.
 
 The converse is the part that does hide, and it has now bitten twice. `011` **drops** `job_slang`,
 `job_elang`, `po_slang` and `po_elang`; `012` **drops** `job_volume`, `unit_code`, `job_price_sel`,
@@ -806,6 +824,84 @@ The ETL note from §6.2 applies here too, in reverse: the ETL must keep writing 
 rows — that would mark unexchanged foreign-currency work as settled and freeze it at whatever rate
 happened to be stored.
 
+#### `015_payment.sql` — the approval gate, and the invoice that spans several POs
+
+Two facts the system could not record before. **Approval** was expressible only as the difference
+between the 발주 and 수락 states, which conflates how far the work has got with whether anybody
+senior signed off the money — and a PO in progress on a sign-off nobody gave is precisely the case an
+approval gate exists to prevent, so it is precisely the case one state column cannot represent. It is
+now `po_approved` plus the two columns that make it auditable, `po_approved_at` and `po_approved_by`.
+**The invoice** could not be recorded at all: `invoice_translator` has sat in the schema unused since
+`002` created it as an ETL target. One invoice covers *several* POs for one translator — that is what
+the printed LIST OF INVOICE form shows, and it is why the invoice cannot be a set of columns on a PO,
+which has nowhere to put an identity and a total that span several rows.
+
+So the states become what they should always have been — how far the work has got, and nothing else:
+
+```
+미승인 → 진행 → 납품 → 완료            (plus 취소, off to one side)
+```
+
+Approval is a column beside that ladder, not a rung on it, and it is gated on its own `PAYMENT` menu
+rather than on `PURCHASE_ORDER`: issuing a PO is a PM's daily work, approving the money on one is not,
+and under a shared menu id every PM who can raise a PO could approve their own. A separate id makes
+"who may approve" a grant in `sys_role_auth` — assignable and revocable on 사용자 관리 without a
+deploy, which matters here because who holds that authority is still being decided. `015` grants the
+bootstrap superuser only, deliberately.
+
+The file is idempotent throughout, and three of its sections are written so that **re-running it is
+the fix** for the things an ETL load disturbs:
+
+- **The ETL must stop writing `발주` and `수락` into `po_state`,** and write `미승인` and `진행`. The
+  column is unconstrained text by design, so an old value does not fail — it simply never matches the
+  screen's filters. Section 5's two `UPDATE`s correct whatever is there, and report `UPDATE 0` once
+  there is nothing left to correct, so re-running `015` after a load is enough.
+- **`seq_invoice_tran_code` must be advanced past the loaded `INV_TRAN_CODE` values**, the same
+  mandatory step `005_code_sequences.sql` describes for the other five code sequences. Section 7's
+  `setval` does it from the data, so again: re-run `015` after the ETL, not before.
+- **The ETL keeps writing `inv_code`** — text, no FK, because legacy rows reference invoices that were
+  later deleted. Section 6 fills `invoice_translator_id` in from it wherever the code matches a live
+  invoice, and leaves it NULL where it does not. The id is what new invoices group by and therefore
+  what a printed document totals; the code is the denormalised copy, the same pairing as `po_pm_id`
+  with `po_pm_name`.
+
+What the ETL must **not** change is where the money lives. `inv_sum` / `inv_tax` on the invoice are
+what was *printed and sent* — a document is a record of what was claimed, not a live query — while
+`po_money_state`, `po_money_day` and `po_money_price` on the PO remain the single source of truth for
+what has actually been *paid*. Nothing in the application reads payment status off the invoice.
+
+One verification query is worth running by hand even on a clean apply, because it is the one `015`
+deliberately does **not** fix (§11c of the file):
+
+```sql
+SELECT id, po_code, po_state, po_money_state, po_price_ksum, po_money_price
+  FROM purchase_order
+ WHERE NOT deleted AND po_state = '완료' AND po_money_state IS DISTINCT FROM '정산완료';
+```
+
+Expect rows: legacy POs closed under the old reading of 완료, which now means **paid in full**.
+Whether a given one of them was really paid is a question for the accounts, not for a guess in a
+migration, so they are left as they are and corrected on the 결제 screens.
+
+One thing the menu row in §5 does not say: `015` inserts **one** `sys_menu` row, `PAYMENT`, but the
+console puts **two** entries on the rail under it — `결제 › PO 승인·정산` and `결제 › 번역가 인보이스`.
+That is deliberate and it is not a mismatch. The two screens answer different questions, so one
+address has to mean one screen; but the menu id is the *permission* unit, and splitting it would cost
+another `db/` file plus a `sys_role_grant_all_menus` re-grant for a distinction the five action flags
+already draw (`read` sees both screens, `update` approves a PO and records payment, `create` issues an
+invoice, `delete` voids one). The practical consequence: **the two entries appear and disappear
+together** — `readableNav` filters per item on the same id — so there is no grant that shows one and
+hides the other. If approving POs and issuing invoices ever need to sit with different people, that
+is a second menu id and a `016`, not a settings change.
+
+Both screens also **open with a query already made**, rather than with a blank list: the PO screen on
+`승인됨` plus a 마감일 window of today ±30 days, the invoice screen on a 발행일 window of the same
+shape. The PO list carries no date restriction of its own — `po_eday` is just a column — so an
+unfiltered first read is the entire history of the table, which on this data is slow enough to read as
+a broken screen. The defaults apply only when the URL carries **no** filter at all; once any filter is
+in the address bar it is honoured literally, so a deliberately emptied date box stays empty instead of
+silently refilling itself. 전체 기간 switches the period off and leaves a trace in the URL saying so.
+
 ### Rehearsing the bootstrap locally
 
 Worth doing before touching the real project, and worth repeating after any change to `db/`. The
@@ -818,7 +914,7 @@ docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
 docker cp db neotms-sqlcheck:/db
 for f in 001_extensions 002_tables 003_indexes 004_rollup 005_code_sequences 006_bootstrap \
          007_codes 008_admin 009_selfservice 010_currency 011_job_types 012_job_pricing \
-         013_dashboard_menus 014_fx_rates; do
+         013_dashboard_menus 014_fx_rates 015_payment; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done

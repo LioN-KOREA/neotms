@@ -615,6 +615,18 @@ export interface PurchaseOrderRow {
   translatorId: string | null
   poTranName: string | null
   /**
+   * 인쇄용 발주서에 찍히는 연락처. `translator` 와 `staff` 에서 **지금 값을** 읽어 온다.
+   *
+   * 옆의 `poTranName`·`poPmName` 과 성격이 다르다. 그 둘은 발주 시점에 복사해 둔 값이고(보낸
+   * 기록이므로 그래야 한다), 이 셋은 **답장이 닿아야 하는 주소**다 — 번역가가 이메일을 바꿨다면
+   * 바뀐 쪽으로 가는 것이 맞다.
+   *
+   * 번역가나 PM 이 지정되지 않은 발주에서는 null 이고, 서식은 그 줄을 비워 둔다.
+   */
+  poTranEmail: string | null
+  poPmEmail: string | null
+  poPmPhone: string | null
+  /**
    * 업무 구분. **작업의 업무 구분과 별개다** — MICE 행사에 통역 발주를 내는 것이 정상이다.
    *
    * `poLang`(인쇄용 발주서의 한/영 서식)과 `poCatWord` 등 `poCat*`(CAT 분석 수치)은 전혀 다른
@@ -655,6 +667,36 @@ export interface PurchaseOrderRow {
   poContent: string | null
   poState: string | null
   poStateDt: string | null
+  /**
+   * 이 발주의 금액이 승인되었는가. **`poState` 와 완전히 별개의 값이다.**
+   *
+   * 화면이 그 별개를 지켜야 한다. 승인되지 않은 발주는 **상태가 무엇이든** 출력도 발송도 되지
+   * 않고, 반대로 승인된 발주가 아직 '미승인' 상태로 있는 것도 정상이다 — 금액은 결재됐고 일은
+   * 아직 시작하지 않은 경우다. 이 둘을 한 칸으로 합쳐 두었던 것이 db/015_payment.sql 이 고친
+   * 문제이고, 화면에서 다시 합치면 그 수정이 되돌아간다.
+   *
+   * **읽기 전용이다** — `PurchaseOrderInput` 에 없다. 승인은 `approvePurchaseOrder`(결제 권한)만
+   * 쓰고, 발주 수정 폼은 이 값을 건드릴 수 없다. 발주를 올릴 수 있는 사람이 자기 발주를 스스로
+   * 승인할 수 있다면 승인 절차가 아니라 형식이다.
+   *
+   * 기본값은 false 이고, ETL 이 넣는 행도 그렇다. 틀릴 때 안전한 방향이다 — 출력 화면이 잘못
+   * 거절한 발주는 그 자리에서 보고되지만, 잘못 발송된 발주는 아무도 보고하지 않는다.
+   */
+  poApproved: boolean
+  /** 승인 시각. 서버가 찍는다. 미승인이면 `null`. */
+  poApprovedAt: string | null
+  /** 승인한 사람의 `mgr_id`. 015 가 상태로 미루어 넣은 행에서는 `backfill-015`. */
+  poApprovedBy: string | null
+  /**
+   * 이 발주가 청구된 번역가 인보이스. 아직 청구되지 않았으면 `null`.
+   *
+   * 묶음의 **기준이 이 값이다** — 출력되는 인보이스의 발주 목록은 한 인보이스를 가리키는 발주들로
+   * 만든다. 아래 `invCode` 는 ETL·레거시 리포트를 위해 남긴 비정규 사본이고, 이 값이 `null` 인데
+   * `invCode` 가 채워져 있을 수 있다(뒤에 삭제된 인보이스의 번호).
+   *
+   * 읽기 전용이다. 이 값은 인보이스 발행·취소가 쓴다.
+   */
+  invoiceTranslatorId: string | null
   poInvoiceState: string | null
   poMoneyState: string | null
   poMoneyDay: string | null
@@ -713,6 +755,174 @@ export interface PurchaseOrderInput {
 
 /** 수정에는 `jobId` 가 없다. 발주를 다른 작업으로 옮기면 원가 귀속이 바뀐다. */
 export type PurchaseOrderUpdate = Omit<PurchaseOrderInput, 'jobId'>
+
+/**
+ * 발주 금액 승인·승인취소. `PATCH /api/v0/purchase-orders/:id/approval`.
+ *
+ * 발주 수정과 **다른 권한**으로 들어간다(결제:수정). 그래서 본문이 이 한 칸뿐이다 — 승인하는
+ * 사람이 금액을 바꿀 수 있는 사람이 되지 않게 하는 것이 이 엔드포인트가 따로 있는 이유다.
+ *
+ * `false` 로 보내면 승인이 내려간다. 승인 시각·승인자는 지워지지 않는다(누가 한 번 승인했었다는
+ * 사실은 기록이다) — 서버가 승인할 때만 그 둘을 덮어쓴다.
+ */
+export interface PoApprovalInput {
+  approved: boolean
+}
+
+/**
+ * 발주의 입금 기록. `PATCH /api/v0/purchase-orders/:id/settlement`.
+ *
+ * 역시 결제:수정 권한이고, 본문은 돈에 관한 여섯 칸으로 **좁혀져 있다**. 금액·물량·환율·납기·
+ * 번역가는 이 경로로 바꿀 수 없다 — 입금을 확인해 주는 사람이 얼마를 줘야 했는지를 고칠 수 있는
+ * 사람은 아니다.
+ *
+ * `poState` 가 들어 있는 것은 정산이 곧 사다리를 올리는 일이기 때문이다. '완료' 는 전액 지급을
+ * 뜻하므로(`PO_STATES` 주석) 상태와 지급 상태는 **같은 요청에서** 바뀌어야 하고, 따로 바꾸면 두
+ * 칸이 서로 다른 말을 하는 순간이 생긴다. 일부만 지급했으면 상태는 '납품' 에 두고
+ * `poMoneyState` 만 '부분정산' 으로 한다.
+ */
+export interface PoSettlementInput {
+  poState?: string | null
+  poInvoiceState?: string | null
+  poMoneyState?: string | null
+  poMoneyDay?: string | null
+  poMoneyPrice?: string | null
+  poMoneyGubun?: string | null
+}
+
+/* -------------------------------------------------------------------------- */
+/* 번역가 인보이스 — 지급 문서                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 번역가 인보이스 한 건. `invoice_translator` 한 행.
+ *
+ * ## 발주가 이미 하는 일과 다른 일을 한다
+ *
+ * 발주는 번역가 한 사람과 작업 하나에 대한 약속이고, 인보이스는 **번역가의 일을 청구하는 문서**다.
+ * 이 모듈이 따로 있어야 하는 이유는 하나의 인보이스가 **여러 발주**를 덮는다는 업무 사실 때문이다 —
+ * 한 달에 네 건을 한 번역가가 했으면 인보이스는 한 장이다. 그래서 묶음을 발주 쪽 플래그로 둘 수
+ * 없다. "이 인보이스에 어떤 발주들이 있는가" 는 집합이고, 집합은 걸릴 행이 필요하다.
+ *
+ * 역할 분담:
+ *
+ *   * `invoice_translator` — 문서. 번호, 발행일, 인쇄된 합계, 그 문서에 대해 기록된 입금.
+ *   * `purchase_order` — 일, 그리고 **지급 상태의 유일한 출처**.
+ *
+ * 인보이스는 발주의 상태를 소유하지 않는다. 인보이스를 발행했다고 발주가 '완료' 가 되지는 않는다 —
+ * 돈이 그렇게 만들고, '완료' 는 전액 지급을 뜻한다.
+ */
+export interface InvoiceRow {
+  id: string
+  /** `POL_000123`. 한 번 발급되고, 번역가에게 통보된 뒤로는 다시 만들지 않는다. */
+  invTranCode: string
+  coinCode: string | null
+  translatorId: string | null
+  /**
+   * 번역가 이름. **읽기 전용이다** — `InvoiceInput` 에 없다.
+   *
+   * 이 행은 인쇄되어 발송된다. 이름을 보낼 수 있게 두면 지급 문서에 누구 이름이 찍히는지를
+   * 클라이언트가 정하게 된다. 서버가 `translatorId` 로 조회해 넣는다.
+   */
+  tranName: string | null
+  /** 발행 담당자의 `mgr_id`. 역시 서버가 `invPmId` 로 조회해 넣는 사본이다. */
+  pmCode: string | null
+  pmName: string | null
+  invPmId: string | null
+  /** 발행일. 인보이스 서식의 DATE. */
+  invDay: string | null
+  /** 인쇄된 Sub Total. **다시 계산하지 않는다** — 보낸 문서에 적혀 있던 금액이다. */
+  invSum: string | null
+  /** 인쇄된 Tax. 세율이 아니라 **금액**이다. */
+  invTax: string | null
+  /** 지급 예정일. 서식의 PAYMENT DATE. */
+  invMoPday: string | null
+  invMoState: string | null
+  invMoGubun: string | null
+  /** 실제로 지급한 날. */
+  invMoDay: string | null
+  invMoSum: string | null
+  invMoTax: string | null
+  invState: string | null
+  /**
+   * 이 인보이스에 달린 (삭제되지 않은) 발주 수.
+   *
+   * 목록 행이 이 값을 들고 있는 이유는 **0 건인 인보이스가 실수의 모양**이기 때문이다 — 아무것도
+   * 청구하지 않는 문서다. 행마다 따로 조회하지 않고 보려면 여기 있어야 한다.
+   */
+  poCount: number
+  /**
+   * 달린 발주들의 합계(발주 통화)와 같은 합계의 원화 환산.
+   *
+   * `invSum` 과 **다른 질문이고**, 둘 다 보여 주는 것이 요점이다. `invSum` 은 번역가가 자기 문서에
+   * **청구한** 금액이고, `poSum` 은 발주들이 **일의 값이라고 말하는** 금액이다. 둘은 같아야 하며,
+   * 다르다는 것을 알아차릴 시점은 돈이 나가기 전이다.
+   */
+  poSum: string | null
+  poKsum: string | null
+  /**
+   * 인쇄용 LIST OF INVOICE 에 찍히는 연락처. 발주 쪽 `poTranEmail` 과 같은 이유로 **지금 값**이다.
+   */
+  tranEmail: string | null
+  pmEmail: string | null
+  pmPhone: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+/**
+ * 인보이스 발행.
+ *
+ * `poIds` 가 이것이 테이블인 이유다. 인쇄 서식의 머리글이 LIST OF INVOICE 이고 한 번호 아래 여러
+ * 발주를 하나의 Sub Total / Tax / Total 로 청구한다 — 발주 한 행이 가질 수 없는 신원이다.
+ *
+ * **비어 있을 수 없다.** 아무것도 청구하지 않는 인보이스는 돈을 받을 번역가에게 합계 0 짜리 문서를
+ * 보내는 일이고, 이 설계 전체가 막으려는 조용한 계산 오류가 바로 그것이다. 서버는 그 밖에도
+ * 다른 번역가의 발주, 아직 납품되지 않은 발주, 이미 다른 인보이스에 들어간 발주를 거절한다.
+ *
+ * `invTranCode` 는 없다. 서버가 시퀀스에서 뽑는다 — 다른 모든 문서 번호와 같다.
+ *
+ * 문서 언어 칸도 없다. 발주서는 주소를 적어 보내는 문서라 `poLang` 을 저장하지만, 인보이스는
+ * 필요할 때 다시 뽑는 문서이고 한/영 중 어느 서식을 원하는지는 **인쇄하는 순간의 질문**이다.
+ * 출력 화면이 그 토글을 들고 있다.
+ */
+export interface InvoiceInput {
+  /** 이 인보이스가 청구하는 번역가 한 사람. 필수 — 받을 사람 없는 인보이스는 보낼 수 없다. */
+  translatorId: string
+  /**
+   * 인보이스에 올릴 발주. 최소 1건, 최대 200건.
+   *
+   * 인쇄 서식의 열 칸보다 훨씬 위로 잡았다. 두 장으로 넘어가는 것은 서식의 문제이지만, 상한이
+   * 없는 배열은 상한 없는 `IN` 목록이고 요청 한 번으로 비용을 키울 수 있는 자리가 된다.
+   */
+  poIds: string[]
+  /** 발행일. 생략하면 서버가 오늘로 찍는다. */
+  invDay?: string | null
+  /** 발행 담당자. 이름·연락처가 서식의 서명란에 찍힌다. 생략하면 요청한 사람. */
+  invPmId?: string | null
+  coinCode?: string | null
+  invSum?: string | null
+  invTax?: string | null
+  invMoPday?: string | null
+  invMoState?: string | null
+  invMoGubun?: string | null
+  invMoDay?: string | null
+  invMoSum?: string | null
+  invMoTax?: string | null
+  invState?: string | null
+}
+
+/**
+ * 인보이스 수정.
+ *
+ * `translatorId` 가 없다. 인보이스를 다른 번역가에게 돌려 놓는 것은 잘못을 고치는 일이 아니라 한
+ * 사람의 일을 다른 사람에게 조용히 다시 청구하는 일이다. 취소하고 새로 발행하면 두 문서가 모두
+ * 기록에 남는다.
+ *
+ * `poIds` 는 남아 있고 **교체**다 — 생략하면 묶음을 그대로 두고, 보내면 "이것들만" 이다. 빠뜨린
+ * 발주를 넣는 것이 가장 흔한 수정이고, 그러려고 인보이스를 지워야 할 이유는 없다.
+ */
+export type InvoiceUpdate = Partial<Omit<InvoiceInput, 'translatorId'>>
 
 /* -------------------------------------------------------------------------- */
 /* 리포트                                                                      */

@@ -149,7 +149,7 @@ export function JobsView() {
     const label = row.jobName || row.jobCode
     if (
       !window.confirm(
-        `${label} 작업을 삭제할까요?\n이 작업의 매출이 집계에서 빠집니다. 발주가 달려 있으면 삭제할 수 없습니다.`,
+        `${label} 작업을 삭제할까요?\n이 작업의 매출이 집계에서 빠집니다. PO 가 달려 있으면 삭제할 수 없습니다.`,
       )
     ) {
       return

@@ -19,7 +19,14 @@ import type { IconName } from '@/shared/ui/Icon'
  * 매일 여는 업무 화면, 거래처 정보, 가끔 보는 집계, 한 달에 한 번 쓰는 관리. 여덟 개를 한 줄로
  * 세우면 그 차이가 사라지고, 담당자는 매번 같은 목록을 처음부터 훑는다.
  */
-export type NeotmsNavGroupId = 'dashboard' | 'work' | 'party' | 'insight' | 'admin' | 'trn'
+export type NeotmsNavGroupId =
+  | 'dashboard'
+  | 'work'
+  | 'party'
+  | 'insight'
+  | 'admin'
+  | 'trn'
+  | 'payment'
 
 /** 사이드바 메뉴. `menuId` 는 서버가 권한을 부여하는 단위이고, `path` 는 라우터의 경로다. */
 export interface NeotmsNavItem {
@@ -61,7 +68,18 @@ export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
   { id: 'work', label: '업무', icon: 'folder' },
   { id: 'party', label: '고객', icon: 'users' },
   { id: 'trn', label: '번역가', icon: 'globe' },
-//  { id: 'payment', label: '결제', icon: 'cart' },
+  /*
+   * 결제가 '업무' 와 따로 선 이유.
+   *
+   * 묶음은 모양이 아니라 **성격**으로 나눈다(이 배열 머리의 주석). 프로젝트·작업·PO는 담당자가
+   * 하루에 여러 번 여는 업무 화면이고, 결제는 **다른 사람이** 다른 때에 여는 화면이다 — 금액을
+   * 승인하고 입금을 확인하는 일이다. 같은 묶음에 넣으면 그 차이가 레일에서 사라지고, PO를
+   * 올리는 담당자는 자기가 쓰지 않는 탭을 매일 지나치게 된다.
+   *
+   * 권한도 실제로 다르다. `PAYMENT` 는 `PURCHASE_ORDER` 와 별개의 메뉴이고, 두 권한을 같은
+   * 사람에게 주지 않는 것이 승인 절차가 형식이 되지 않게 하는 장치다(shared/config.ts).
+   */
+  { id: 'payment', label: '결제', icon: 'cart' },
   { id: 'insight', label: '리포트', icon: 'chart' },
   { id: 'admin', label: '운영관리', icon: 'gear' },
 ]
@@ -70,7 +88,7 @@ export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
  * `hint` 가 선택 항목이 아닌 이유.
  *
  * 2차 패널은 메뉴 이름만 적어도 동작한다. 그런데 이 시스템의 이름들은 서로 구분이 잘 되지
- * 않는다 — '프로젝트' 와 '작업' 과 '발주' 는 셋 다 "일" 이고, 어느 것이 고객에게서 받은
+ * 않는다 — '프로젝트' 와 '작업' 과 'PO' 는 셋 다 "일" 이고, 어느 것이 고객에게서 받은
  * 일이고 어느 것이 번역가에게 내보내는 일인지는 이름만으로 알 수 없다. 레거시에서 신입
  * 담당자가 가장 많이 헤맨 지점이 정확히 여기다. 그래서 한 줄 설명을 필수 항목으로 두고,
  * 새 메뉴를 추가하는 사람이 "이건 무엇인가" 를 한 번은 적게 만든다.
@@ -86,7 +104,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
    * 하고 여기서는 아무것도 정하지 않는다.
    *
    * 이것은 권한이 넓어진 것이 아니다. 두 화면이 보여 주는 것은 전부 내 프로젝트와 그에 달린
-   * 작업·발주의 합계이고, 프로젝트 상세 화면이 이미 한 건씩 같은 값을 적는다. REPORT 로 걸면
+   * 작업·PO의 합계이고, 프로젝트 상세 화면이 이미 한 건씩 같은 값을 적는다. REPORT 로 걸면
    * 오히려 넓어진다(REPORT 는 남의 실적까지 본다) — 내 숫자를 보는 것이 특권이 되어서는 안 된다.
    *
    * **왜 맨 앞인가.** `NEOTMS_NAV_GROUPS` 의 'dashboard' 주석에 있다. 요약하면 `HomeRedirect`
@@ -104,14 +122,14 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     menuId: NeotmsMenuId.DASHBOARD_SALES,
     path: '/dashboard/sales',
     label: '대시보드(영업)',
-    hint: '영업담당자가 나인 프로젝트 현황',
+    hint: '영업 담당자용 대시보드',
     group: 'dashboard',
   },
   {
     menuId: NeotmsMenuId.DASHBOARD_PM,
     path: '/dashboard/pm',
     label: '대시보드(PM)',
-    hint: 'PM 이 나인 프로젝트 현황',
+    hint: 'PM용 대시보드',
     group: 'dashboard',
   },
   {
@@ -148,6 +166,44 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     label: '번역가',
     hint: '언어·분야·단가',
     group: 'trn',
+  },
+  /*
+   * 결제. **메뉴 둘, 권한 하나.**
+   *
+   * 화면이 둘인 이유는 두 화면이 서로 다른 질문에 답하기 때문이다. PO 화면은 "이 기간에 마감되는
+   * PO의 금액이 결재됐고 지급됐는가" 를 묻고, 인보이스 화면은 "이 번역가에게 보낸 청구서가
+   * 입금됐는가" 를 묻는다. 한 화면의 두 탭으로 두면 두 질문의 **필터가 한 주소를 공유**하고,
+   * 그래서 "인보이스 조건이 걸린 PO 화면" 이 링크로 공유될 수 있다. 메뉴를 둘로 나누면 주소
+   * 하나가 화면 하나를 가리킨다.
+   *
+   * **그런데 `menuId` 는 하나다.** 이 두 줄은 같은 `PAYMENT` 권한을 공유한다 — `readableNav` 가
+   * 항목별로 같은 메뉴를 보므로 둘은 **함께** 보이거나 함께 사라진다. 메뉴 아이디를 둘로 쪼개면
+   * `sys_menu` 행을 하나 더 넣는 마이그레이션과 `sys_role_grant_all_menus` 재부여가 또 필요하고
+   * (db/008·013·015 의 같은 경고), 얻는 것은 "승인은 되는데 인보이스는 안 되는" 역할인데 그
+   * 구분은 이미 다섯 동작이 하고 있다 — `update` 가 PO 승인과 입금, `create` 가 인보이스 발행,
+   * `delete` 가 인보이스 취소다(shared/config.ts 의 PAYMENT 항목).
+   *
+   * 다른 메뉴들처럼 이 줄만으로는 탭이 보이지 않는다. `sys_menu` 에 행이 있어야 `GET /api/v0/me`
+   * 의 응답에 들어오고 그 행은 db/015_payment.sql 이 넣는다 — 적용하지 않으면 탭이 없고, 주소를
+   * 직접 열면 403 이며, 어디에도 이유가 적히지 않는다.
+   *
+   * 경로가 `/payment/…` 로 한 겹 들어가 있는 것은 `activeNavItem` 때문이 아니라(그 함수는 긴
+   * 경로를 먼저 보므로 어느 쪽이든 맞는다) 두 화면이 한 묶음이라는 사실을 주소가 말하게 하려는
+   * 것이다. `/payment` 자체는 메뉴가 아니고 라우터에서 첫 화면으로 넘긴다(routes.tsx).
+   */
+  {
+    menuId: NeotmsMenuId.PAYMENT,
+    path: '/payment/purchase-orders',
+    label: 'PO 승인·정산',
+    hint: 'PO 금액 승인과 지급 기록',
+    group: 'payment',
+  },
+  {
+    menuId: NeotmsMenuId.PAYMENT,
+    path: '/payment/invoices',
+    label: '번역가 인보이스',
+    hint: '인보이스 발행·입금 기록',
+    group: 'payment',
   },
   {
     menuId: NeotmsMenuId.REPORT,

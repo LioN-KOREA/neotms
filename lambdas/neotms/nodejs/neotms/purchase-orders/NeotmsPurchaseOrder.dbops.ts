@@ -37,6 +37,16 @@
 //   * `po_lang` - which language the printed PO document is rendered in. Letterhead, not content.
 //   * `po_cat_use` / `po_cat_word` / `po_cat_mid` / `po_cat_stotal` - CAT-TOOL analysis, as in
 //     Trados. Nothing to do with 업무 분류, which is `po_category` and lives on the detail table.
+//
+// ## Three columns this module READS and does not WRITE
+//
+// `po_approved`, `po_approved_at` and `po_approved_by` (db/015_payment.sql) are returned on every
+// row and have no `PO_FIELDS` spec. That is the approval gate, and it is deliberate: a PO edit is
+// `PURCHASE_ORDER:update`, while signing off the money is `PAYMENT:update`, so putting the flag on
+// the general edit body would let every PM approve their own PO. `PoApprovalOps` below is the only
+// statement in the codebase that assigns it, and it exists so the gate is a route rather than a
+// convention. `invoice_translator_id` is the same arrangement for the opposite reason - the
+// invoicing module owns the grouping, exactly as it already owns `inv_code` and `inv_dt`.
 
 import {
   param,
@@ -63,8 +73,10 @@ import {
   scopeClause,
   scopeClauseForOne,
   searchClause,
+  EMPTY_CLAUSE,
   type FilterSpec,
   type ListQuery,
+  type SqlClause,
 } from "../NeotmsQuery.js";
 import {
   derivedInsert,
@@ -102,6 +114,26 @@ export type PurchaseOrderRow = {
   poPmName: string | null;
   translatorId: string | null;
   poTranName: string | null;
+  /**
+   * Contact details for the printed PURCHASE ORDER, from `translator` and `staff`.
+   *
+   * These three exist for one reason: the printed form has an `E-mail` row for the translator and a
+   * signature block carrying the PM's phone and address, and the form's layout is a thing the
+   * company has agreed on - a blank where an address belongs is not a smaller version of the form,
+   * it is a broken one.
+   *
+   * They are JOINED rather than denormalised, unlike `poPmName` and `poTranName` beside them. Those
+   * two are copies frozen at issue time because the PO is a record of what was sent; an address is
+   * the opposite - a translator who changes their email wants the NEXT order to reach them, so the
+   * current value is the correct one and a frozen copy would be a bug. For the same reason they are
+   * read-only here and have no entry in `PO_FIELDS`.
+   *
+   * Null from `RETURNING`, like the detail columns, because they need a join. Also null whenever the
+   * PO names no translator or no PM, which the document renders as an empty line.
+   */
+  poTranEmail: string | null;
+  poPmEmail: string | null;
+  poPmPhone: string | null;
   /** 업무 구분 - a JOBTYPE code. Independent of the job's; see the module header. */
   poType: string | null;
   /** From `po_detail_linguistic`, and null for a PO that has no such row. */
@@ -157,6 +189,28 @@ export type PurchaseOrderRow = {
   poState: string | null;
   /** When the state last changed. Written by the server, not by the client. */
   poStateDt: string | null;
+  /**
+   * Has the money on this PO been signed off. db/015_payment.sql.
+   *
+   * INDEPENDENT of `poState`, and the console must treat it that way: an unapproved PO cannot be
+   * printed or sent whatever state it is in, and an approved one may still be sitting at 미승인
+   * because the work has not started. Defaults false, including on anything the ETL inserts, which
+   * is the safe direction - a PO wrongly refused by the print screen is reported immediately,
+   * whereas one wrongly sent is not.
+   */
+  poApproved: boolean;
+  /** Server-stamped. Null on an unapproved PO, and on legacy rows 015 inferred approval for. */
+  poApprovedAt: string | null;
+  /** `staff.mgr_id`, or the literal `backfill-015` where 015 inferred it from the state. */
+  poApprovedBy: string | null;
+  /**
+   * The translator invoice this PO is billed on, or null for a PO not yet invoiced.
+   *
+   * AUTHORITATIVE for the grouping - the printed LIST OF INVOICE is built from the POs pointing at
+   * one invoice. `invCode` below is the denormalised copy kept for the ETL and legacy reports, and
+   * can be non-null while this is null: a legacy code naming an invoice that was later deleted.
+   */
+  invoiceTranslatorId: string | null;
   poInvoiceState: string | null;
   poMoneyState: string | null;
   poMoneyDay: string | null;
@@ -207,6 +261,10 @@ const poColumns = (q: string): string => `
   ${q}.po_content       AS po_content,
   ${q}.po_state         AS po_state,
   ${q}.po_state_dt      AS po_state_dt,
+  ${q}.po_approved      AS po_approved,
+  ${q}.po_approved_at   AS po_approved_at,
+  ${q}.po_approved_by   AS po_approved_by,
+  ${q}.invoice_translator_id AS po_invoice_translator_id,
   ${q}.po_invoice_state AS po_invoice_state,
   ${q}.po_money_state   AS po_money_state,
   ${q}.po_money_day     AS po_money_day,
@@ -267,6 +325,18 @@ const PO_DETAIL_COLUMNS = `
   ${PO_KRW} AS po_price_krw
 `;
 
+/**
+ * Contact details for the printed forms. See the three fields on `PurchaseOrderRow`.
+ *
+ * Kept out of `poColumns` for the same reason the detail columns are - they need a join, and
+ * `poColumns` goes into `RETURNING`.
+ */
+const PO_CONTACT_COLUMNS = `
+  tr.tran_email   AS po_tran_email,
+  st.mgr_email    AS po_pm_email,
+  st.mgr_phone    AS po_pm_phone
+`;
+
 export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
   id: readId(row, "po_id") ?? "",
   poCode: readText(row, "po_code") ?? "",
@@ -286,6 +356,9 @@ export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
   poPmName: readText(row, "po_pm_name"),
   translatorId: readId(row, "translator_id"),
   poTranName: readText(row, "po_tran_name"),
+  poTranEmail: readText(row, "po_tran_email"),
+  poPmEmail: readText(row, "po_pm_email"),
+  poPmPhone: readText(row, "po_pm_phone"),
   poType: readText(row, "po_type"),
   poSlang: readText(row, "po_slang"),
   poElang: readText(row, "po_elang"),
@@ -310,6 +383,13 @@ export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
   poContent: readText(row, "po_content"),
   poState: readText(row, "po_state"),
   poStateDt: readText(row, "po_state_dt"),
+  // `?? false` rather than `?? null`: the column is NOT NULL, so the only way this reads undefined
+  // is a row that did not come through `poColumns` at all - and "we do not know" must resolve to
+  // "not approved", never to "approved".
+  poApproved: readBool(row, "po_approved") ?? false,
+  poApprovedAt: readText(row, "po_approved_at"),
+  poApprovedBy: readText(row, "po_approved_by"),
+  invoiceTranslatorId: readId(row, "po_invoice_translator_id"),
   poInvoiceState: readText(row, "po_invoice_state"),
   poMoneyState: readText(row, "po_money_state"),
   poMoneyDay: readText(row, "po_money_day"),
@@ -402,6 +482,8 @@ const PO_FILTERS = {
   poCategory: { column: "pdn.po_category", kind: "text" },
   customerId: { column: "p.customer_id", kind: "id" },
   corpId: { column: "p.corp_id", kind: "id" },
+  /** Which invoice a PO is billed on. How the printed LIST OF INVOICE gets its lines. */
+  invoiceTranslatorId: { column: "po.invoice_translator_id", kind: "id" },
 } as const satisfies Record<string, FilterSpec>;
 
 export type PoFilters = Partial<Record<keyof typeof PO_FILTERS, string>> & {
@@ -410,9 +492,55 @@ export type PoFilters = Partial<Record<keyof typeof PO_FILTERS, string>> & {
   /** Settlement date range. The accounts screen's primary filter. */
   paidFrom?: string;
   paidTo?: string;
+  /**
+   * `'true'` or `'false'`. The 결제 screen's first question: what is waiting for approval.
+   *
+   * Deliberately NOT a `PO_FILTERS` entry, and this is the reason rather than an oversight.
+   * `filterClause` passes the raw string to `param`, and `param`'s `bool` branch is
+   * `Boolean(value)` - so `'false'` would arrive as TRUE. The filter would then silently return
+   * approved POs on the screen whose whole purpose is to list unapproved ones. Compared explicitly
+   * against the string below instead; anything else is treated as absent.
+   */
+  approved?: string;
+  /**
+   * `'true'` means "has no invoice yet". The invoice form's PO picker is built from this.
+   *
+   * Tests `invoice_translator_id IS NULL`, which no equality filter can express.
+   */
+  uninvoiced?: string;
 };
 
-const PO_SCOPE_COLUMNS = ["po.po_pm_id", "j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
+/**
+ * The four ownership columns a PO is visible through. Exported, and that is load-bearing.
+ *
+ * An invoice must be visible to whoever can see the POs on it, so `NeotmsInvoice.dbops.ts` resolves
+ * its row scope through these same columns rather than restating them. A copy would be the FOURTH
+ * in this codebase - the `REPORT_SCOPE_COLUMNS` equality test in test/neotms.test.ts exists because
+ * the third was already one too many - and the failure mode of a drifted copy is not an error but a
+ * screen that shows one person another's payables.
+ */
+export const PO_SCOPE_COLUMNS = ["po.po_pm_id", "j.job_pm_id", "p.prj_mgr_id", "p.prj_pm_id"];
+
+/**
+ * `AND po.po_approved = <bool>`, or nothing at all.
+ *
+ * Hand-rolled for the reason `PoFilters.approved` records: the generic equality filter would read
+ * the string `'false'` as true. Only the two exact spellings do anything here, so a stray
+ * `?approved=` or `?approved=maybe` widens the list rather than narrowing it to the wrong half.
+ */
+const approvedClause = (value: string | undefined): SqlClause => {
+  if (value !== "true" && value !== "false") return EMPTY_CLAUSE;
+  return {
+    fragment: "AND po.po_approved = :f_approved",
+    parameters: [param("f_approved", value === "true", "bool")],
+  };
+};
+
+/** `AND po.invoice_translator_id IS NULL` when asked. See `PoFilters.uninvoiced`. */
+const uninvoicedClause = (value: string | undefined): SqlClause =>
+  value === "true"
+    ? { fragment: "AND po.invoice_translator_id IS NULL", parameters: [] }
+    : EMPTY_CLAUSE;
 
 /**
  * The joins every read shares.
@@ -423,6 +551,14 @@ const PO_SCOPE_COLUMNS = ["po.po_pm_id", "j.job_pm_id", "p.prj_mgr_id", "p.prj_p
  *
  * `PO_KRW_JOIN` is LEFT with the same guarantee - it matches on `fx_rate_latest.currency_code`,
  * which the view makes unique by construction - and is what `po_price_krw` reads. NeotmsMoney.ts.
+ *
+ * `translator` and `staff` are LEFT and join on PRIMARY KEYS, so they too can neither drop a PO nor
+ * duplicate one, and they cost an index probe each. They are here rather than in the detail read
+ * alone so that `toPurchaseOrderRow` has one shape everywhere: a PO row that carried an address on
+ * the detail screen and null in the list would make the print modal depend on which screen opened
+ * it. Deliberately NOT filtered on `deleted` - a PO issued to a translator who has since left still
+ * has to print with the address it was sent to, and the `ON DELETE RESTRICT` on both FKs means the
+ * row is still there to read.
  */
 const PO_FROM = `
     FROM purchase_order po
@@ -430,6 +566,8 @@ const PO_FROM = `
     JOIN project p ON p.id = j.project_id   AND p.deleted = false
     LEFT JOIN po_detail_linguistic pdl ON pdl.po_id = po.id
     LEFT JOIN po_detail_non_linguistic pdn ON pdn.po_id = po.id
+    LEFT JOIN translator tr ON tr.id = po.translator_id
+    LEFT JOIN staff st      ON st.id = po.po_pm_id
     ${PO_KRW_JOIN}
 `;
 
@@ -458,13 +596,16 @@ export const PoListOps: (
     filterClause(PO_FILTERS, filters),
     rangeClause("due", "po.po_eday", filters.dueFrom, filters.dueTo),
     rangeClause("paid", "po.po_money_day", filters.paidFrom, filters.paidTo),
+    approvedClause(filters.approved),
+    uninvoicedClause(filters.uninvoiced),
   );
   const limit = limitClause(query);
   return {
     sql: `
       SELECT ${poColumns("po")},
       ${PO_PARENT_COLUMNS},
-      ${PO_DETAIL_COLUMNS}
+      ${PO_DETAIL_COLUMNS},
+      ${PO_CONTACT_COLUMNS}
       ${PO_FROM}
        WHERE po.deleted = false
       ${where.fragment}
@@ -485,7 +626,8 @@ export const PoGetOps: (caller: NeotmsCaller, id: string) => SqlOps<PurchaseOrde
     sql: `
       SELECT ${poColumns("po")},
       ${PO_PARENT_COLUMNS},
-      ${PO_DETAIL_COLUMNS}
+      ${PO_DETAIL_COLUMNS},
+      ${PO_CONTACT_COLUMNS}
       ${PO_FROM}
        WHERE po.id = :id
          AND po.deleted = false
@@ -505,9 +647,15 @@ export const PoGetOps: (caller: NeotmsCaller, id: string) => SqlOps<PurchaseOrde
  * The writable columns.
  *
  * Absent on purpose: `po_code` (minted, printed on the PO the translator receives), `inv_code` /
- * `inv_dt` (the invoicing module's), `po_state_dt` (set in SQL whenever the state changes - a
- * client-supplied "when did this change" is not an audit trail), and `project_id`, which is written
- * from the job. See the module header.
+ * `inv_dt` / `invoice_translator_id` (the invoicing module's), `po_state_dt` (set in SQL whenever
+ * the state changes - a client-supplied "when did this change" is not an audit trail), and
+ * `project_id`, which is written from the job. See the module header.
+ *
+ * And the three that are absent as a SECURITY boundary rather than as a convention: `po_approved`,
+ * `po_approved_at`, `po_approved_by`. Adding a spec for any of them here would make the approval
+ * gate writable through `PATCH /purchase-orders/{id}`, which is `PURCHASE_ORDER:update` - i.e. it
+ * would let every PM approve their own PO, which is the one thing the gate exists to prevent.
+ * `PoApprovalOps` is the only statement that assigns them.
  */
 const PO_FIELDS: readonly FieldSpec<PurchaseOrderUpdate & { jobId?: string }>[] = [
   { column: "job_id", kind: "id", read: (i) => i.jobId },
@@ -661,6 +809,157 @@ export const PoUpdateOps: (
     mapper: (rows) => (rows.length > 0 ? toPurchaseOrderRow(rows[0]!) : null),
   };
 };
+
+/* -------------------------------------------------------------------------- */
+/* 결제 - the approval gate and the invoice grouping                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Approve, or un-approve, one purchase order.
+ *
+ * The ONLY statement in the codebase that assigns `po_approved`. See the module header and the note
+ * on `PO_FIELDS`: this is a separate statement because it is a separate authority, reached through a
+ * route gated on `PAYMENT:update` rather than on `PURCHASE_ORDER:update`.
+ *
+ * ## The two stamps are written from the server, and only ever forward
+ *
+ * `po_approved_at` and `po_approved_by` are set from `now()` and the caller's `mgr_id` when
+ * approving, and **left alone** when un-approving. That asymmetry is the point: "approved by X at T,
+ * then revoked" is the useful record, and clearing the pair on revocation would erase the only
+ * evidence that the approval ever happened. The flag says whether it holds NOW; the stamps say who
+ * last granted it.
+ *
+ * `updated_at` is advanced but `po_state_dt` is NOT. Approval is not a workflow stage, and resetting
+ * the state clock would make a PO that has sat unacknowledged for three weeks look new to the PM
+ * chasing it - the hazard `PoUpdateOps` documents, in the one place it would be easiest to cause.
+ *
+ * Scoped, through the same four columns every other PO write uses. Approval authority decides WHO
+ * MAY approve; it does not widen WHICH POs a person can see.
+ */
+export const PoApprovalOps: (
+  caller: NeotmsCaller,
+  id: string,
+  approved: boolean,
+  ctx: WriteContext,
+) => SqlOps<PurchaseOrderRow | null> = (caller, id, approved, ctx) => {
+  const scope = scopeClauseForOne(caller, PO_SCOPE_COLUMNS);
+  return {
+    sql: `
+      UPDATE purchase_order po
+         SET po_approved    = :approved,
+             po_approved_at = CASE WHEN :approved THEN now() ELSE po.po_approved_at END,
+             po_approved_by = CASE WHEN :approved THEN :actor ELSE po.po_approved_by END,
+             updated_at     = now(),
+             created_by     = :actor
+        FROM job j, project p
+       WHERE po.id = :id
+         AND po.deleted = false
+         AND j.id = po.job_id
+         AND j.deleted = false
+         AND p.id = j.project_id
+         AND p.deleted = false
+      ${scope.fragment}
+      RETURNING ${poColumns("po")}
+    `,
+    parameters: [
+      param("id", id, "id"),
+      param("approved", approved, "bool"),
+      param("actor", ctx.actor, "text"),
+      ...scope.parameters,
+    ],
+    mapper: (rows) => (rows.length > 0 ? toPurchaseOrderRow(rows[0]!) : null),
+  };
+};
+
+/**
+ * Put a set of POs onto one invoice, and return how many were actually moved.
+ *
+ * ## Every predicate here is a refusal, and each one is a specific wrong invoice
+ *
+ * The count comes back so the manager can compare it with the number of ids asked for and FAIL the
+ * request rather than issue a short invoice. That is the whole design: an invoice quietly missing a
+ * PO is a translator quietly underpaid, and nothing downstream would notice.
+ *
+ *   * `translator_id = :translator_id` - a PO belonging to somebody else cannot be billed to this
+ *     translator. The most expensive mistake available on this screen.
+ *   * `po_state = ANY(:states)` - 납품 or 완료 only (`PO_STATES_INVOICEABLE`). There is nothing to
+ *     bill for work that has not been delivered.
+ *   * `invoice_translator_id IS NULL OR = :invoice_id` - a PO already on ANOTHER invoice is not
+ *     silently moved. Re-running the same assignment is a no-op, which is what makes the update
+ *     path's replace-the-set behaviour safe.
+ *   * the scope clause - the caller must be able to see the PO.
+ *
+ * `inv_code` is written alongside, because it is the denormalised copy the ETL and the legacy
+ * reports join by (db/015_payment.sql section 2). Writing one without the other is how the pair
+ * starts disagreeing, so they are assigned in the same statement, never in two.
+ */
+export const PoInvoiceAssignOps: (
+  caller: NeotmsCaller,
+  invoiceId: string,
+  invoiceCode: string,
+  translatorId: string,
+  poIds: readonly string[],
+  states: readonly string[],
+) => SqlOps<number> = (caller, invoiceId, invoiceCode, translatorId, poIds, states) => {
+  const scope = scopeClauseForOne(caller, PO_SCOPE_COLUMNS);
+  return {
+    sql: `
+      UPDATE purchase_order po
+         SET invoice_translator_id = :invoice_id,
+             inv_code   = :invoice_code,
+             inv_dt     = now(),
+             updated_at = now()
+        FROM job j, project p
+       WHERE po.id = ANY(:po_ids)
+         AND po.deleted = false
+         AND po.translator_id = :translator_id
+         AND po.po_state = ANY(:states)
+         AND (po.invoice_translator_id IS NULL OR po.invoice_translator_id = :invoice_id)
+         AND j.id = po.job_id
+         AND j.deleted = false
+         AND p.id = j.project_id
+         AND p.deleted = false
+      ${scope.fragment}
+      RETURNING po.id AS po_id
+    `,
+    parameters: [
+      // `ANY(array)` rather than an interpolated `IN` list: one placeholder whatever the length, so
+      // the statement text is identical for one PO and for two hundred and the plan is cached once.
+      param("po_ids", poIds, "idArray"),
+      param("states", states, "textArray"),
+      param("invoice_id", invoiceId, "id"),
+      param("invoice_code", invoiceCode, "text"),
+      param("translator_id", translatorId, "id"),
+      ...scope.parameters,
+    ],
+    mapper: (rows) => rows.length,
+  };
+};
+
+/**
+ * Take every PO off one invoice.
+ *
+ * Run immediately before a re-assignment on the update path - "these and only these" - and on its
+ * own when an invoice is voided. `inv_code` is cleared with the id for the reason
+ * `PoInvoiceAssignOps` sets them together.
+ *
+ * Unscoped, and deliberately, for the reason `PoDetailClearOps` gives: it runs only inside a
+ * transaction in which a scoped read of the INVOICE has already authorised the caller, and a fifth
+ * copy of the four-column scope predicate is a worse risk than its absence here. Note what it is
+ * keyed on - `invoice_translator_id`, not a list of PO ids - so it cannot reach a PO that was not on
+ * this invoice in the first place.
+ */
+export const PoInvoiceDetachOps = (invoiceId: string): SqlWriteOps => ({
+  sql: `
+    UPDATE purchase_order
+       SET invoice_translator_id = NULL,
+           inv_code   = NULL,
+           inv_dt     = NULL,
+           updated_at = now()
+     WHERE invoice_translator_id = :invoice_id
+  `,
+  parameters: [param("invoice_id", invoiceId, "id")],
+});
 
 /* -------------------------------------------------------------------------- */
 /* The type-specific detail rows                                              */

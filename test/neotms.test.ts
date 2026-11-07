@@ -726,18 +726,18 @@ describe("the empty-database bootstrap", () => {
      * Every seed file, because the menus are deliberately split across several. 006 holds the six
      * business menus and is the lockout-recovery file - its one job is to stay the thing an operator
      * can run without deciding anything, so new menus are not added to it. 008 holds the two
-     * administrative ones, and 013 the two dashboards. Scanning all of them means none can be the one
-     * that was forgotten, which is the real risk now that there is more than one: this very test
-     * failed on MAINTENANCE the moment `NeotmsMenu` grew, and again on DASHBOARD_SALES and
-     * DASHBOARD_PM, which is exactly what it is for.
+     * administrative ones, 013 the two dashboards, and 015 the 결제 section. Scanning all of them
+     * means none can be the one that was forgotten, which is the real risk now that there is more
+     * than one: this very test failed on MAINTENANCE the moment `NeotmsMenu` grew, and again on
+     * DASHBOARD_SALES and DASHBOARD_PM, which is exactly what it is for.
      *
      * The list is literal rather than every `db/*.sql`, so that adding a menu to `NeotmsMenu` and a
      * row to a brand-new file is not enough on its own - the file has to be named here, which is
      * also what puts it under the editor-safety assertions further down.
      */
     const seeded = new Set(
-      ["006_bootstrap.sql", "008_admin.sql", "013_dashboard_menus.sql"].flatMap((file) =>
-        [...sqlCode(file).matchAll(/^\s*\('([A-Z_]+)',/gm)].map((m) => m[1]),
+      ["006_bootstrap.sql", "008_admin.sql", "013_dashboard_menus.sql", "015_payment.sql"].flatMap(
+        (file) => [...sqlCode(file).matchAll(/^\s*\('([A-Z_]+)',/gm)].map((m) => m[1]),
       ),
     );
     for (const menuId of Object.values(NeotmsMenu)) {
@@ -897,6 +897,7 @@ describe("the empty-database bootstrap", () => {
       "012_job_pricing.sql",
       "013_dashboard_menus.sql",
       "014_fx_rates.sql",
+      "015_payment.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -2205,10 +2206,20 @@ describe("the 대시보드 aggregate", () => {
      * dropdown writes it, every row saved with it lands in `unrecognisedState`, and the warning
      * banner then blames the data for what is actually a mismatch between two of our own files.
      */
+    /*
+     * TWO files, not one, and the second is not a leak.
+     *
+     * 진행, 완료 and 취소 are words in BOTH vocabularies: a project is 진행 and so is a PO. They are
+     * not the same value - `project.prj_state` and `purchase_order.po_state` are different columns
+     * answering different questions - so they get a module each, and the test allows exactly those
+     * two. A third file matching this pattern is the thing being caught: anything else holding one of
+     * these literals is a counter or a filter built on a guess, which is the failure mode the two
+     * modules exist to prevent.
+     */
     const offenders = walkTs(neotmsLambdaDir)
       .map((file) => path.relative(neotmsLambdaDir, file))
       .filter((relative) => /["'](진행|보류|완료|취소|견적)["']/.test(tsCode(relative)));
-    expect(offenders).toEqual(["NeotmsProjectStates.ts"]);
+    expect(offenders.sort()).toEqual(["NeotmsPoStates.ts", "NeotmsProjectStates.ts"]);
 
     const states = tsCode("NeotmsProjectStates.ts");
     const server = [
@@ -2230,6 +2241,71 @@ describe("the 대시보드 aggregate", () => {
       (m) => m[1] ?? new RegExp(`${m[2]!} = '([^']+)'`).exec(codes)?.[1],
     );
     expect(client).toEqual(server);
+  });
+
+  test("the 발주 상태 ladder matches on both sides, and 완료 means paid in full", () => {
+    /*
+     * The PO half of the test above, and it carries one hazard the project half does not:
+     * db/015_payment.sql RENAMES two values in live data (발주 -> 미승인, 수락 -> 진행). A rename is
+     * exactly the event that leaves a literal somewhere matching nothing, and a filter that matches
+     * nothing returns an empty list rather than an error - which on the 승인·정산 screen reads as
+     * "nothing is waiting for approval", the one sentence that screen must never say wrongly.
+     *
+     * Read through the exported constants rather than by matching the Korean words, so the test
+     * fails on a REORDERED ladder too. Order is meaning here: the four rungs are a sequence, and the
+     * screens that ask "how far along" read position, not just membership.
+     */
+    /*
+     * Comments stripped (`tsCode`, as the project half does): the module's own docstrings spell the
+     * ladder out in prose, and a regex that reads prose would pass on a module whose exports say
+     * something else entirely.
+     */
+    const states = tsCode("NeotmsPoStates.ts");
+    const names = (block: string) => [...block.matchAll(/PO_STATE_(\w+)/g)].map((m) => m[1]!);
+    const valueOf = (name: string) =>
+      new RegExp(`PO_STATE_${name} = "([^"]+)"`).exec(states)?.[1];
+
+    const ladder = names(
+      /PO_STATES: readonly string\[\] = \[([\s\S]*?)\]/.exec(states)?.[1] ?? "",
+    );
+    expect(ladder.map(valueOf)).toEqual(["미승인", "진행", "납품", "완료", "취소"]);
+
+    /*
+     * 납품 must NOT be closed and must BE invoiceable. That pair is the user's correction written as
+     * an assertion: a partly-paid PO sits at 납품, so it still owes money (not closed) while the work
+     * exists to be billed (invoiceable). Getting either one wrong is silent - a delivered PO would
+     * either drop out of the outstanding-payables count, or become unbillable.
+     */
+    const closed = names(
+      /PO_STATES_CLOSED: readonly string\[\] = \[([\s\S]*?)\]/.exec(states)?.[1] ?? "",
+    ).map(valueOf);
+    expect(closed).toEqual(["완료", "취소"]);
+    expect(closed).not.toContain("납품");
+
+    const invoiceable = names(
+      /PO_STATES_INVOICEABLE: readonly string\[\] = \[([\s\S]*?)\]/.exec(states)?.[1] ?? "",
+    ).map(valueOf);
+    expect(invoiceable).toEqual(["납품", "완료"]);
+
+    /*
+     * The client's copy. `PO_STATES` is a `CodeOption[]` built from the same constant names, so the
+     * two lists are compared through those names - a client that spells a value differently in its
+     * own `PO_STATE_*` declaration still fails.
+     */
+    const codes = frontendFile("apis", "neotms.codes.ts");
+    const clientBlock = /export const PO_STATES: readonly CodeOption\[\][^=]*=\s*\[([\s\S]*?)\n\]/
+      .exec(codes)?.[1] ?? "";
+    expect(clientBlock).not.toBe("");
+    const clientLadder = [...clientBlock.matchAll(/PO_STATE_(\w+)/g)].map(
+      (m) => new RegExp(`PO_STATE_${m[1]!} = '([^']+)'`).exec(codes)?.[1],
+    );
+    expect(clientLadder).toEqual(ladder.map(valueOf));
+
+    const clientInvoiceable = [
+      ...(/PO_STATES_INVOICEABLE: readonly string\[\] = \[([^\]]*)\]/.exec(codes)?.[1] ?? "")
+        .matchAll(/PO_STATE_(\w+)/g),
+    ].map((m) => new RegExp(`PO_STATE_${m[1]!} = '([^']+)'`).exec(codes)?.[1]);
+    expect(clientInvoiceable).toEqual(invoiceable);
   });
 
   test("every nav path has a route, and both dashboards are in both tables", () => {
@@ -2715,5 +2791,293 @@ describe("context overrides", () => {
         Variables: Match.objectLike({ NEOTMS_APP_AUTHORITY_ID: "authority-from-context" }),
       },
     });
+  });
+});
+
+describe("the 결제 print documents", () => {
+  const frontendRoot = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "frontend",
+    "src",
+  );
+  const frontendFile = (...segments: string[]) =>
+    readFileSync(path.join(frontendRoot, ...segments), "utf8");
+  const printDir = path.join(frontendRoot, "features", "payment", "print");
+  const printFile = (name: string) => readFileSync(path.join(printDir, name), "utf8");
+
+  /**
+   * The same file with its comments stripped - `tsCode`'s counterpart for the console, and needed
+   * here for a sharper reason than usual.
+   *
+   * Every negative assertion below names a legacy construct: `allowTaint`, `heightLeft`,
+   * `window.print()`, `display: none`. These files document each of those by name, at length,
+   * because the whole point of the modules is that they deliberately do NOT use them. So a test
+   * reading raw source could only ever assert the useless "this file never mentions it", which
+   * would forbid the documentation and permit the bug.
+   *
+   * JSX comments are block comments wrapped in braces, so they are stripped by the same rule.
+   */
+  const printCode = (name: string) =>
+    printFile(name)
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ");
+
+  test("the legacy html2canvas options that now fail SILENTLY are gone", () => {
+    /*
+     * The highest-value assertion here, because both of these are invisible failures rather than
+     * errors.
+     *
+     * `onrendered` was html2canvas 0.4.x's only way to get the canvas back. It was REMOVED in 1.x:
+     * the option is simply ignored, so the canvas is rendered, handed to nobody, and discarded. No
+     * throw, no console warning - the 저장 button just does nothing, and "nothing happened" is the
+     * hardest symptom to attribute to a library upgrade.
+     *
+     * `allowTaint: true` is worse because it breaks a DIFFERENT step from the one it appears on. It
+     * permits cross-origin pixels into the canvas, which taints it, and a tainted canvas throws
+     * SecurityError from `toDataURL()` - the capture succeeds and the SAVE fails. The logo is
+     * bundled and same-origin, so `useCORS` alone covers it.
+     *
+     * Both lines were copy-pasted forward from 2013 in all four templates. Asserting their absence
+     * is cheap; rediscovering why the button is dead is not.
+     */
+    const pdf = printCode("exportPdf.ts");
+    expect(pdf).not.toMatch(/onrendered/);
+    expect(pdf).not.toMatch(/allowTaint/);
+    expect(pdf).toMatch(/useCORS\s*:\s*true/);
+    /*
+     * The background must be stated. html2canvas defaults to transparent, and a transparent PNG on
+     * a PDF page renders BLACK in several viewers - with #555 body text on it.
+     */
+    expect(pdf).toMatch(/backgroundColor\s*:\s*['"]#ffffff['"]/);
+  });
+
+  test("the capture wrapper is max-content, or every PDF is cut off on a narrow window", () => {
+    /*
+     * The failure this prevents is visible only in the saved file. A plain block element takes its
+     * parent's width, so on a window narrower than the form's fixed 1000px the wrapper measures
+     * narrower than its contents; html2canvas uses the element's own width, and the right-hand
+     * columns - RATE, SUB TOTAL, TOTAL - are simply not in the PDF. On screen everything looks
+     * right, because the viewport scrolls.
+     *
+     * `fit-content` is the near-miss, not a synonym: it means "shrink to the space available",
+     * which reintroduces this exact bug the day the form stops being a fixed width.
+     */
+    const css = printFile("PrintDocModal.module.css");
+    expect(/\.docFrame\s*\{[^}]*max-content/.test(css)).toBe(true);
+    expect(css).not.toMatch(/\.docFrame\s*\{[^}]*fit-content/);
+  });
+
+  test("only one language's form exists at a time - the other is not hidden", () => {
+    /*
+     * html2canvas reads COMPUTED styles. A `display: none` sibling measures zero, so the common
+     * "render both, hide one" tab pattern produces either a blank page or - if the wrong one is
+     * captured - a PDF in the language the screen is not showing. Both are silent.
+     *
+     * The structural guarantee is that `children` is a FUNCTION of the language, so the form that
+     * is not selected does not exist in the DOM. Asserted on the type, because the type is what
+     * forces every caller into the same shape.
+     */
+    expect(printFile("PrintDocModal.tsx")).toMatch(
+      /children:\s*\(lang:\s*PrintLang\)\s*=>\s*ReactNode/,
+    );
+    expect(printCode("PrintDocModal.tsx")).not.toMatch(/display:\s*['"]?none/);
+  });
+
+  test("printing goes through an iframe, never window.print() on the app", () => {
+    /*
+     * There are no `@media print` rules anywhere in this console, and the reason is that the legacy
+     * form WAS the whole page (PDF_Po_KOR.asp, whose 닫기 was `self.close()`). So `window.print()`
+     * from inside the SPA sends the left rail, the top bar, the PO list behind the modal and the
+     * translucent backdrop to the printer, and nothing says so until paper comes out.
+     *
+     * The iframe owns the only `.print()` call. Asserted across the whole folder so a later "quick
+     * fix" inside a component is caught rather than shipped.
+     */
+    const files = readdirSync(printDir).filter((f) => f.endsWith(".ts") || f.endsWith(".tsx"));
+    expect(files.filter((f) => /\bwindow\.print\s*\(/.test(printCode(f)))).toEqual([]);
+    /*
+     * The iframe's own call is `win.print()` on the frame's contentWindow, not `window.print()`, so
+     * the assertion above does not merely exclude the file that does the printing - it would catch
+     * printElement.ts too if that module ever reached for the app's window.
+     */
+    expect(printCode("printElement.ts")).toMatch(/\bwin\.print\(\)/);
+
+    /*
+     * And the iframe document must carry the app's styles in BOTH forms. Vite injects `<style>` in
+     * development and emits `<link rel="stylesheet">` in a build, so collecting one of the two
+     * yields a form that prints correctly in dev and unstyled in production, or the reverse - the
+     * worst possible split, because the broken side is the one nobody tests on.
+     */
+    const print = printFile("printElement.ts");
+    expect(print).toContain('style, link[rel="stylesheet"]');
+    expect(print).toContain("srcdoc");
+  });
+
+  test("the PDF slices pages instead of re-placing one tall image, and keeps the tail", () => {
+    /*
+     * Legacy placed the full-height canvas on every page at a negative offset
+     * (`position = heightLeft - imgHeight`), so an N-page PO embedded the same full-height PNG N
+     * times and every page decoded all of it.
+     *
+     * The threshold matters more than the slicing. Legacy's loop was `while (heightLeft >= 20)` -
+     * in millimetres, so up to 20mm of the document was dropped off the end. 20mm is about four
+     * lines of body text, and what sits at the end of a PO is the PM's name, phone and e-mail. A
+     * signature block that silently does not print is the expensive bug here.
+     */
+    const pdf = printCode("exportPdf.ts");
+    expect(pdf).toMatch(/MIN_TAIL_MM\s*=\s*2\b/);
+    expect(pdf).not.toContain("heightLeft");
+    expect(pdf).toContain("drawImage(");
+    /*
+     * Each page is encoded from its OWN slice canvas. `canvas.toDataURL()` - the whole capture -
+     * is the legacy shape, and seeing it here would mean the slicing loop is decorative.
+     */
+    expect(pdf).toContain("slice.toDataURL(");
+    expect(pdf).not.toContain("canvas.toDataURL(");
+  });
+
+  test("PO 문서 출력 is gated on approval, on the screen as well as in the message", () => {
+    /*
+     * The approval gate is the point of the whole 결제 section: an unapproved PO must not reach the
+     * translator. The screen's 승인 해제 confirmation already PROMISES this - "해제된 PO는 출력도
+     * 정산도 할 수 없습니다" - and a promise in a confirm dialog that the button does not keep is
+     * worse than no gate at all, because the person who read it stops checking.
+     *
+     * The asserted wording says PO, not 발주. That is this company's own vocabulary and the reason
+     * the string reads the way it does; pinning it here is what stops a later "tidy-up" from
+     * reintroducing a word the business does not use.
+     */
+    const view = frontendFile("features", "payment", "PoPaymentView.tsx");
+    expect(view).toContain("해제된 PO는 출력도 정산도 할 수 없습니다");
+    expect(view).toMatch(
+      /onClick=\{\(\) => setPrinting\(row\)\}\s*\n\s*disabled=\{!row\.poApproved\}/,
+    );
+  });
+
+  test("the payment screens open already filtered, and only when the URL says nothing", () => {
+    /*
+     * A blank list was the old default, and on this table that is the one answer nobody wants: the
+     * PO list carries no date restriction of its own, so an unfiltered read is the whole history.
+     * Both screens therefore arrive with a query already made - PO on 승인됨 plus a 마감일 window,
+     * invoices on a 발행일 window - and the window is today ±30 days.
+     *
+     * `DEFAULT_FROM`/`DEFAULT_TO` must be module-level constants, as in ReportsView: computed per
+     * render they would be a new value on every pass, and a react-query key that changes every
+     * render refetches forever.
+     *
+     * The `activeCount === 0` rule is the subtle half. `useUrlFilters` deletes empty keys, so
+     * "전체 기간, no dates" and "just arrived from the menu" produce the same empty URL. Reading the
+     * defaults only when NOTHING is in the URL is what keeps a deliberately cleared date box
+     * cleared, instead of silently restoring today ±30 under the user.
+     */
+    for (const name of ["PoPaymentView.tsx", "InvoicePaymentView.tsx"]) {
+      const view = frontendFile("features", "payment", name);
+      expect(view).toMatch(/const DEFAULT_FROM = dateKstOffsetDays\(-30\)/);
+      expect(view).toMatch(/const DEFAULT_TO = dateKstOffsetDays\(30\)/);
+      expect(view).toContain("const pristine = activeCount === 0");
+      // 전체 selects need a non-empty sentinel for exactly the reason above.
+      expect(view).toMatch(/const FILTER_ALL = 'all'/);
+    }
+
+    /*
+     * The PO screen's own default is 승인됨. It is the 결제 desk, not the approval queue - the work
+     * done here (printing, settling) is only possible on an approved PO, so anything else is noise.
+     */
+    const po = frontendFile("features", "payment", "PoPaymentView.tsx");
+    expect(po).toMatch(/approved:\s*'true'/);
+  });
+
+  test("the PO list can be cut by date, and sends only one of the two ranges", () => {
+    /*
+     * `PO_FILTERS` has had dueFrom/dueTo and paidFrom/paidTo all along, and
+     * `NeotmsPurchaseOrderManager.readFilters` has read all four - the only thing missing was a
+     * field on the client's query type, so no screen could send them. This pins the client side.
+     */
+    const api = frontendFile("apis", "neotms.api.ts");
+    for (const field of ["dueFrom", "dueTo", "paidFrom", "paidTo"]) {
+      expect(api).toContain(`${field}?: string | null`);
+    }
+
+    /*
+     * And the screen sends ONE pair, chosen by 기간 기준 - the ProjectsView rule. The server ANDs
+     * the two ranges, so filling all four silently asks a different question ("due inside this
+     * window AND paid inside it too") than the two boxes on screen appear to ask.
+     */
+    const po = frontendFile("features", "payment", "PoPaymentView.tsx");
+    expect(po).toContain("dueFrom: onDue ? chosen.from || undefined : undefined");
+    expect(po).toContain("paidFrom: onPaid ? chosen.from || undefined : undefined");
+  });
+
+  test("결제 is two menu items under one menu id", () => {
+    /*
+     * The two screens answer different questions, so one address must mean one screen - hence two
+     * nav items and two routes. But they share `PAYMENT` as the menu id, which is deliberate: the
+     * id is the permission unit, and splitting it would need another db/0NN migration plus a
+     * `sys_role_grant_all_menus` re-grant (the hazard 008, 013 and 015 all carry a warning about).
+     * The five action flags already separate seeing the screens from approving a PO from issuing an
+     * invoice.
+     *
+     * `readableNav` filters per item, so two items on one id appear and disappear together - the
+     * property that makes this safe. And `/payment` keeps a redirect, because links and bookmarks
+     * were made while 결제 was a single screen with tabs.
+     */
+    const perms = frontendFile("shared", "permissions.ts");
+    expect(perms).toContain("path: '/payment/purchase-orders'");
+    expect(perms).toContain("path: '/payment/invoices'");
+    expect(perms.match(/menuId: NeotmsMenuId\.PAYMENT/g)?.length).toBe(2);
+
+    const routes = frontendFile("routes.tsx");
+    expect(routes).toContain("payment/purchase-orders");
+    expect(routes).toContain("payment/invoices");
+    expect(routes).toContain('<Navigate to="/payment/purchase-orders" replace />');
+  });
+
+  test("the invoice form is not drawn until its POs have arrived", () => {
+    /*
+     * An invoice's line items are its POs, fetched separately - `InvoiceRow` holds only the totals.
+     * Render the form while that read is in flight and it draws ten blank rows under a real Total,
+     * which does not look broken; it looks like an invoice billing nothing. Nothing stops PDF저장
+     * being pressed on it, and the saved file does not say it was incomplete.
+     *
+     * `limit: 200` is the other half: the server's page ceiling and the per-invoice PO ceiling are
+     * both 200, so one request always holds the whole statement. Paginating it would mean a
+     * settlement document whose row count depends on how many times somebody clicked 더 보기.
+     */
+    const modal = printFile("InvoicePrintModal.tsx");
+    expect(modal).toMatch(/limit:\s*200/);
+    expect(modal).toContain("if (!posQuery.isSuccess)");
+  });
+
+  test("the PO form reads the 업무 구분 through isLinguistic rather than comparing it", () => {
+    /*
+     * A MICE or IMC purchase order has no language pair; it has a 업무 분류. `isLinguistic()` already
+     * carries the judgement that an UNKNOWN type counts as non-linguistic, so a fourth 업무 구분 added
+     * later from 유지보수 prints its category instead of `? > ?`. Comparing against the constant
+     * inline would lose that, and the loss shows up only on the printed order of a type nobody has
+     * added yet.
+     */
+    const po = printFile("PoPrintDoc.tsx");
+    expect(po).toContain("isLinguistic(po.poType)");
+    expect(po).not.toMatch(/poType\s*(\?\?[^=]*)?===/);
+  });
+
+  test("the modern PDF libraries are the installed ones", () => {
+    /*
+     * Replacing the 2013 copies was asked for explicitly. Pinned here because the imports would
+     * typecheck against whatever happens to be in node_modules on one machine.
+     *
+     * `html2canvas-pro` rather than `html2canvas`: the original has been unmaintained since 2022
+     * and throws on modern CSS colour functions, while the fork keeps the same API surface.
+     */
+    const pkg = JSON.parse(
+      readFileSync(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "package.json"),
+        "utf8",
+      ),
+    ) as { dependencies: Record<string, string> };
+    expect(Object.keys(pkg.dependencies)).toContain("jspdf");
+    expect(Object.keys(pkg.dependencies)).toContain("html2canvas-pro");
+    expect(Object.keys(pkg.dependencies)).not.toContain("html2canvas");
   });
 });

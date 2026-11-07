@@ -6,6 +6,8 @@ import {
   fetchCustomers,
   fetchDashboard,
   fetchFxRates,
+  fetchInvoice,
+  fetchInvoices,
   fetchJob,
   fetchJobs,
   fetchProfile,
@@ -19,6 +21,7 @@ import {
   fetchTranslator,
   fetchTranslators,
   fetchWorkload,
+  type InvoiceListQuery,
   type JobListQuery,
   type ProjectListQuery,
   type PurchaseOrderListQuery,
@@ -298,6 +301,7 @@ export const usePurchaseOrders = makeListHook(
   neotmsKeys.purchaseOrderList,
   fetchPurchaseOrders,
 )
+export const useInvoices = makeListHook(neotmsKeys.invoiceList, fetchInvoices)
 
 /* -------------------------------------------------------------------------- */
 /* 상세                                                                        */
@@ -343,6 +347,15 @@ export function usePurchaseOrder(id: string | null) {
   return useQuery({
     queryKey: neotmsKeys.purchaseOrder(id ?? ''),
     queryFn: ({ signal }) => fetchPurchaseOrder(id!, signal),
+    enabled: !!id,
+    staleTime: DETAIL_STALE_MS,
+  })
+}
+
+export function useInvoice(id: string | null) {
+  return useQuery({
+    queryKey: neotmsKeys.invoice(id ?? ''),
+    queryFn: ({ signal }) => fetchInvoice(id!, signal),
     enabled: !!id,
     staleTime: DETAIL_STALE_MS,
   })
@@ -402,4 +415,10 @@ export function useDashboard(role: DashboardRole) {
   })
 }
 
-export type { JobListQuery, ProjectListQuery, PurchaseOrderListQuery, TranslatorListQuery }
+export type {
+  InvoiceListQuery,
+  JobListQuery,
+  ProjectListQuery,
+  PurchaseOrderListQuery,
+  TranslatorListQuery,
+}

@@ -6,7 +6,7 @@ import { RecordPicker, type PickerOption } from '@/shared/ui/RecordPicker'
 /**
  * 작업 한 건을 `PickerOption` 으로.
  *
- * 부제에 프로젝트와 고객사를 넣는다. 발주를 어느 작업에 달지 고르는 자리이고, 잘못 고르면
+ * 부제에 프로젝트와 고객사를 넣는다. PO 를 어느 작업에 달지 고르는 자리이고, 잘못 고르면
  * **원가가 다른 작업의 매출에 붙는다** — 두 작업 모두 마진이 틀리고, 틀렸다는 사실은 어느
  * 화면에도 표시되지 않는다. 작업명만으로는 '번역' 처럼 같은 이름이 흔하므로 맥락이 필요하다.
  */
@@ -62,7 +62,7 @@ export function JobPicker({ value, onChange, required = false, disabled = false 
       placeholder="작업명 · 코드 · 프로젝트"
       hint={
         submitted && !value && options.length === 0 && !jobsQuery.isLoading
-          ? `'${submitted}' 로 찾은 작업이 없습니다. 발주는 작업에 달립니다 — 작업을 먼저 등록해 주세요.`
+          ? `'${submitted}' 로 찾은 작업이 없습니다. PO 는 작업에 달립니다 — 작업을 먼저 등록해 주세요.`
           : undefined
       }
     />

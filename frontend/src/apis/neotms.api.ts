@@ -9,11 +9,16 @@ import type {
   DashboardRole,
   DashboardSummary,
   FxRateListView,
+  InvoiceInput,
+  InvoiceRow,
+  InvoiceUpdate,
   JobInput,
   JobRow,
   JobUpdate,
   ListPage,
   ListQuery,
+  PoApprovalInput,
+  PoSettlementInput,
   ProfileView,
   ProjectInput,
   ProjectRow,
@@ -316,7 +321,7 @@ export const deleteJob = (id: string) =>
   neotmsApi<void>(`/api/v0/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 /* -------------------------------------------------------------------------- */
-/* 발주(PO)                                                                    */
+/* PO                                                                          */
 /* -------------------------------------------------------------------------- */
 
 export interface PurchaseOrderListQuery extends ListQuery {
@@ -327,6 +332,47 @@ export interface PurchaseOrderListQuery extends ListQuery {
   pmId?: string | null
   invoiceState?: string | null
   moneyState?: string | null
+  /**
+   * 승인 여부. `'true'` 또는 `'false'` — **불리언이 아니라 문자열이다.**
+   *
+   * 질의 문자열은 문자열만 나른다. 여기에 `boolean` 을 두면 `false` 가 쿼리에서 빠지거나
+   * `'false'` 로 실려 가고, 서버의 `Boolean('false')` 는 `true` 다. 서버는 그래서 이 값을
+   * `=== "true"` 로만 참으로 읽는다 — 즉 **빈 값은 "거르지 않는다"** 이고 `'false'` 는
+   * "미승인만" 이다.
+   */
+  approved?: string | null
+  /**
+   * `'true'` 면 **아직 어떤 인보이스에도 올라가지 않은** PO만.
+   *
+   * 결제 화면의 'PO 고르기' 가 `state=납품` 과 함께 쓴다. 등호 필터로는 표현할 수 없는
+   * 조건(`invoice_translator_id IS NULL`)이라 따로 있다.
+   */
+  uninvoiced?: string | null
+  /**
+   * 이 인보이스에 올라간 PO만.
+   *
+   * 인보이스의 명세(출력 문서의 PO 목록)를 이것으로 읽는다. 전용 조회를 따로 만들지 않은 것이
+   * 의도다 — 인쇄되는 문서가 다른 모든 화면과 **같은 권한 범위의 목록**을 통해 PO를 읽는다.
+   */
+  invoiceTranslatorId?: string | null
+  /**
+   * 마감일(`poEday`) 범위. `YYYY-MM-DD`, 양끝 포함.
+   *
+   * 서버에는 처음부터 있었고(`PO_FILTERS` 의 `dueFrom`/`dueTo`) 이 타입에만 없었다 — 즉 화면이
+   * 보낼 수단이 없었다. PO 목록은 날짜로 자르지 않으면 **전 기간**을 읽으므로, 결제 화면은 이
+   * 두 칸을 기본값으로 채워서 들어온다(`PoPaymentView` 의 `DEFAULT_*`).
+   */
+  dueFrom?: string | null
+  dueTo?: string | null
+  /**
+   * 실제 지급일(`poMoneyDay`) 범위. 마감일과 **독립**이다.
+   *
+   * 서버가 두 범위를 AND 로 묶으므로 네 칸을 다 채우면 "마감이 이 안에 있고 **그리고** 지급도 이
+   * 안에 있는" 이라는 다른 질문이 된다. 화면이 기준 선택으로 한 쌍만 보내는 이유다
+   * (`ProjectsView` 의 `PERIOD_BASES` 와 같은 규칙).
+   */
+  paidFrom?: string | null
+  paidTo?: string | null
 }
 
 export const fetchPurchaseOrders = (query: PurchaseOrderListQuery, signal?: AbortSignal) =>
@@ -349,6 +395,91 @@ export const updatePurchaseOrder = (id: string, input: Partial<PurchaseOrderUpda
 
 export const deletePurchaseOrder = (id: string) =>
   neotmsApi<void>(`/api/v0/purchase-orders/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/* -------------------------------------------------------------------------- */
+/* 결제 — PO 승인·정산, 번역가 인보이스                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * PO 금액 승인·승인취소.
+ *
+ * 경로는 PO에 달려 있지만 **권한은 결제**다(`PAYMENT:update`). 바꾸는 값이 PO의 컬럼이므로
+ * 경로가 PO를 가리키고, 그 값을 바꿀 자격은 라우트가 선언하는 메뉴가 정한다 — 이 시스템에서
+ * 권한은 언제나 "도달한 경로" 의 성질이다.
+ *
+ * `/approval` 이라는 부속 경로로 나눈 것이 요점이다. `updatePurchaseOrder` 는 PO 권한으로
+ * 들어가고 금액을 바꿀 수 있으므로, 승인이 그 본문의 한 칸이면 PO를 올린 사람이 자기 PO를
+ * 스스로 승인할 수 있다. 서버는 그래서 승인 컬럼들을 PO 수정의 필드 목록에서 **빼** 두었다.
+ *
+ * 멱등이다 — 이미 승인된 PO를 다시 승인해도 오류가 아니다. 두 사람이 같은 목록을 보고 같은
+ * PO를 누르는 일이 실제로 있고, 두 번째 사람에게 오류를 보여 줄 이유가 없다.
+ */
+export const approvePurchaseOrder = (id: string, input: PoApprovalInput) =>
+  neotmsApi<PurchaseOrderRow>(
+    `/api/v0/purchase-orders/${encodeURIComponent(id)}/approval`,
+    { method: 'PATCH', body: input },
+  )
+
+/**
+ * PO의 입금 기록.
+ *
+ * 역시 결제 권한이고 본문은 돈에 관한 여섯 칸으로 좁혀져 있다 — `PoSettlementInput` 주석 참고.
+ * 서버는 **취소된 PO**와 **승인되지 않은 PO**의 정산을 거절한다. 둘 다 한국어 문장으로
+ * 돌아오므로 화면은 본문을 그대로 보여 주면 된다.
+ */
+export const settlePurchaseOrder = (id: string, input: PoSettlementInput) =>
+  neotmsApi<PurchaseOrderRow>(
+    `/api/v0/purchase-orders/${encodeURIComponent(id)}/settlement`,
+    { method: 'PATCH', body: input },
+  )
+
+export interface InvoiceListQuery extends ListQuery {
+  translatorId?: string | null
+  pmId?: string | null
+  coinCode?: string | null
+  invState?: string | null
+  moneyState?: string | null
+  /** 발행일(`invDay`) 범위. `YYYY-MM-DD`, 양끝 포함. */
+  issuedFrom?: string | null
+  issuedTo?: string | null
+  /** 실제 지급일(`invMoDay`) 범위. 발행일과 **독립**이다 — `ProjectListQuery` 의 두 쌍과 같다. */
+  paidFrom?: string | null
+  paidTo?: string | null
+}
+
+export const fetchInvoices = (query: InvoiceListQuery, signal?: AbortSignal) =>
+  neotmsApi<ListPage<InvoiceRow>>('/api/v0/invoices', { query: { ...query }, signal })
+
+export const fetchInvoice = (id: string, signal?: AbortSignal) =>
+  neotmsApi<InvoiceRow>(`/api/v0/invoices/${encodeURIComponent(id)}`, { signal })
+
+/**
+ * 인보이스 발행. `poIds` 가 비어 있으면 서버가 거절한다.
+ *
+ * 서버는 인보이스 행과 발주 연결을 **한 트랜잭션**에서 만들고, 요청한 발주 중 하나라도 올릴 수
+ * 없으면 전부 되돌린다. 그래서 실패한 요청이 발주 절반만 올라간 인보이스를 남기지 않는다 —
+ * 그런 인보이스는 번역가가 네 건을 청구했는데 세 건만 지급되는 상태이고, 그 사실을 이 시스템도
+ * 알려 주지 못한다.
+ */
+export const createInvoice = (input: InvoiceInput) =>
+  neotmsApi<InvoiceRow>('/api/v0/invoices', { method: 'POST', body: input })
+
+/** `poIds` 를 보내면 **교체**다. 생략하면 묶음을 그대로 둔다 — `InvoiceUpdate` 주석 참고. */
+export const updateInvoice = (id: string, input: InvoiceUpdate) =>
+  neotmsApi<InvoiceRow>(`/api/v0/invoices/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+  })
+
+/**
+ * 인보이스 취소(소프트 삭제).
+ *
+ * 달려 있던 발주들의 연결이 같은 트랜잭션에서 풀린다. 풀지 않으면 그 발주들은 취소된 문서에
+ * 묶인 채로 남아 **다시는 청구할 수 없게** 된다 — 다른 인보이스에 이미 올라간 발주로 보이기
+ * 때문이다.
+ */
+export const deleteInvoice = (id: string) =>
+  neotmsApi<{ id: string }>(`/api/v0/invoices/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 /* -------------------------------------------------------------------------- */
 /* 리포트                                                                      */

@@ -398,6 +398,136 @@ export const PurchaseOrderCreateSchema = v.object({
 export const PurchaseOrderUpdateSchema = v.partial(v.omit(PurchaseOrderCreateSchema, ["jobId"]));
 
 /* -------------------------------------------------------------------------- */
+/* 결제 - approval, settlement, and the translator invoice                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Approving - or un-approving - a purchase order. One boolean, and that is the entire body.
+ *
+ * ## Why a route of its own rather than a field on `PurchaseOrderUpdateSchema`
+ *
+ * Because the authority is different and a schema cannot express that; only the route table can. A
+ * PM edits POs all day under `PURCHASE_ORDER:update`. Signing off the amount belongs to whoever
+ * holds `PAYMENT:update` (see NeotmsMenus.PAYMENT). Put `poApproved` on the general edit body and
+ * every PM who may correct a word count may also approve their own PO, which is not an approval
+ * gate - it is a formality with extra steps.
+ *
+ * So `po_approved` has no `PO_FIELDS` spec and cannot be written by any PO edit. This body, through
+ * this route, is the only way the column moves.
+ *
+ * ## Why it is `{ approved: boolean }` and not a bare POST
+ *
+ * Un-approving has to be expressible. A PO approved by mistake - wrong translator, wrong amount -
+ * must be revocable before it is sent, and the alternative is a second route whose only difference
+ * is a literal. `po_approved_at` and `po_approved_by` are stamped server-side from `now()` and the
+ * caller's identity and are deliberately NOT in this body: a client-supplied "who approved this,
+ * and when" is not an audit trail.
+ */
+export const PoApprovalSchema = v.object({ approved: v.boolean() });
+
+/**
+ * Recording what happened to the money on a purchase order.
+ *
+ * Picked from `PurchaseOrderCreateSchema` rather than restated, so the two cannot drift: these are
+ * the same six columns, reached through a different gate. The narrowing is the point - this body
+ * can move a PO to 완료 and mark it 정산완료, and it cannot touch an amount, a volume, a rate, a
+ * deadline or a translator. Someone who may confirm a payment is not thereby someone who may change
+ * what was owed.
+ *
+ * `poState` is included because settling the money IS what advances the workflow - 완료 means paid
+ * in full (NeotmsPoStates.ts), so the state and the money state are set in the same request or they
+ * are set inconsistently. 부분정산 stays at 납품 for the same reason.
+ */
+export const PoSettlementSchema = v.partial(
+  v.pick(PurchaseOrderCreateSchema, [
+    "poState",
+    "poInvoiceState",
+    "poMoneyState",
+    "poMoneyDay",
+    "poMoneyPrice",
+    "poMoneyGubun",
+  ]),
+);
+
+/**
+ * Issuing a translator invoice.
+ *
+ * ## One invoice, several POs
+ *
+ * `poIds` is the whole reason this is a table and not a handful of columns on `purchase_order`. The
+ * printed form is headed LIST OF INVOICE and bills up to ten POs under one code with one Sub Total
+ * / Tax / Total, so the invoice needs an identity that no single PO row can hold. The ids are what
+ * `purchase_order.invoice_translator_id` is set to, and that column is what the document is
+ * rendered from - see db/015_payment.sql section 2.
+ *
+ * It is REQUIRED and must be non-empty. An invoice billing nothing is a document with a total of
+ * zero sent to a translator who is owed money, which is the silent-arithmetic failure this whole
+ * design is arranged to prevent. The manager additionally refuses POs that belong to another
+ * translator, are not yet 납품, or are already on a different invoice - none of which a schema can
+ * check, because all three are questions about rows.
+ *
+ * `invTranCode` is absent: minted from `seq_invoice_tran_code` (NeotmsCodes.INVOICE_TRAN_CODE),
+ * never supplied, for the reason every other document code is.
+ *
+ * ## What is NOT here, and why
+ *
+ * No document-language field. The PO stores `po_lang` because the PO is addressed and sent; an
+ * invoice is reprinted on demand, and which of the two letterheads is wanted is a question for the
+ * moment of printing rather than a fact about the record. The print screen carries the toggle.
+ *
+ * No payment status either, beyond what the translator's own paperwork says: `inv_sum` / `inv_tax`
+ * are WHAT WAS PRINTED on the document that was sent, and `purchase_order.po_money_state` remains
+ * the single source of truth for what has actually been paid. The `invMo*` fields below record the
+ * remittance against the invoice as a whole, which is the translator's view of it; they are not
+ * what any report sums.
+ */
+export const InvoiceTranslatorCreateSchema = v.object({
+  /** The one translator this invoice bills. Required - an invoice with no payee cannot be sent. */
+  translatorId: IdSchema,
+  /**
+   * The POs on the invoice. At least one.
+   *
+   * Capped at 200, well above the ten slots the printed form has: a form that overflows onto a
+   * second page is a formatting question, whereas an unbounded array is an unbounded `IN` list and
+   * a request that can be made expensive by anyone who can make it at all.
+   */
+  poIds: v.pipe(v.array(IdSchema), v.minLength(1, "an invoice must cover at least one PO"), v.maxLength(200)),
+  /** 인보이스 발행일. Absent means today, stamped server-side. */
+  invDay: settable(DateSchema),
+  /** The issuing PM, whose name, phone and email print in the signature block. */
+  invPmId: settable(IdSchema),
+  coinCode: settable(CodeSchema),
+  /** Sub Total as PRINTED. Not recomputed on read - see the schema docstring. */
+  invSum: settable(MoneySchema),
+  /** Tax as PRINTED. An amount, not a rate - see the DDL comment on `invoice_translator.inv_tax`. */
+  invTax: settable(MoneySchema),
+  /** Planned payment date - the PAYMENT DATE line on the form. */
+  invMoPday: settable(DateSchema),
+  invMoState: settable(text(50)),
+  invMoGubun: settable(text(50)),
+  /** The date the translator was actually paid. */
+  invMoDay: settable(DateSchema),
+  invMoSum: settable(MoneySchema),
+  invMoTax: settable(MoneySchema),
+  invState: settable(text(50)),
+});
+
+/**
+ * Editing an invoice.
+ *
+ * `translatorId` is omitted for the reason `JobUpdateSchema` omits `projectId`: re-pointing an
+ * invoice at a different translator does not correct a mistake, it silently re-bills one person's
+ * work to another. Cancel it and issue a new one, which leaves both documents in the record.
+ *
+ * `poIds` stays, and is a REPLACEMENT of the set rather than an addition to it - absent means "leave
+ * the grouping alone", present means "these and only these". Adding a forgotten PO is the ordinary
+ * case and must not require deleting the invoice.
+ */
+export const InvoiceTranslatorUpdateSchema = v.partial(
+  v.omit(InvoiceTranslatorCreateSchema, ["translatorId"]),
+);
+
+/* -------------------------------------------------------------------------- */
 /* Reports                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -603,6 +733,10 @@ export type JobCreate = v.InferOutput<typeof JobCreateSchema>;
 export type JobUpdate = v.InferOutput<typeof JobUpdateSchema>;
 export type PurchaseOrderCreate = v.InferOutput<typeof PurchaseOrderCreateSchema>;
 export type PurchaseOrderUpdate = v.InferOutput<typeof PurchaseOrderUpdateSchema>;
+export type PoApproval = v.InferOutput<typeof PoApprovalSchema>;
+export type PoSettlement = v.InferOutput<typeof PoSettlementSchema>;
+export type InvoiceTranslatorCreate = v.InferOutput<typeof InvoiceTranslatorCreateSchema>;
+export type InvoiceTranslatorUpdate = v.InferOutput<typeof InvoiceTranslatorUpdateSchema>;
 export type ReportQuery = v.InferOutput<typeof ReportQuerySchema>;
 export type CodeCreate = v.InferOutput<typeof CodeCreateSchema>;
 export type CodeUpdate = v.InferOutput<typeof CodeUpdateSchema>;

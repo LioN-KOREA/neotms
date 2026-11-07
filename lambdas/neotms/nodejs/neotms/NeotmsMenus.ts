@@ -99,6 +99,33 @@ export const NeotmsMenu = {
   DASHBOARD_SALES: "DASHBOARD_SALES",
   /** 대시보드(PM) - the same aggregate over `project.prj_pm_id`. See DASHBOARD_SALES above. */
   DASHBOARD_PM: "DASHBOARD_PM",
+  /**
+   * 결제 - approving the money on a purchase order, and settling it.
+   *
+   * ## Why this is not part of PURCHASE_ORDER
+   *
+   * Because the authority is different, and one menu id cannot say so. Raising a PO is a PM's daily
+   * work and is gated on `PURCHASE_ORDER`. Signing off the amount on it is not: gated on the same
+   * id, every PM who can raise a PO could approve their own, which is not an approval gate but a
+   * formality. `purchase_order.po_approved` is therefore writable ONLY through this menu, and an
+   * unapproved PO cannot be printed or sent.
+   *
+   * Making it a menu rather than a hardcoded role check is the same argument `STAFF` makes: who may
+   * approve becomes a row in `sys_role_auth`, assignable and revocable on the 사용자 관리 screen
+   * without a deploy, and visible to the same audit as everything else. That matters here
+   * specifically because who holds this authority is still being decided.
+   *
+   * ## What the five action flags mean here
+   *
+   * `read` sees the 결제 screens and the printable PO and invoice documents; `update` approves a PO
+   * and records a payment against one; `create` issues a translator invoice; `delete` voids one.
+   * Nothing on this menu edits a PO's amounts - those stay on `PURCHASE_ORDER`, so a person who may
+   * approve money is not thereby a person who may change it.
+   *
+   * Seeded by db/015_payment.sql, which also re-grants NEOTMS_SYSADMIN. See DASHBOARD_SALES above
+   * for why a missing `sys_menu` row is a silent failure rather than an error.
+   */
+  PAYMENT: "PAYMENT",
 } as const;
 
 export type NeotmsMenuId = (typeof NeotmsMenu)[keyof typeof NeotmsMenu];

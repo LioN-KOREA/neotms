@@ -386,7 +386,7 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
             onChange={(e) => set('tranMsg', e.target.value)}
             placeholder="가능 시간대, 품질 주의사항 등"
           />
-          <span className={ui.hint}>발주를 배정하는 담당자가 이 내용을 먼저 봅니다.</span>
+          <span className={ui.hint}>PO 를 배정하는 담당자가 이 내용을 먼저 봅니다.</span>
         </div>
 
         <div className={ui.fieldWide}>
@@ -399,7 +399,7 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
             <span className={ui.checkText}>
               <span className={ui.checkLabel}>CAT 툴 사용</span>
               <span className={ui.checkDesc}>
-                CAT 분석 기반으로 발주 물량을 산정할 수 있는 번역가입니다.
+                CAT 분석 기반으로 PO 물량을 산정할 수 있는 번역가입니다.
               </span>
             </span>
           </label>
@@ -415,7 +415,7 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
             <span className={ui.checkText}>
               <span className={ui.checkLabel}>거래 중</span>
               <span className={ui.checkDesc}>
-                해제하면 새 발주의 번역가 선택 목록에서 빠집니다. 기존 발주와 정산 기록은 그대로
+                해제하면 새 PO 의 번역가 선택 목록에서 빠집니다. 기존 PO 와 정산 기록은 그대로
                 남습니다.
               </span>
             </span>

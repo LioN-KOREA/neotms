@@ -89,6 +89,12 @@ export type SqlRow = Record<string, unknown>;
  *     002_tables.sql is `timestamptz` (51 of them, no exceptions), and casting a parameter to
  *     `timestamp` to compare against a `timestamptz` column reintroduces the server's time zone as
  *     a silent factor in the comparison.
+ *   * `"idArray"` and `"textArray"` exist for `= ANY(:names)`, which is how this codebase writes a
+ *     variable-length `IN` list. The alternative - interpolating `IN (:id_0, :id_1, ...)` - makes
+ *     the statement TEXT depend on the length of the list, so a PO batch of 3 and a batch of 40 are
+ *     two different statements, each needing its own plan; `ANY` is one placeholder and therefore
+ *     one cached plan whatever the length. node-postgres serialises a JS array into a PostgreSQL
+ *     array literal itself, so the value travels as an array and the cast names the element type.
  */
 export type SqlParamKind =
   | "text"
@@ -100,7 +106,9 @@ export type SqlParamKind =
   | "time"
   | "timestamp"
   | "json"
-  | "uuid";
+  | "uuid"
+  | "idArray"
+  | "textArray";
 
 /**
  * One bound parameter.
@@ -111,7 +119,13 @@ export type SqlParamKind =
  */
 export interface SqlParameter {
   readonly name: string;
-  readonly value: string | number | boolean | null;
+  /**
+   * Scalar for every kind but the two array ones, which carry `string[]`.
+   *
+   * The array members are strings even for `"idArray"`, for the reason `"id"` is a string: an id
+   * above 2^53 survives as text and does not survive float64.
+   */
+  readonly value: string | number | boolean | null | readonly string[];
   readonly kind: SqlParamKind;
 }
 
@@ -159,6 +173,8 @@ const CASTS: Record<SqlParamKind, string> = {
   timestamp: "::timestamptz",
   json: "::jsonb",
   uuid: "::uuid",
+  idArray: "::bigint[]",
+  textArray: "::text[]",
 };
 
 export function param(name: string, value: unknown, kind: SqlParamKind = "text"): SqlParameter {
@@ -175,6 +191,16 @@ export function param(name: string, value: unknown, kind: SqlParamKind = "text")
       return { name, value: Boolean(value), kind };
     case "json":
       return { name, value: JSON.stringify(value), kind };
+    // Each member stringified individually. Falling through to `default` would hand `String([1,2])`
+    // = "1,2" to a `::bigint[]` cast, which is not an error - it is a cast failure at runtime on
+    // some inputs and a one-element array on others.
+    case "idArray":
+    case "textArray":
+      return {
+        name,
+        value: (Array.isArray(value) ? value : [value]).map((v) => String(v)),
+        kind,
+      };
     // "id" and "money" are string-valued on purpose - see SqlParamKind.
     default:
       return { name, value: String(value), kind };

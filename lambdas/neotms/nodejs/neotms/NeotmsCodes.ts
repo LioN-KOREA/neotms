@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// Minting the human-readable document codes: cus_code, prj_code, job_code, po_code, tran_code.
+// Minting the human-readable document codes: cus_code, prj_code, job_code, po_code, tran_code,
+// inv_tran_code.
 //
 // These are not primary keys - the PK is a surrogate bigint - but they are printed on purchase
 // orders and quoted on invoices, so they are externally visible and permanent. Two rules follow:
@@ -46,6 +47,19 @@ export const PO_CODE: CodeMint = { prefix: "LPO_", sequence: "seq_po_code", widt
 export const TRANSLATOR_CODE: CodeMint = {
   prefix: "TRAN_",
   sequence: "seq_translator_code",
+  width: 6,
+};
+/**
+ * `invoice_translator.inv_tran_code`.
+ *
+ * The one prefix here that is NOT provisional: it is read straight off a live document
+ * (`POL_026153`), which is also why it does not match its table's name. Sequence declared in
+ * db/015_payment.sql rather than 005, because the invoice became application-written only then -
+ * 005's header lists the five it created and 015 section 7 carries the same mandatory-setval note.
+ */
+export const INVOICE_TRAN_CODE: CodeMint = {
+  prefix: "POL_",
+  sequence: "seq_invoice_tran_code",
   width: 6,
 };
 

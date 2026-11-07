@@ -108,7 +108,7 @@ export function ProjectDetailView() {
    * 삭제 두 개. 문구는 각 목록 화면의 것과 **같은 문장**이다(JobsView·PurchaseOrdersView) —
    * 같은 동작을 두 화면에서 다르게 설명하면 어느 쪽이 맞는지 담당자가 확인할 방법이 없다.
    *
-   * 작업 삭제는 발주가 달려 있으면 서버가 거절한다. 그 거절은 정상 동작이고, 본문이 이유를
+   * 작업 삭제는 PO 가 달려 있으면 서버가 거절한다. 그 거절은 정상 동작이고, 본문이 이유를
    * 설명하므로 아래에서 `ErrorNotice` 로 그대로 내보낸다 — 여기서 뭉개면 담당자는 'PO 를 먼저
    * 지워야 한다' 는 사실을 알 길이 없고, 삭제가 그냥 안 되는 화면으로 읽는다.
    */
@@ -116,7 +116,7 @@ export function ProjectDetailView() {
     const label = row.jobName || row.jobCode
     if (
       !window.confirm(
-        `${label} 작업을 삭제할까요?\n이 작업의 매출이 집계에서 빠집니다. 발주가 달려 있으면 삭제할 수 없습니다.`,
+        `${label} 작업을 삭제할까요?\n이 작업의 매출이 집계에서 빠집니다. PO 가 달려 있으면 삭제할 수 없습니다.`,
       )
     ) {
       return

@@ -52,6 +52,10 @@ import {
   JobCreateSchema,
   JobUpdateSchema,
   ProjectCreateSchema,
+  InvoiceTranslatorCreateSchema,
+  InvoiceTranslatorUpdateSchema,
+  PoApprovalSchema,
+  PoSettlementSchema,
   ProjectUpdateSchema,
   PurchaseOrderCreateSchema,
   PurchaseOrderUpdateSchema,
@@ -89,6 +93,15 @@ import {
   listPurchaseOrders,
   updatePurchaseOrder,
 } from "./purchase-orders/NeotmsPurchaseOrderManager.js";
+import {
+  approvePurchaseOrder,
+  createInvoice,
+  deleteInvoice,
+  getInvoice,
+  listInvoices,
+  settlePurchaseOrder,
+  updateInvoice,
+} from "./invoices/NeotmsInvoiceManager.js";
 import { getDashboard } from "./dashboard/NeotmsDashboardManager.js";
 import { getProfile } from "./profile/NeotmsProfileManager.js";
 import { registerSelf } from "./profile/NeotmsRegistrationManager.js";
@@ -372,6 +385,71 @@ const handleDeletePurchaseOrder: RRHandler = async (request) => {
   return id ? deletePurchaseOrder(callerOf(request), id, writeContext(request)) : NOT_A_RECORD_ID;
 };
 
+/*
+ * 결제 - the translator invoice, PO approval, and PO settlement.
+ *
+ * All six are gated on `PAYMENT` rather than on `PURCHASE_ORDER`, and the two PO ones are the reason
+ * the menu exists: `PATCH /purchase-orders/:id` cannot touch `po_approved` (no `PO_FIELDS` spec) and
+ * cannot record money (not in `PoSettlementSchema`'s six columns under that gate), so raising a PO
+ * and signing off its amount are two grants. NeotmsMenus.PAYMENT argues it at length.
+ *
+ * Note the paths. Approval and settlement are static trailing segments on the PO resource
+ * (`/purchase-orders/:id/approval`) rather than routes of their own under `/payment/`, because they
+ * act on a PO and the id in the path should say which. `recordId` reads `:id` the same way it does
+ * for the plain PO routes, so nothing special is needed to find it.
+ *
+ * All three writes are PATCH. Approval would read better as a PUT - its body IS the complete state
+ * of the resource, one boolean - but `ALLOWED_CORS_METHODS` deliberately does not list PUT, and
+ * adding a method to the preflight for one route's semantics is a worse trade than the slight
+ * imprecision: a verb the allow-list misses fails in the browser as a CORS error that mentions
+ * nothing about the route.
+ */
+const handleListInvoices: RRHandler = async (request) => listInvoices(callerOf(request), request);
+
+const handleGetInvoice: RRHandler = async (request) => {
+  const id = recordId(request);
+  return id ? getInvoice(callerOf(request), id) : NOT_A_RECORD_ID;
+};
+
+const handleCreateInvoice: RRHandler = async (request) => {
+  const parsed = parseBody(InvoiceTranslatorCreateSchema, request.body);
+  return parsed.ok
+    ? createInvoice(callerOf(request), parsed.value, writeContext(request))
+    : parsed.response;
+};
+
+const handleUpdateInvoice: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(InvoiceTranslatorUpdateSchema, request.body);
+  return parsed.ok
+    ? updateInvoice(callerOf(request), id, parsed.value, writeContext(request))
+    : parsed.response;
+};
+
+const handleDeleteInvoice: RRHandler = async (request) => {
+  const id = recordId(request);
+  return id ? deleteInvoice(callerOf(request), id, writeContext(request)) : NOT_A_RECORD_ID;
+};
+
+const handleApprovePurchaseOrder: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(PoApprovalSchema, request.body);
+  return parsed.ok
+    ? approvePurchaseOrder(callerOf(request), id, parsed.value, writeContext(request))
+    : parsed.response;
+};
+
+const handleSettlePurchaseOrder: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(PoSettlementSchema, request.body);
+  return parsed.ok
+    ? settlePurchaseOrder(callerOf(request), id, parsed.value, writeContext(request))
+    : parsed.response;
+};
+
 /* 보고서 - the reports. Gated on their own menu, not on the menus they aggregate. */
 const handleRunReport: RRHandler = async (request) => runReport(callerOf(request), request);
 const handleGetWorkload: RRHandler = async (request) => getWorkload(callerOf(request), request);
@@ -515,6 +593,21 @@ const PROJECTS = "/api/v0/projects";
 const JOBS = "/api/v0/jobs";
 const PURCHASE_ORDERS = "/api/v0/purchase-orders";
 /*
+ * 결제 - the translator invoices.
+ *
+ * `/invoices` rather than `/payment/invoices`, even though the menu is 결제. The path names the
+ * RESOURCE and the route's `menu` names the authority, and conflating them would make the URL a
+ * second, undeclared statement of who may call it - which is the shape that goes stale. The PO's own
+ * two money actions stay on `/purchase-orders/:id/...` for the same reason: they act on a PO.
+ *
+ * `/invoices` and not `/translator-invoices`, because the customer side of the chain
+ * (`invoice_customer`) has no endpoints and is not planned to get any under this menu - it is
+ * receivables, a different screen and a different authority. If it ever does, this becomes
+ * `/invoices/translator` and `/invoices/customer`, and the rename is a one-line change here plus the
+ * client's base path.
+ */
+const INVOICES = "/api/v0/invoices";
+/*
  * The code tables under two paths, deliberately.
  *
  * `/api/v0/codes` is the dropdown feed and `/api/v0/admin/codes` is the 유지보수 screen, and they
@@ -605,6 +698,24 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: `${PURCHASE_ORDERS}/:id`, method: "GET", handler: handleGetPurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "read" },
   { path: `${PURCHASE_ORDERS}/:id`, method: "PATCH", handler: handleUpdatePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "update" },
   { path: `${PURCHASE_ORDERS}/:id`, method: "DELETE", handler: handleDeletePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "delete" },
+
+  // -- 결제 (approval, settlement, translator invoices) ----------------------
+  //
+  // Every row here is PAYMENT, and the two on the PO resource are why. A PO's amounts are edited on
+  // PURCHASE_ORDER:update above; approving that amount and recording the money that left are this
+  // menu's `update`. Same resource, same id, different grant - which is only expressible as separate
+  // routes, because this table declares authorization per path.
+  //
+  // The action mapping is the one NeotmsMenus.PAYMENT documents: `read` sees the screens and the
+  // printable documents, `update` approves and settles, `create` issues an invoice, `delete` voids
+  // one.
+  { path: `${PURCHASE_ORDERS}/:id/approval`, method: "PATCH", handler: handleApprovePurchaseOrder, menu: NeotmsMenu.PAYMENT, action: "update" },
+  { path: `${PURCHASE_ORDERS}/:id/settlement`, method: "PATCH", handler: handleSettlePurchaseOrder, menu: NeotmsMenu.PAYMENT, action: "update" },
+  { path: INVOICES, method: "GET", handler: handleListInvoices, menu: NeotmsMenu.PAYMENT, action: "read" },
+  { path: INVOICES, method: "POST", handler: handleCreateInvoice, menu: NeotmsMenu.PAYMENT, action: "create" },
+  { path: `${INVOICES}/:id`, method: "GET", handler: handleGetInvoice, menu: NeotmsMenu.PAYMENT, action: "read" },
+  { path: `${INVOICES}/:id`, method: "PATCH", handler: handleUpdateInvoice, menu: NeotmsMenu.PAYMENT, action: "update" },
+  { path: `${INVOICES}/:id`, method: "DELETE", handler: handleDeleteInvoice, menu: NeotmsMenu.PAYMENT, action: "delete" },
 
   // -- 보고서 ---------------------------------------------------------------
   //

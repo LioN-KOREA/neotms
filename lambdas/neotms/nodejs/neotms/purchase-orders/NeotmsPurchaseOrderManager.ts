@@ -47,6 +47,13 @@ function readFilters(request: RequestData): PoFilters {
     state: read("state"),
     invoiceState: read("invoiceState"),
     moneyState: read("moneyState"),
+    // The three the 결제 screens drive. `approved` and `uninvoiced` are the two halves of that
+    // section's work - what is waiting for sign-off, and what has been delivered but not yet
+    // billed - and `invoiceTranslatorId` is how an invoice's own lines are fetched, so the print
+    // document reads the POs through the same scoped list every other screen does.
+    approved: read("approved"),
+    uninvoiced: read("uninvoiced"),
+    invoiceTranslatorId: read("invoiceTranslatorId"),
     pmId: read("pmId"),
     workCode: read("workCode"),
     poType: read("poType"),

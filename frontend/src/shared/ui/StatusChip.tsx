@@ -61,10 +61,22 @@ const TONES: Readonly<Record<string, Tone>> = {
   // 작업
   대기: WAIT,
   검수: INFO,
-  // 발주
-  발주: INFO,
-  수락: INFO,
-  납품: OK,
+  /*
+   * 발주.
+   *
+   * '납품' 이 `OK`(초록, 채운 점)였다가 `WARN`(주황, 빈 점)으로 바뀌었다. 뜻이 바뀐 것이 아니라
+   * 전에 잘못 적혀 있었다 — 납품은 **일이 끝났고 돈은 아직**인 칸이고(NeotmsPoStates.ts), 일부만
+   * 지급된 발주가 머무는 칸이기도 하다. 초록 + 채운 점은 "끝난 일" 이라는 뜻이어서, 번역가에게
+   * 줄 돈이 남은 행이 목록에서 정산 끝난 행과 똑같이 보였다. `.warn` 의 주석이 말하는 "끝나지
+   * 않은 채로 잊히는 것이 실제로 손실이 되는 유일한 상태" 가 바로 이 칸이다.
+   *
+   * '미승인' 은 레거시 '발주'·'수락' 을 대신하며 색은 그대로 `INFO` 다 — `.info` 의 설명("흘러가는
+   * 중이지만 아직 '진행' 은 아닌 것")이 그대로 맞는다. 승인되지 않았다는 사실 자체는 이 칩이
+   * 아니라 결제 화면의 승인 배지가 말한다. 모든 새 발주가 이 칸에서 시작하므로, 여기에 경고색을
+   * 쓰면 목록의 절반이 주황이 되고 주황은 아무 뜻도 전하지 않게 된다.
+   */
+  미승인: INFO,
+  납품: WARN,
   // 세금계산서
   미발행: WAIT,
   발행: OK,
@@ -134,6 +146,44 @@ export function ActiveChip({ active, on, off }: { active: boolean; on: string; o
     <span className={`${styles.chip} ${styles.off}`}>
       <span className={styles.dot} aria-hidden="true" />
       {off}
+    </span>
+  )
+}
+
+/**
+ * 발주 금액의 승인 여부 — `purchase_order.po_approved` 하나를 칩으로.
+ *
+ * ## `ActiveChip` 을 쓰지 않는 이유는 위 주석이 직접 말하고 있다
+ *
+ * `ActiveChip` 이 꺼진 쪽을 중립색으로 칠하는 근거는 "**담당자가 의도한** 상태" 다. 거래가 끝난
+ * 고객사도 중지된 코드도 그렇게 되기로 정해진 것이라, 경고색을 쓰면 정작 봐야 할 '미정산' 이
+ * 묻힌다.
+ *
+ * 미승인 발주는 그 반대다. **아무도 그렇게 되기로 정하지 않았다** — 승인할 사람이 아직 보지
+ * 않았다는 뜻이고, 이 화면이 존재하는 이유가 바로 그 목록이다. 그래서 꺼진 쪽이 `.warn` 이고
+ * 점이 비어 있다(`.dotOpen` = "아직 할 일이 남았다"). `ActiveChip` 에 플래그를 하나 더 받는
+ * 쪽은 택하지 않았다: 두 컴포넌트가 갈라지는 지점은 색이 아니라 **꺼짐이 무슨 뜻인가**이고,
+ * 그 질문에 두 답을 가진 하나의 컴포넌트는 부르는 쪽에서 매번 다시 판단해야 한다.
+ *
+ * 켜진 쪽은 `ActiveChip` 과 같은 `.ok` 다. 승인은 끝난 일이다.
+ *
+ * ## 꺼진 쪽의 말이 '미승인' 이 아니라 '승인 대기' 다
+ *
+ * '미승인' 은 **`po_state` 의 값이기도 하다**(위 `TONES` 에 `INFO` 로 들어 있다). 두 칩이 한
+ * 행에 나란히 서는 화면이므로, 같은 글자가 파란 칩과 주황 칩으로 두 번 나오면 읽는 사람은 둘
+ * 중 하나가 고장 났다고 생각한다. 두 값은 실제로 서로 독립이고 — 승인된 채 '미승인' 상태로
+ * 있는 발주가 정상이다(NeotmsPoStates.ts) — 그 독립성을 말로 드러내는 쪽이 맞다.
+ */
+export function ApprovalChip({ approved }: { approved: boolean }) {
+  return approved ? (
+    <span className={`${styles.chip} ${styles.ok}`}>
+      <span className={styles.dot} aria-hidden="true" />
+      승인
+    </span>
+  ) : (
+    <span className={`${styles.chip} ${styles.warn}`}>
+      <span className={`${styles.dot} ${styles.dotOpen}`} aria-hidden="true" />
+      승인 대기
     </span>
   )
 }

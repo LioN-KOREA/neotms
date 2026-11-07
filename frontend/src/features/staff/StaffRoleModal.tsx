@@ -174,7 +174,7 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
             <span className={ui.checkText}>
               <span className={ui.checkLabel}>본인 담당분만</span>
               <span className={ui.checkDesc}>
-                자신이 담당자로 지정된 프로젝트·작업·발주만 보입니다. 목록과 보고서의 숫자도 그
+                자신이 담당자로 지정된 프로젝트·작업·PO 만 보입니다. 목록과 보고서의 숫자도 그
                 범위로 계산됩니다.
               </span>
             </span>
@@ -214,7 +214,7 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
               <span className={ui.checkLabel}>사용 중</span>
               <span className={ui.checkDesc}>
                 해제하면 이 분은 로그인할 수 없습니다. 퇴사자를 처리하는 올바른 방법입니다 —
-                계정을 지우지 않으므로 이 분이 만든 프로젝트·작업·발주의 담당자 기록이 그대로
+                계정을 지우지 않으므로 이 분이 만든 프로젝트·작업·PO 의 담당자 기록이 그대로
                 남습니다.
               </span>
             </span>

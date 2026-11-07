@@ -128,7 +128,7 @@ export function CodeFormModal({ code, defaultParent, domains, onClose, onSaved }
                   겪게 되고, 설명은 그 다음에 읽힌다. */}
               <p className={ui.inputMono}>{code.code}</p>
               <span className={ui.hint}>
-                코드값은 변경할 수 없습니다. 이 값이 작업·발주·고객사 등 22개 컬럼에 그대로
+                코드값은 변경할 수 없습니다. 이 값이 작업·PO·고객사 등 22개 컬럼에 그대로
                 저장되어 있기 때문입니다. 잘못 만든 코드는 아래에서 '사용 중지' 로 내리고 올바른
                 코드를 새로 등록해 주십시오.
               </span>
@@ -233,7 +233,7 @@ export function CodeFormModal({ code, defaultParent, domains, onClose, onSaved }
             <span className={ui.checkText}>
               <span className={ui.checkLabel}>사용 중</span>
               <span className={ui.checkDesc}>
-                해제하면 모든 드롭다운에서 사라집니다. 이미 이 코드를 쓰고 있는 작업·발주·고객사는
+                해제하면 모든 드롭다운에서 사라집니다. 이미 이 코드를 쓰고 있는 작업·PO·고객사는
                 그대로 남고 계속 정상 동작합니다 — 코드를 그만 쓰고 싶을 때는 삭제가 아니라 이쪽이
                 맞습니다.
               </span>

@@ -12,6 +12,7 @@ import {
   isLinguistic,
   JOB_TYPE_LINGUISTIC,
   MONEY_STATES,
+  PO_STATE_UNAPPROVED,
   PO_STATES,
 } from '@/apis/neotms.codes'
 import type {
@@ -146,7 +147,7 @@ export function PurchaseOrderFormModal({
     poSdayTime: po?.poSdayTime ?? '',
     poEday: toDateInputValue(po?.poEday),
     poEdayTime: po?.poEdayTime ?? '',
-    poState: po?.poState ?? '발주',
+    poState: po?.poState ?? PO_STATE_UNAPPROVED,
     poInvoiceState: po?.poInvoiceState ?? '미발행',
     poMoneyState: po?.poMoneyState ?? '미정산',
     poMoneyDay: toDateInputValue(po?.poMoneyDay),
@@ -395,11 +396,11 @@ export function PurchaseOrderFormModal({
 
     if (po) {
       await updatePo.mutateAsync({ id: po.id, input: common })
-      onSaved(`${name} 발주를 수정했습니다.`)
+      onSaved(`${name} PO를 수정했습니다.`)
     } else {
       const input: PurchaseOrderInput = { ...common, jobId: job.id, poName: name }
       const created = await createPo.mutateAsync(input)
-      onSaved(`${name} 발주를 등록했습니다. (코드: ${created.poCode})`)
+      onSaved(`${name} PO를 등록했습니다. (코드: ${created.poCode})`)
     }
     onClose()
   }
@@ -417,7 +418,7 @@ export function PurchaseOrderFormModal({
 
   return (
     <Modal
-      title={isEdit ? '발주 수정' : '발주 등록'}
+      title={isEdit ? 'PO 수정' : 'PO 등록'}
       onClose={onClose}
       isDirty={dirty && !pending}
       width={860}
@@ -441,7 +442,7 @@ export function PurchaseOrderFormModal({
 
       {isEdit ? (
         <p className={ui.hint}>
-          발주 코드 <strong>{po.poCode}</strong> — 코드와 소속 작업은 변경할 수 없습니다.
+          PO 코드 <strong>{po.poCode}</strong> — 코드와 소속 작업은 변경할 수 없습니다.
         </p>
       ) : null}
 
@@ -472,7 +473,7 @@ export function PurchaseOrderFormModal({
 
         <div className={ui.fieldWide}>
           <label className={ui.label} htmlFor="po-name">
-            발주명 <span className={ui.required}>*</span>
+            PO명 <span className={ui.required}>*</span>
           </label>
           <input
             id="po-name"
@@ -994,7 +995,7 @@ export function PurchaseOrderFormModal({
 
         <div className={ui.fieldWide}>
           <label className={ui.label} htmlFor="po-content">
-            발주 내용 · 지시사항
+            PO 내용 · 지시사항
           </label>
           <textarea
             id="po-content"

@@ -68,6 +68,27 @@ export const NeotmsMenuId = {
   DASHBOARD_SALES: 'DASHBOARD_SALES',
   /** 대시보드(PM) — PM 이 나인 프로젝트의 집계. 위 DASHBOARD_SALES 주석 참고. */
   DASHBOARD_PM: 'DASHBOARD_PM',
+  /**
+   * 결제 — PO 금액 승인과 정산, 그리고 번역가 인보이스.
+   *
+   * PO 를 **올리는** 권한(`PURCHASE_ORDER`)과 그 금액을 **승인하는** 권한을 나눈 것이다. 같은
+   * 메뉴에 두면 PO 를 올릴 수 있는 사람이 자기 PO 를 스스로 승인할 수 있고, 그것은 승인
+   * 절차가 아니라 형식일 뿐이다. 그래서 `purchase_order.po_approved` 는 이 메뉴를 통해서만
+   * 바뀌며, 승인되지 않은 PO 는 출력도 발송도 되지 않는다.
+   *
+   * 다섯 가지 동작의 뜻: `read` 는 결제 화면과 출력용 PO 문서·인보이스, `update` 는 PO 승인과
+   * 입금 기록, `create` 는 인보이스 발행, `delete` 는 인보이스 취소. PO 의 금액 자체를 고치는
+   * 것은 여전히 `PURCHASE_ORDER` 쪽이다 — 승인할 수 있는 사람이 금액을 바꿀 수 있는 사람이
+   * 되지는 않는다.
+   *
+   * **메뉴는 둘, 권한은 하나다.** 화면이 `/payment/purchase-orders` 와 `/payment/invoices` 로
+   * 갈라져 있지만 둘 다 이 id 를 쓴다 — 나누는 것은 위 다섯 동작이 이미 하고 있다
+   * (`shared/permissions.ts` 의 `payment` 그룹 주석).
+   *
+   * `sys_menu` 행이 없으면 DASHBOARD_SALES 와 같은 방식으로 조용히 사라진다 — 그 행은
+   * db/015_payment.sql 이 넣는다.
+   */
+  PAYMENT: 'PAYMENT',
 } as const
 
 export type NeotmsMenuIdValue = (typeof NeotmsMenuId)[keyof typeof NeotmsMenuId]
