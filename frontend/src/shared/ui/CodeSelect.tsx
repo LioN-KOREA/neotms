@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { CODE_DOMAIN_LABELS, type CodeDomainId } from '@/apis/neotms.codes'
 import { useCodeOptions } from '@/apis/queries/neotms.query'
 import ui from '@/shared/ui/ui.module.css'
@@ -12,10 +13,18 @@ interface Props {
   value: string
   onChange: (value: string) => void
   /**
-   * '선택 없음' 항목의 라벨. `null` 을 주면 그 항목이 **없어진다.**
+   * '값 없음' 항목의 라벨. `null` 을 주면 그 항목이 **없어지고, 빈 값은 첫 코드로 채워진다.**
    *
-   * 필수 입력인 자리에서만 null 을 쓴다(작업의 작업 종류·단가 단위). 나머지는 비워 둘 수 있어야
-   * 한다 — 분야를 모르는 고객사를 등록하지 못하게 만들면, 담당자는 아무 분야나 골라서 저장한다.
+   * 두 번째 절이 핵심이다. 항목만 없애면 `<select>` 는 값이 `''` 일 때 **첫 항목을 선택된 것처럼
+   * 그리면서 폼 상태는 `''` 로 둔다** — 담당자가 보는 것과 저장되는 것이 다르고, 그 차이는
+   * 저장하고 목록을 봐야 드러난다. 그래서 항목을 없애는 쪽을 고른 자리에서는 값도 함께 채운다
+   * (아래 `useEffect`). 즉 이 prop 의 `null` 은 "비어 있을 수 없는 칸" 이라는 선언이고,
+   * 그 약속은 화면이 아니라 폼 상태에서 지켜진다.
+   *
+   * 반대로 비워 둘 수 있어야 하는 자리에는 라벨을 준다. 필터의 '전체'(= 좁히지 않음)가 그렇고,
+   * 분야를 모르는 고객사도 그렇다 — 비워 둘 수 없게 만들면 담당자는 아무 분야나 골라서 저장한다.
+   * 이미 비어 있는 행을 수정할 때도 라벨이 필요하다. 판단은 `unsetPlaceholder` 가 한 곳에서
+   * 한다(neotms.codes.ts).
    */
   placeholder?: string | null
   disabled?: boolean
@@ -69,6 +78,31 @@ export function CodeSelect({
 }: Props) {
   const { options, isEmpty, isLoading } = useCodeOptions(domain, value)
   const label = CODE_DOMAIN_LABELS[domain]
+
+  /**
+   * '값 없음' 항목이 없는 자리에서 빈 값을 첫 코드로 채운다. `placeholder` 주석의 두 번째 절을
+   * 지키는 코드다.
+   *
+   * **이펙트인 것이 맞는 드문 경우다.** 이 앱의 폼들은 계산을 `set()` 안에서 하고 이펙트를
+   * 피한다(JobFormModal 주석) — 원인이 되는 입력이 바뀌는 자리에서 하면 중간 상태가 없기
+   * 때문이다. 그런데 여기서 원인은 입력이 아니라 **도착하는 데이터**다. 첫 코드가 무엇인지는
+   * `useCodes` 응답이 오기 전에는 알 수 없으므로 폼이 초기값을 적어 둘 수가 없고, 채울 수
+   * 있게 되는 시점이 렌더 바깥에서 온다.
+   *
+   * 한 번 채우면 `value` 가 비지 않으므로 다시 돌지 않는다. `onChange` 를 의존성에서 빼 둔 것은
+   * 호출 자리마다 인라인 화살표 함수라 매 렌더 새 참조가 되기 때문이고, 빼도 안전한 이유는 이
+   * 이펙트가 읽는 값이 전부 의존성에 있다는 것이다.
+   *
+   * 코드 목록이 비어 있으면 아무것도 하지 않는다 — 그때는 고를 것이 정말로 없고, 화면은 아래
+   * 경고로 그 사실을 말한다(씨드를 적용하지 않은 환경).
+   */
+  const first = options.length > 0 ? options[0].value : null
+  useEffect(() => {
+    if (placeholder !== null || isLoading || first === null) return
+    if (value.trim()) return
+    onChange(first)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placeholder, isLoading, first, value])
 
   return (
     <>

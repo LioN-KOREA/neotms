@@ -46,8 +46,8 @@ import { insertFragments, updateFragments } from "../NeotmsWrite.js";
 import type { CodeCreate, CodeUpdate } from "../neotms.schemas.js";
 
 /**
- * The seven seeded domains, as the application names them - five from db/007_codes.sql and two from
- * db/011_job_types.sql.
+ * The eight seeded domains, as the application names them - five from db/007_codes.sql, two from
+ * db/011_job_types.sql and one from db/016_project_fields.sql.
  *
  * These are the literal `sys_code.code` values of the domain rows - the ones with `code_parent`
  * NULL - and they are ASCII while their children are mostly Korean. The asymmetry is on purpose: a
@@ -56,15 +56,33 @@ import type { CodeCreate, CodeUpdate } from "../neotms.schemas.js";
  * legacy data. "Mostly", because the rule is really that a code is whatever the thing is called -
  * UPRO's children are `Trados` and `memoQ`, and JOBTYPE's are `LINGUISTICS`, `MICE` and `IMC`.
  *
- * Nothing enforces that a `sys_code` row's parent is one of these. An administrator may add an
- * eighth domain from 유지보수 and it will be listed and maintained like the others; what it will NOT
- * have is a dropdown reading it, because that requires a line of frontend code naming it. This
- * constant exists so the ones with dropdowns are enumerable rather than scattered across form
- * components.
+ * Nothing enforces that a `sys_code` row's parent is one of these. An administrator may add a ninth
+ * domain from 유지보수 and it will be listed and maintained like the others; what it will NOT have
+ * is a dropdown reading it, because that requires a line of frontend code naming it. This constant
+ * exists so the ones with dropdowns are enumerable rather than scattered across form components.
  */
 export const NeotmsCodeDomain = {
-  /** 분야. customer.cus_field, project.prj_field, project.prj_field2, translator.tran_field, translator.tran_unfield */
+  /**
+   * 분야, the DETAILED list. customer.cus_field, project.prj_field2, translator.tran_field,
+   * translator.tran_unfield
+   *
+   * `project.prj_field` used to read this list too, and that was the defect db/016_project_fields.sql
+   * corrects: the eighteen values seeded here are specific subject areas (IT·소프트웨어, 의학·제약,
+   * 특허·지식재산), so they are what legacy called PRJ_FIELD2, and the coarse list they group into
+   * was simply missing. The eighteen stay here rather than moving to PRJCAT because a customer's
+   * 분야 and a translator's 가능 분야 are detailed too, and `sys_code.code` is unique across the
+   * whole table - the same value cannot sit in both domains.
+   */
   FIELD: "FIELD",
+  /**
+   * 프로젝트 분야, the COARSE list. project.prj_field only.
+   *
+   * Added by db/016_project_fields.sql; see that file's header for why it is a `sys_code` domain
+   * rather than the dedicated table the request described. It exists because the margin report's
+   * 분야별 dimension groups on `prj_field`, and eighteen fine-grained fields give eighteen thin bars
+   * instead of an answer.
+   */
+  PRJCAT: "PRJCAT",
   /** 작업 종류. job.work_code, purchase_order.po_work_code, customer_contract.work_code, translator_lang.work_code, translator.tran_work_con */
   WORK: "WORK",
   /**

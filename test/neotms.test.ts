@@ -898,6 +898,7 @@ describe("the empty-database bootstrap", () => {
       "013_dashboard_menus.sql",
       "014_fx_rates.sql",
       "015_payment.sql",
+      "016_project_fields.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -3079,5 +3080,144 @@ describe("the 결제 print documents", () => {
     expect(Object.keys(pkg.dependencies)).toContain("jspdf");
     expect(Object.keys(pkg.dependencies)).toContain("html2canvas-pro");
     expect(Object.keys(pkg.dependencies)).not.toContain("html2canvas");
+  });
+});
+
+describe("the 분야 / 세부 분야 split", () => {
+  /** db/016_project_fields.sql, comments stripped - same reason as 011's. */
+  const code = () => sqlCode("016_project_fields.sql");
+
+  const frontendFile = (...segments: string[]) =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  test("the coarse list is a new domain and the eighteen detailed codes are left where they are", () => {
+    /*
+     * The defect being fixed is that both project 분야 columns read ONE list, and that the list is the
+     * detailed one - legacy PRJ_FIELD2. So the fix adds the coarse list and must NOT move the
+     * eighteen: `customer.cus_field`, `translator.tran_field` and `translator.tran_unfield` read the
+     * FIELD domain too, and `sys_code.code` is unique across the whole table, so a value cannot sit
+     * in both domains at once. A DELETE or an UPDATE of `code_parent` here would empty three other
+     * dropdowns and leave their stored values rendering as '(등록되지 않은 값)'.
+     */
+    expect(code()).toMatch(/'PRJCAT',[^\n]*NULL,\s*8/);
+    expect(code()).not.toMatch(/DELETE\s+FROM\s+sys_code/i);
+    expect(code()).not.toMatch(/UPDATE\s+sys_code/i);
+    // Re-runnable, like every other seed in db/.
+    expect(code().match(/ON CONFLICT \(code\) DO NOTHING/g)).toHaveLength(2);
+  });
+
+  test("the backfill moves the detailed value down before deriving the coarse one, and never overwrites a 세부 분야", () => {
+    /*
+     * Order is the whole correctness argument: 3b reads `prj_field2`, so running it first would
+     * classify every project from a column that is still empty and land them all in '일반'. And the
+     * `prj_field2 IS NULL` guard in 3a is what stops a project that already HAS a detailed value from
+     * losing it - that value is the more specific of the two, and it is the only thing `prj_field2`
+     * ever carried.
+     *
+     * The re-run guard is the `NOT IN (SELECT code ... PRJCAT)` predicate. Without it a second
+     * application reclassifies the coarse values it just wrote, every one of them falls through to
+     * `ELSE '일반'`, and the 분야별 report becomes a single bar. That is a silent, total loss of the
+     * grouping, which is why it is asserted rather than trusted to the header's "apply it whole".
+     */
+    const lines = code().split("\n");
+    const moveDown = lines.findIndex((line) => /SET prj_field2 = prj_field/.test(line));
+    const derive = lines.findIndex((line) => /SET prj_field = CASE/.test(line));
+    expect(moveDown).toBeGreaterThan(-1);
+    expect(derive).toBeGreaterThan(moveDown);
+
+    expect(code()).toMatch(/SET prj_field2 = prj_field[\s\S]*?prj_field2 IS NULL/);
+    expect(code()).toMatch(/prj_field NOT IN \(SELECT code FROM sys_code WHERE code_parent = 'PRJCAT'\)/);
+    // Unrecognised values land in a real group rather than in NULL, which the report would print as
+    // '(unassigned)' - a data-entry gap, which is not what an ungrouped field is.
+    expect(code()).toMatch(/ELSE '일반'/);
+  });
+
+  test("every code the backfill maps onto exists in the seed", () => {
+    /*
+     * `project.prj_field` is a foreign key onto `sys_code (code)`, so a CASE arm naming a code the
+     * INSERT above does not create fails the whole UPDATE with 23503 - and it fails on the operator's
+     * screen, halfway through a file whose earlier sections have already committed. A typo in one of
+     * seven Korean compound names with a middle dot in it is exactly the mistake this catches.
+     */
+    const seeded = [...code().matchAll(/\('([^']+)',[^\n]*'PRJCAT'/g)].map((m) => m[1]);
+    expect(seeded).toHaveLength(7);
+    const targets = [...code().matchAll(/THEN '([^']+)'/g)].map((m) => m[1]);
+    expect(targets.length).toBeGreaterThan(0);
+    for (const target of [...targets, "일반"]) {
+      expect(seeded).toContain(target);
+    }
+  });
+
+  test("the two dropdowns read the two different domains", () => {
+    /*
+     * The three literals that have to agree: the domain row in 016, `NeotmsCodeDomain` (which is what
+     * the API's `domain` query parameter is validated against) and `CODE_DOMAIN` (which is what the
+     * form passes to `CodeSelect`). The failure mode of a disagreement is an empty 분야 dropdown on
+     * the project form, with nothing logged anywhere - `codesToOptions` has no fallback for this
+     * domain and is right not to, since a project saves perfectly well without a 분야.
+     *
+     * The last assertion is the point of the whole change: if both selects read FIELD again, 세부
+     * 분야 can only repeat or contradict 분야, and the report's 분야별 breakdown goes back to
+     * eighteen thin bars.
+     */
+    expect(tsCode("codes/NeotmsCode.dbops.ts")).toContain('PRJCAT: "PRJCAT"');
+    const codes = frontendFile("apis", "neotms.codes.ts");
+    expect(codes).toContain("PRJCAT: 'PRJCAT'");
+    expect(codes).toMatch(/PRJCAT: '프로젝트 분야'/);
+
+    const form = frontendFile("features", "projects", "ProjectFormModal.tsx");
+    expect(form).toContain("domain={CODE_DOMAIN.PRJCAT}");
+    expect(form.match(/domain=\{CODE_DOMAIN\.FIELD\}/g)).toHaveLength(1);
+  });
+
+  test("the fields that cannot be empty commit a value instead of merely hiding the empty option", () => {
+    /*
+     * '선택 없음' was removed from four fields on the project form and five on the job form, and the
+     * removal is only half the change. A `<select>` whose value matches no option DISPLAYS the first
+     * option while the form state stays `''`, so deleting the empty option without committing a value
+     * makes the screen show one thing and save another - visible only after saving and reopening.
+     * `CodeSelect` closes that by filling the value when `placeholder` is null, and `unsetPlaceholder`
+     * is what decides: on an edit of a row that is ALREADY blank the option comes back, labelled
+     * '지정 없음', so a memo-only edit cannot invent a 출발어 for one of the thousands of jobs that
+     * legitimately have none (db/011's "forbid, never require").
+     *
+     * The regression to catch is someone re-adding a bare `<option value="">` to make one of these
+     * fields clearable, which looks like a reasonable edit and silently reopens the mismatch. So each
+     * named field is asserted to pass through the helper, and the bare options that REMAIN are counted
+     * rather than forbidden: 통화 and 세금계산서 on the project form and 통화 and 단위 on the job form
+     * keep theirs, because they were not part of the request and are genuinely optional. A count is
+     * the only form of this assertion that fails in both directions.
+     */
+    const project = frontendFile("features", "projects", "ProjectFormModal.tsx");
+    expect(project).toContain("unsetPlaceholder(isEdit, form.prjField)");
+    expect(project).toContain("unsetPlaceholder(isEdit, form.prjField2)");
+    expect(project).toContain("unsetPlaceholder(isEdit, form.prjState)");
+    expect(project).toContain("unsetPlaceholder(isEdit, form.prjMoneyState)");
+    expect(project.match(/<option value="">선택 없음<\/option>/g)).toHaveLength(2);
+
+    const job = frontendFile("features", "jobs", "JobFormModal.tsx");
+    expect(job).toContain("unsetPlaceholder(isEdit, form.workCode)");
+    expect(job).toContain("unsetPlaceholder(isEdit, form.jobState)");
+    expect(job).toContain("unsetPlaceholder(isEdit, form.jobSlang)");
+    expect(job).toContain("unsetPlaceholder(isEdit, form.jobElang)");
+    expect(job.match(/<option value="">선택 없음<\/option>/g)).toHaveLength(1);
+
+    /*
+     * 업무 구분 is the one field that gets a bare `null` rather than the helper, and that is correct
+     * rather than an oversight: `job.job_type` is NOT NULL DEFAULT 'LINGUISTICS' (db/011), so no row
+     * can be blank and there is no '지정 없음' to preserve. Pinned because the obvious "tidy-up" is to
+     * make all five selects look alike.
+     */
+    expect(job).toContain("placeholder={null}");
+
+    const codes = frontendFile("apis", "neotms.codes.ts");
+    expect(codes).toContain("export const unsetPlaceholder");
+    expect(codes).toContain("'지정 없음'");
+    // The one place the fill actually happens. An effect, and the only one of its kind in these
+    // forms, because the cause is arriving data rather than an input - see its comment.
+    expect(frontendFile("shared", "ui", "CodeSelect.tsx")).toContain("onChange(first)");
   });
 });

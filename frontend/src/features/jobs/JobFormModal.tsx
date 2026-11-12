@@ -8,6 +8,7 @@ import {
   isLinguistic,
   JOB_STATES,
   JOB_TYPE_LINGUISTIC,
+  unsetPlaceholder,
 } from '@/apis/neotms.codes'
 import type { JobInput, JobRow, JobUpdate } from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
@@ -269,6 +270,22 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
   /** 이 작업이 언어쌍을 가지는지. 입력란과 저장 본문이 모두 이 한 값에서 갈린다. */
   const linguistic = isLinguistic(form.jobType)
 
+  /*
+   * 다섯 칸('작업 종류'·'진행 상태'·'업무 구분'·'출발어'·'도착어')은 '선택 없음' 을 제공하지
+   * 않는다. 기본값이 이미 첫 항목이거나(작업 종류 `번역`, 진행 상태 `대기`, 업무 구분
+   * `LINGUISTICS`) 비워 둘 이유가 없는 칸이고, 그 항목은 고를 일 없이 자리만 차지하고 있었다.
+   *
+   * **출발어·도착어가 이 목록에 있는 것은 조심해서 읽어야 한다.** 언어를 비워 둔 작업은 수천 건
+   * 있고 그 행들은 그대로 보존되어야 한다(db/011_job_types.sql 의 "금지하되 요구하지 않는다").
+   * 그래서 신규 등록에서만 첫 언어가 기본값이 되고, 이미 비어 있는 행을 열면 '지정 없음' 이
+   * 남는다 — 메모만 고치고 저장했는데 출발어가 생겨나는 일이 없게. 판단은 한 곳에서 한다.
+   *
+   * 업무 분류(JOBCAT)는 여기 없다. 비언어 작업에서도 필수가 아니고, 애초에 서버가 비워 보낼 수
+   * 있는 유일한 코드 도메인이다(`codesToOptions` 주석의 마지막 문단).
+   */
+  const unsetWork = unsetPlaceholder(isEdit, form.workCode)
+  const unsetState = unsetPlaceholder(isEdit, form.jobState)
+
   /* ------------------------------------------------------------------------ */
   /* 원화 환산 — 파일 머리말의 세 경우가 여기서 갈린다                           */
   /* ------------------------------------------------------------------------ */
@@ -528,6 +545,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
             domain={CODE_DOMAIN.WORK}
             value={form.workCode}
             onChange={(v) => set('workCode', v)}
+            placeholder={unsetWork}
           />
         </div>
 
@@ -541,7 +559,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
             value={form.jobState}
             onChange={(e) => set('jobState', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {unsetState ? <option value="">{unsetState}</option> : null}
             {codeOptions(JOB_STATES, form.jobState).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -562,11 +580,17 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           <label className={ui.label} htmlFor="job-type">
             업무 구분
           </label>
+          {/*
+           * 여기만 `unsetPlaceholder` 를 쓰지 않고 바로 `null` 이다. `job.job_type` 은
+           * NOT NULL DEFAULT 'LINGUISTICS' 이므로(db/011_job_types.sql) 레거시 행에도 빈 값이
+           * 있을 수 없고, 보존해야 할 '지정 없음' 이 애초에 존재하지 않는다.
+           */}
           <CodeSelect
             id="job-type"
             domain={CODE_DOMAIN.JOBTYPE}
             value={form.jobType}
             onChange={(v) => set('jobType', v)}
+            placeholder={null}
           />
         </div>
 
@@ -579,9 +603,13 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
          * 리포트의 언어쌍별 집계가 이 값으로 묶이므로 드롭다운이 된 것은 집계 품질에도 직접 영향이
          * 있다 — 자유 입력에서는 '영어' 와 '영어 ' 와 'English' 가 서로 다른 언어쌍이 된다.
          *
-         * 어느 쪽도 필수가 아니다. 언어를 비워 둔 작업이 이미 수천 건 있고, 업무 분류를 아직 모르는
-         * MICE 작업도 저장될 수 있어야 한다 — DB 의 제약은 "틀린 조합을 금지" 할 뿐 "값을 요구" 하지
-         * 않는다(db/011_job_types.sql).
+         * DB 쪽에서는 **어느 쪽도 필수가 아니다.** 언어를 비워 둔 작업이 이미 수천 건 있고, 업무
+         * 분류를 아직 모르는 MICE 작업도 저장될 수 있어야 한다 — 제약은 "틀린 조합을 금지" 할 뿐
+         * "값을 요구" 하지 않는다(db/011_job_types.sql).
+         *
+         * 그 사실과 '선택 없음' 을 없앤 것은 서로 어긋나지 않는다. 화면이 거절하는 것이 아니라,
+         * **신규 등록의 기본값을 빈 값에서 첫 언어로 옮긴 것**이다. 이미 비어 있는 행을 열면 그
+         * 칸은 '지정 없음' 으로 남는다 — 저장되어 있는 사실을 화면이 바꾸지 않는다.
          */}
         {linguistic ? (
           <>
@@ -594,6 +622,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
                 domain={CODE_DOMAIN.LANG}
                 value={form.jobSlang}
                 onChange={(v) => set('jobSlang', v)}
+                placeholder={unsetPlaceholder(isEdit, form.jobSlang)}
               />
             </div>
 
@@ -606,6 +635,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
                 domain={CODE_DOMAIN.LANG}
                 value={form.jobElang}
                 onChange={(v) => set('jobElang', v)}
+                placeholder={unsetPlaceholder(isEdit, form.jobElang)}
               />
             </div>
           </>

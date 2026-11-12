@@ -348,6 +348,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `013_dashboard_menus.sql` | the two 대시보드 menus (`DASHBOARD_SALES`, `DASHBOARD_PM`) and the re-grant that makes them usable. Without it the two dashboards are **unreachable by everyone**, including the superuser; nothing else is affected — **see §6.2** |
 | `014_fx_rates.sql` | `fx_rate_latest`, the view every KRW figure in the system reads through, plus a one-time `UPDATE` that pins `coin_rate` on legacy foreign-currency rows so their stored totals stop floating. **Without it every report, dashboard, rollup and list fails with `42P01 relation "fx_rate_latest" does not exist`** — **see §6.2** |
 | `015_payment.sql` | the 결제 section: the PO approval gate (`po_approved` / `po_approved_at` / `po_approved_by`), `purchase_order.invoice_translator_id` as a real FK so one invoice can group several POs, the two columns `invoice_translator` needed to be writable by an application (`updated_at`, `inv_pm_id`), the `POL_` invoice code sequence, the one `PAYMENT` menu plus its superuser re-grant (**one menu id, two rail entries** — see §6.2), **and a rename of two live `po_state` values — 발주 → 미승인 and 수락 → 진행.** Every PO read selects `po_approved`, so **without it the PO, project and job screens all fail with `42703`** — **see §6.2** |
+| `016_project_fields.sql` | splits 분야 from 세부 분야. Until now both project columns read the **one** `sys_code` FIELD domain, and the eighteen values in it are the *detailed* ones (legacy `PRJ_FIELD2`) — so `prj_field`, the column the margin report's 분야별 dimension groups on, held detailed values and gave eighteen thin bars. Adds a `PRJCAT` domain (seven coarse fields, a starter set), **moves each project's existing `prj_field` value into `prj_field2` and derives the new coarse value from it**, and rewrites both column comments. Changes no column and drops nothing, so it is the one migration here that is **quiet** if skipped — see the table in §6.2 — **see §6.2** |
 
 Every file in `db/` is applicable **as-is**: plain DDL, no placeholders. That matters because the
 application's dbops modules write `:name` parameters (rewritten to `$1` by `toPositional` in
@@ -478,9 +479,9 @@ SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN');
 
 Idempotent, returns the number of menus granted, and safe to run any time.
 
-### 6.2 `007`, `008`, `009`, `010`, `013` — the files whose absence is silent (and `011` / `012` / `014` / `015`, whose absence is not)
+### 6.2 `007`, `008`, `009`, `010`, `013`, `016` — the files whose absence is silent (and `011` / `012` / `014` / `015`, whose absence is not)
 
-`006` gets one administrator in. These five are what the console assumes about the database once
+`006` gets one administrator in. These six are what the console assumes about the database once
 somebody is in, and they share a property worth stating before the detail: **skipping one produces no
 error anywhere a user or an operator would look.** The apply succeeds (they were never run), the
 deploy succeeds (CDK knows nothing about the database's contents), the Lambda starts, and the console
@@ -494,6 +495,7 @@ of the symptom points away from the cause.
 | `009_selfservice.sql` | `staff_self_register()` | the sign-up form submits and answers **500**, with the cause visible only in CloudWatch |
 | `010_currency.sql` | the `currency` rows every `*_coin` / `coin_code` foreign key points at | **every create in the system fails**, on a field nobody touched, reporting a constraint name |
 | `013_dashboard_menus.sql` | the `sys_menu` rows for 대시보드(영업) and 대시보드(PM) | both dashboards are unreachable **by everyone, including the superuser**, and 대시보드 — the first rail entry — is absent, so a signed-in user lands on 프로젝트 instead. Nothing else is affected: no table, column or other route is touched |
+| `016_project_fields.sql` | the `PRJCAT` domain behind the project form's 분야 dropdown, and the one-time move of every existing `prj_field` value into `prj_field2` | **quiet, and the quietest entry in this table.** Nothing fails: the 분야 dropdown is simply empty (`codesToOptions` has no fallback for `PRJCAT`, deliberately — a project saves fine without a 분야), and every existing project keeps a *detailed* value in the column the 분야별 report groups on. So the report answers, it just answers the old wrong question, with eighteen thin bars instead of seven. Skip it and the two dropdowns offer two lists of which one is never populated |
 | `015_payment.sql` **§5** | the `po_state` rename 발주 → 미승인, 수락 → 진행 | the only **quiet** part of an otherwise loud file. Apply `015` but skip its section 5 and everything still runs — but the two 결제 screens filter on 미승인 and 진행 while the rows still say 발주 and 수락, so a 진행 상태 filter lists **nothing** and reads as "there is nothing here" rather than as an error. Apply the file whole |
 
 `013` is the one of these an operator is most likely to defer, because the screens it unlocks are
@@ -572,6 +574,12 @@ two must agree **by string** with `frontend/src/apis/neotms.codes.ts` — the co
 `work_type` by looking it up in that constant, so a code that exists in the database and not in the
 constant renders as blank rather than as itself. Eyeball them; `번역 감수 편집 DTP 감리 기타` and
 `단어 글자 매 시간 건`.
+
+One thing the `FIELD` block's name no longer says: those eighteen are the **detailed** subject fields,
+and on the project form they fill 세부 분야 rather than 분야. The coarse list 분야 reads is `PRJCAT`,
+seeded by `016` — see that file's section below for why the eighteen stay here (a customer's 분야 and a
+translator's 가능 분야 read this list too, and `sys_code.code` is unique across the whole table, so a
+value cannot sit in two domains at once).
 
 The file's section 3 also rewrites the `COMMENT ON COLUMN` of `customer.cus_upro` and
 `translator.tran_upro`, which is the one part of it that is not seeding. The old comments described
@@ -892,7 +900,7 @@ already draw (`read` sees both screens, `update` approves a PO and records payme
 invoice, `delete` voids one). The practical consequence: **the two entries appear and disappear
 together** — `readableNav` filters per item on the same id — so there is no grant that shows one and
 hides the other. If approving POs and issuing invoices ever need to sit with different people, that
-is a second menu id and a `016`, not a settings change.
+is a second menu id and another `db/` file, not a settings change.
 
 Both screens also **open with a query already made**, rather than with a blank list: the PO screen on
 `승인됨` plus a 마감일 window of today ±30 days, the invoice screen on a 발행일 window of the same
@@ -901,6 +909,53 @@ unfiltered first read is the entire history of the table, which on this data is 
 a broken screen. The defaults apply only when the URL carries **no** filter at all; once any filter is
 in the address bar it is honoured literally, so a deliberately emptied date box stays empty instead of
 silently refilling itself. 전체 기간 switches the period off and leaves a trace in the URL saying so.
+
+#### `016_project_fields.sql` — 분야 and 세부 분야 were one list
+
+A project has two subject-field columns, `prj_field` (분야) and `prj_field2` (세부 분야), and until
+this file **both dropdowns were filled from the same `sys_code` domain.** The 세부 분야 box had a hint
+under it admitting as much — "같은 분야 목록에서 고릅니다" — and with one list it could do nothing but
+repeat or contradict the first box.
+
+The part that is not merely untidy: the eighteen values seeded under `FIELD` in `007` are the
+**detailed** ones. `IT·소프트웨어`, `의학·제약`, `특허·지식재산` are specific subject areas, which is
+what legacy called `PRJ_FIELD2`. So the list that was missing is the coarse one, and `prj_field` — the
+column **the margin report's 분야별 dimension groups on** — has been holding detailed values all
+along. The report answers; it answers with eighteen thin bars, which is not an answer to "which part
+of the business is this".
+
+`016` adds a `PRJCAT` domain with seven coarse fields and leaves `FIELD` untouched, then moves each
+project's existing `prj_field` value into `prj_field2` and derives the new coarse value from it. The
+seven are **a starter set with the same standing as `007`'s eighteen** — how this company groups its
+work is a business decision, nothing in the legacy schema records it (`PRJ_FIELD` was `nvarchar(20)`
+free text), and they are expected to be rewritten from 유지보수. They are a grouping *of* the
+eighteen, chosen so the backfill has somewhere to put every existing value.
+
+Two things to know before applying it:
+
+- **Apply it whole and in order.** Section 3 is two `UPDATE`s and the second reads what the first
+  wrote; run them the other way round and every project is classified from a column that is still
+  empty and lands in `일반`. It *is* re-runnable — the second `UPDATE` skips rows whose `prj_field` is
+  already a `PRJCAT` code — but that guard only works if the first one has run.
+- **A project that already had a `prj_field2` keeps it.** That value is the more specific of the two
+  and the only thing the column ever carried; such a row is reclassified in place instead.
+
+Why two `sys_code` domains rather than the two dedicated tables this was originally specified as: the
+whole code subsystem is generic over `sys_code`. `GET /api/v0/codes` returns every domain in one
+response (which is why a four-dropdown form makes one request), the 유지보수 screen builds its tabs
+from `code_parent IS NULL` rows so a new domain becomes an editable tab the day it is seeded, and
+`CodeSelect` takes a domain name and needs no new component. Dedicated tables would have had none of
+that, and `007`'s promise — that these lists are editable from 유지보수 — would have failed for
+precisely the two lists that most need editing. What they *would* have bought is hard enforcement:
+`prj_field text REFERENCES prj_category (code)` makes it impossible to store a 세부 분야 code in the
+분야 column, where an FK to `sys_code (code)` only guarantees "some registered code". That weakness is
+shared by all twenty-two code columns in this schema and `002` took it knowingly; the fix, if it is
+ever wanted, is a `UNIQUE (code, code_parent)` plus a composite FK — the same trick `011` uses to pin
+a detail row to one `job_type` — and it is its own migration. The file's header records all of this.
+
+The ETL note: `project.prj_field` now means the **coarse** field. An ETL that keeps writing detailed
+values there will not fail — the FK is satisfied — but those rows will render as `(등록되지 않은 값)`
+in the dropdown and will not group with anything on the report.
 
 ### Rehearsing the bootstrap locally
 
@@ -914,7 +969,7 @@ docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
 docker cp db neotms-sqlcheck:/db
 for f in 001_extensions 002_tables 003_indexes 004_rollup 005_code_sequences 006_bootstrap \
          007_codes 008_admin 009_selfservice 010_currency 011_job_types 012_job_pricing \
-         013_dashboard_menus 014_fx_rates 015_payment; do
+         013_dashboard_menus 014_fx_rates 015_payment 016_project_fields; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done

@@ -5,8 +5,11 @@ import {
   codeOptions,
   COIN_CODES,
   INVOICE_STATES,
+  MONEY_STATE_UNPAID,
   MONEY_STATES,
+  PROJECT_STATE_QUOTE,
   PROJECT_STATES,
+  unsetPlaceholder,
 } from '@/apis/neotms.codes'
 import type { ProjectInput, ProjectRow } from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
@@ -65,9 +68,9 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
     coinCode: project?.coinCode ?? 'KRW',
     prjField: project?.prjField ?? '',
     prjField2: project?.prjField2 ?? '',
-    prjState: project?.prjState ?? '진행',
+    prjState: project?.prjState ?? PROJECT_STATE_QUOTE,
     prjInvoiceState: project?.prjInvoiceState ?? '미발행',
-    prjMoneyState: project?.prjMoneyState ?? '미정산',
+    prjMoneyState: project?.prjMoneyState ?? MONEY_STATE_UNPAID,
     prjSday: toDateInputValue(project?.prjSday),
     prjSdayTime: project?.prjSdayTime ?? '',
     prjEday: toDateInputValue(project?.prjEday),
@@ -84,6 +87,14 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
 
   const name = form.prjName.trim()
   const canSave = name.length > 0 && !!customer && !pending
+
+  /*
+   * 네 칸('진행 상태'·'입금'·'분야'·'세부 분야')은 '선택 없음' 을 제공하지 않는다. 비워 둘 이유가
+   * 없는 칸이고, 그 항목이 첫 번째에 있으면 기본값이 빈 값이 된다 — 판단과 이유는 전부
+   * `unsetPlaceholder` 주석에 있다. 이미 비어 있는 행을 수정할 때만 항목이 돌아온다.
+   */
+  const unsetState = unsetPlaceholder(isEdit, form.prjState)
+  const unsetMoney = unsetPlaceholder(isEdit, form.prjMoneyState)
 
   const onSubmit = async () => {
     if (!customer || name.length === 0) return
@@ -188,7 +199,14 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             value={form.prjState}
             onChange={(e) => set('prjState', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {/*
+             * '선택 없음' 이 없다. 상태 없는 프로젝트는 업무상 존재하지 않고, 그 항목이 첫
+             * 번째에 있던 동안에는 기본값이 사실상 "상태 없음" 이었다 — 지금은 `견적` 이다.
+             *
+             * 이미 비어 있는 행을 수정할 때만 항목이 돌아온다(`unsetPlaceholder` 주석). 그
+             * 라벨이 '지정 없음' 인 것도 그 함수가 정한다.
+             */}
+            {unsetState ? <option value="">{unsetState}</option> : null}
             {/* 목록에 없는 값이 저장되어 있어도 지워지지 않게 한다 — neotms.codes.ts */}
             {codeOptions(PROJECT_STATES, form.prjState).map((o) => (
               <option key={o.value} value={o.value}>
@@ -246,7 +264,8 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             value={form.prjMoneyState}
             onChange={(e) => set('prjMoneyState', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {/* 진행 상태와 같은 이유로 '선택 없음' 이 없다. 기본값은 `미정산` 이다. */}
+            {unsetMoney ? <option value="">{unsetMoney}</option> : null}
             {codeOptions(MONEY_STATES, form.prjMoneyState).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -306,10 +325,20 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
         </div>
 
         {/*
-         * 두 칸 모두 `sys_code` 의 분야 도메인이다 — `prj_field` 와 `prj_field2` 가 같은
-         * 코드 테이블을 참조한다. 리포트의 분야별 집계가 `prj_field` 로 묶이므로, 자유
-         * 입력이던 동안에는 저장 자체가 안 되거나(코드 테이블이 비어 있던 동안) 집계가
-         * 표기 차이로 쪼개질 수 있었다.
+         * 두 칸은 **서로 다른 목록**에서 고른다. 분야는 `PRJCAT`(큰 분류, 일곱 개), 세부 분야는
+         * `FIELD`(세부, 열여덟 개)다.
+         *
+         * 전에는 둘 다 `FIELD` 였고, 그래서 세부 분야 칸은 첫 칸을 되풀이하거나 모순되게 만드는
+         * 것 외에 할 수 있는 일이 없었다 — 그 사실을 칸 아래 힌트가 "같은 분야 목록에서
+         * 고릅니다" 라고 적어 두고 있었다. 더 중요한 쪽은 리포트다: 분야별 집계가 `prj_field` 로
+         * 묶이는데 거기 세부 값이 들어 있었으니 열여덟 갈래로 쪼개진 막대가 나왔고, 그건 "사업의
+         * 어느 쪽이 버는가" 에 대한 답이 아니다. `PRJCAT` 도메인과 기존 값의 이전은
+         * db/016_project_fields.sql 에 있다.
+         *
+         * 두 칸의 값이 서로 맞는지는 **아무도 검사하지 않는다.** '기술·공학 / 의학·제약' 같은
+         * 조합이 저장될 수 있다는 뜻이다. 그 짝을 코드로 못박으려면 분류마다 어떤 세부 분야가
+         * 속하는지의 표가 있어야 하는데, 그 표는 이 회사가 정할 일이고 유지보수 화면에서 목록을
+         * 고치면 곧 어긋난다 — 016 헤더가 같은 판단을 적어 두고 있다.
          */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="prj-field">
@@ -317,9 +346,10 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
           </label>
           <CodeSelect
             id="prj-field"
-            domain={CODE_DOMAIN.FIELD}
+            domain={CODE_DOMAIN.PRJCAT}
             value={form.prjField}
             onChange={(v) => set('prjField', v)}
+            placeholder={unsetPlaceholder(isEdit, form.prjField)}
           />
         </div>
 
@@ -332,7 +362,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             domain={CODE_DOMAIN.FIELD}
             value={form.prjField2}
             onChange={(v) => set('prjField2', v)}
-            hint="분야가 둘에 걸칠 때만 채웁니다. 같은 분야 목록에서 고릅니다."
+            placeholder={unsetPlaceholder(isEdit, form.prjField2)}
           />
         </div>
 
