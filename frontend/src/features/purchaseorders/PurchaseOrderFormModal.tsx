@@ -8,12 +8,13 @@ import {
   CODE_DOMAIN,
   codeOptions,
   COIN_CODES,
-  INVOICE_STATES,
   isLinguistic,
   JOB_TYPE_LINGUISTIC,
+  MONEY_STATE_UNPAID,
   MONEY_STATES,
   PO_STATE_UNAPPROVED,
   PO_STATES,
+  unsetPlaceholder,
 } from '@/apis/neotms.codes'
 import type {
   PurchaseOrderInput,
@@ -148,11 +149,9 @@ export function PurchaseOrderFormModal({
     poEday: toDateInputValue(po?.poEday),
     poEdayTime: po?.poEdayTime ?? '',
     poState: po?.poState ?? PO_STATE_UNAPPROVED,
-    poInvoiceState: po?.poInvoiceState ?? '미발행',
-    poMoneyState: po?.poMoneyState ?? '미정산',
+    poMoneyState: po?.poMoneyState ?? MONEY_STATE_UNPAID,
     poMoneyDay: toDateInputValue(po?.poMoneyDay),
     poMoneyPrice: po?.poMoneyPrice ?? '',
-    invCode: po?.invCode ?? '',
     poContent: po?.poContent ?? '',
   })
   const [dirty, setDirty] = useState(false)
@@ -177,6 +176,30 @@ export function PurchaseOrderFormModal({
   /** 지금 이 발주의 업무 구분. 입력란과 저장 본문이 모두 이 값에서 갈린다. */
   const poType = form.poType.trim() || inheritedType
   const linguistic = isLinguistic(poType)
+
+  /*
+   * 작업 등록 폼과 같은 처방을 같은 칸들에 한다 — '선택 없음' 을 없애고, 신규 등록의 기본값을 빈
+   * 값에서 첫 항목으로 옮긴다. 판단은 전부 `unsetPlaceholder` 주석에 있고, 여기서 되풀이할 것은
+   * 발주에만 있는 세 가지뿐이다.
+   *
+   * **통화.** 기본값은 이미 `KRW` 다. 비워 두어도 **고장나지는 않는다** — 서버는
+   * `COALESCE(coin_code, 'KRW')` 로 읽고, 통화가 없는 금액은 이미 원화라고 결론 내린다
+   * (NeotmsMoney.ts 의 `krwAmount` 가 그 선택을 명시해 두고 있다). 문제는 그 다음이다: 빈 값은
+   * `KRW` 와 효과가 완전히 같은데 화면에는 "통화 미지정" 으로 보인다. 같은 사실을 두 가지로 적는
+   * 선택지이고, 둘이 다르다고 믿게 만드는 쪽이 비싸다. 번역가의 정산 통화와 같아야 한다는 안내가
+   * 아래에 붙어 있는 칸이기도 해서, 여기서 비어 있음은 특히 읽기 어렵다.
+   *
+   * **지급(`po_money_state`).** 프로젝트의 '입금' 과 같은 축이고 같은 이유로 비울 필요가 없다 —
+   * 모든 발주는 미정산에서 시작한다.
+   *
+   * **업무 구분은 이 목록에 없다.** 아래에서 `placeholder={null}` 을 바로 준다 — 이 폼의 업무
+   * 구분은 비어 있을 수가 없기 때문이다. `form.poType` 이 비면 작업에서 상속한 값이
+   * 대신 들어가므로(`poType`), '지정 없음' 으로 남을 상태가 존재하지 않는다.
+   */
+  const unsetWork = unsetPlaceholder(isEdit, form.poWorkCode)
+  const unsetState = unsetPlaceholder(isEdit, form.poState)
+  const unsetCoin = unsetPlaceholder(isEdit, form.poCoinCode)
+  const unsetMoney = unsetPlaceholder(isEdit, form.poMoneyState)
 
   /** 저장된 합계는 손으로 조정된 값일 수 있다 — `JobFormModal` 과 같은 판단. */
   const [sumEdited, setSumEdited] = useState(isEdit)
@@ -386,11 +409,19 @@ export function PurchaseOrderFormModal({
       poEday: form.poEday || null,
       poEdayTime: form.poEdayTime || null,
       poState: form.poState.trim() || null,
-      poInvoiceState: form.poInvoiceState.trim() || null,
+      /*
+       * `poInvoiceState` 와 `invCode` 가 여기 없는 것은 **의도다.** 두 칸을 화면에서 뺐고, 보내지
+       * 않으므로 수정 경로에서 기존 값이 지워지지 않는다(부분 수정이다 — 본문에 없는 필드는 서버가
+       * 건드리지 않는다). 컬럼과 쓰기 스키마는 그대로 남아 있고, 필요해지면 칸만 되돌리면 된다.
+       *
+       * 발주 쪽은 빼는 것이 특히 분명했다: `po_invoice_state` 는 결제 화면의 정산 모달이 쓰는
+       * 값이고, `inv_code` 는 **인보이스 발행·취소가 유지하는 비정규 사본**이다(`invoiceTranslatorId`
+       * 주석). 등록 폼에서 손으로 적을 수 있게 두면 결제 화면이 관리하는 값을 자유 입력이 덮어쓰고,
+       * 그 번호가 어느 인보이스를 가리키는지는 아무도 알 수 없게 된다.
+       */
       poMoneyState: form.poMoneyState.trim() || null,
       poMoneyDay: form.poMoneyDay || null,
       poMoneyPrice: toDecimalInput(form.poMoneyPrice),
-      invCode: form.invCode.trim() || null,
       poContent: form.poContent.trim() || null,
     }
 
@@ -515,6 +546,7 @@ export function PurchaseOrderFormModal({
             domain={CODE_DOMAIN.WORK}
             value={form.poWorkCode}
             onChange={(v) => set('poWorkCode', v)}
+            placeholder={unsetWork}
           />
         </div>
 
@@ -528,7 +560,8 @@ export function PurchaseOrderFormModal({
             value={form.poState}
             onChange={(e) => set('poState', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {/* '선택 없음' 이 없다 — 기본값은 `미승인` 이다. `unsetWork` 주석 참고. */}
+            {unsetState ? <option value="">{unsetState}</option> : null}
             {codeOptions(PO_STATES, form.poState).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -547,11 +580,16 @@ export function PurchaseOrderFormModal({
           <label className={ui.label} htmlFor="po-type">
             업무 구분
           </label>
+          {/*
+           * `placeholder={null}` 이 `unsetPlaceholder` 가 아닌 이유는 위 주석의 마지막 문단에
+           * 있다 — `value` 가 `poType` 이고 그 값은 비어 있을 수가 없다.
+           */}
           <CodeSelect
             id="po-type"
             domain={CODE_DOMAIN.JOBTYPE}
             value={poType}
             onChange={(v) => set('poType', v)}
+            placeholder={null}
           />
           {!isEdit && form.poType.trim() === '' ? (
             <span className={ui.hint}>작업의 업무 구분을 따릅니다. 바꿀 수 있습니다.</span>
@@ -569,7 +607,11 @@ export function PurchaseOrderFormModal({
          * 아무도 고치지 않는다. (업무 구분은 반대다. 그쪽은 둘 중 어느 칸을 보여 줄지를
          * 결정하므로 비워 둘 수가 없다.)
          *
-         * 어느 쪽도 필수가 아니다. 언어쌍이 비어 있는 발주가 이미 수천 건 있다.
+         * DB 쪽에서는 어느 쪽도 필수가 아니다. 언어쌍이 비어 있는 발주가 이미 수천 건 있다.
+         *
+         * 그 사실과 '선택 없음' 을 없앤 것은 어긋나지 않는다. 화면이 거절하는 것이 아니라 **신규
+         * 등록의 기본값을 빈 값에서 첫 언어로 옮긴 것**이고, 이미 비어 있는 행을 열면 '지정 없음'
+         * 으로 남는다 — JobFormModal 의 같은 자리와 같은 처방이다.
          */}
         {linguistic ? (
           <>
@@ -582,6 +624,7 @@ export function PurchaseOrderFormModal({
                 domain={CODE_DOMAIN.LANG}
                 value={form.poSlang}
                 onChange={(v) => set('poSlang', v)}
+                placeholder={unsetPlaceholder(isEdit, form.poSlang)}
               />
             </div>
 
@@ -594,6 +637,7 @@ export function PurchaseOrderFormModal({
                 domain={CODE_DOMAIN.LANG}
                 value={form.poElang}
                 onChange={(v) => set('poElang', v)}
+                placeholder={unsetPlaceholder(isEdit, form.poElang)}
               />
             </div>
           </>
@@ -665,7 +709,8 @@ export function PurchaseOrderFormModal({
             value={form.poCoinCode}
             onChange={(e) => set('poCoinCode', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {/* '선택 없음' 이 없다 — 빈 값은 `KRW` 와 효과가 같다. `unsetCoin` 주석 참고. */}
+            {unsetCoin ? <option value="">{unsetCoin}</option> : null}
             {codeOptions(COIN_CODES, form.poCoinCode).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -857,25 +902,11 @@ export function PurchaseOrderFormModal({
           />
         </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-invoice-state">
-            계산서
-          </label>
-          <select
-            id="po-invoice-state"
-            className={ui.select}
-            value={form.poInvoiceState}
-            onChange={(e) => set('poInvoiceState', e.target.value)}
-          >
-            <option value="">선택 없음</option>
-            {codeOptions(INVOICE_STATES, form.poInvoiceState).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
+        {/*
+         * '계산서' 와 '계산서 번호' 가 있던 자리. 두 칸은 지금 쓰지 않으므로 화면에서 뺐다 —
+         * 컬럼·쓰기 스키마·타입은 그대로이고, 저장 본문에서 빠진 이유와 그 안전함은 위 `common`
+         * 주석에 적혀 있다. 되돌릴 때는 그 두 곳과 폼 상태 세 줄이 전부다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-money-state">
             지급
@@ -886,7 +917,8 @@ export function PurchaseOrderFormModal({
             value={form.poMoneyState}
             onChange={(e) => set('poMoneyState', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {/* '선택 없음' 이 없다 — 모든 발주가 미정산에서 시작한다. `unsetMoney` 주석 참고. */}
+            {unsetMoney ? <option value="">{unsetMoney}</option> : null}
             {codeOptions(MONEY_STATES, form.poMoneyState).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -920,18 +952,6 @@ export function PurchaseOrderFormModal({
             onChange={(e) => set('poMoneyPrice', e.target.value)}
           />
           <span className={ui.hint}>실제 지급한 금액입니다. 원가와 다를 수 있습니다.</span>
-        </div>
-
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-inv-code">
-            계산서 번호
-          </label>
-          <input
-            id="po-inv-code"
-            className={`${ui.input} ${ui.inputMono}`}
-            value={form.invCode}
-            onChange={(e) => set('invCode', e.target.value)}
-          />
         </div>
 
         <div className={ui.fieldWide}>

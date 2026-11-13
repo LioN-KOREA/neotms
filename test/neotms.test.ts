@@ -3175,10 +3175,10 @@ describe("the 분야 / 세부 분야 split", () => {
 
   test("the fields that cannot be empty commit a value instead of merely hiding the empty option", () => {
     /*
-     * '선택 없음' was removed from four fields on the project form and five on the job form, and the
-     * removal is only half the change. A `<select>` whose value matches no option DISPLAYS the first
-     * option while the form state stays `''`, so deleting the empty option without committing a value
-     * makes the screen show one thing and save another - visible only after saving and reopening.
+     * '선택 없음' is gone from every code select on all three registration forms, and the removal is
+     * only half the change. A `<select>` whose value matches no option DISPLAYS the first option
+     * while the form state stays `''`, so deleting the empty option without committing a value makes
+     * the screen show one thing and save another - visible only after saving and reopening.
      * `CodeSelect` closes that by filling the value when `placeholder` is null, and `unsetPlaceholder`
      * is what decides: on an edit of a row that is ALREADY blank the option comes back, labelled
      * '지정 없음', so a memo-only edit cannot invent a 출발어 for one of the thousands of jobs that
@@ -3186,32 +3186,49 @@ describe("the 분야 / 세부 분야 split", () => {
      *
      * The regression to catch is someone re-adding a bare `<option value="">` to make one of these
      * fields clearable, which looks like a reasonable edit and silently reopens the mismatch. So each
-     * named field is asserted to pass through the helper, and the bare options that REMAIN are counted
-     * rather than forbidden: 통화 and 세금계산서 on the project form and 통화 and 단위 on the job form
-     * keep theirs, because they were not part of the request and are genuinely optional. A count is
-     * the only form of this assertion that fails in both directions.
+     * named field is asserted to pass through the helper, and the bare options are pinned at NONE
+     * rather than at a number - these counts were already stale once, back when 통화 still kept its
+     * own option, and a count that has to be edited every time a field joins the set is a count that
+     * gets edited to whatever makes the suite green.
+     *
+     * 단위 is not in this net and must not be: its `placeholder="단위"` is a visible label in a tight
+     * row rather than an unset option, and that select is `silent`.
      */
     const project = frontendFile("features", "projects", "ProjectFormModal.tsx");
     expect(project).toContain("unsetPlaceholder(isEdit, form.prjField)");
     expect(project).toContain("unsetPlaceholder(isEdit, form.prjField2)");
     expect(project).toContain("unsetPlaceholder(isEdit, form.prjState)");
     expect(project).toContain("unsetPlaceholder(isEdit, form.prjMoneyState)");
-    expect(project.match(/<option value="">선택 없음<\/option>/g)).toHaveLength(2);
+    expect(project).toContain("unsetPlaceholder(isEdit, form.coinCode)");
+    expect(project).not.toContain('<option value="">선택 없음</option>');
 
     const job = frontendFile("features", "jobs", "JobFormModal.tsx");
     expect(job).toContain("unsetPlaceholder(isEdit, form.workCode)");
     expect(job).toContain("unsetPlaceholder(isEdit, form.jobState)");
     expect(job).toContain("unsetPlaceholder(isEdit, form.jobSlang)");
     expect(job).toContain("unsetPlaceholder(isEdit, form.jobElang)");
-    expect(job.match(/<option value="">선택 없음<\/option>/g)).toHaveLength(1);
+    expect(job).toContain("unsetPlaceholder(isEdit, form.coinCode)");
+    expect(job).not.toContain('<option value="">선택 없음</option>');
+
+    const po = frontendFile("features", "purchaseorders", "PurchaseOrderFormModal.tsx");
+    expect(po).toContain("unsetPlaceholder(isEdit, form.poWorkCode)");
+    expect(po).toContain("unsetPlaceholder(isEdit, form.poState)");
+    expect(po).toContain("unsetPlaceholder(isEdit, form.poSlang)");
+    expect(po).toContain("unsetPlaceholder(isEdit, form.poElang)");
+    expect(po).toContain("unsetPlaceholder(isEdit, form.poCoinCode)");
+    expect(po).toContain("unsetPlaceholder(isEdit, form.poMoneyState)");
+    expect(po).not.toContain('<option value="">선택 없음</option>');
 
     /*
-     * 업무 구분 is the one field that gets a bare `null` rather than the helper, and that is correct
-     * rather than an oversight: `job.job_type` is NOT NULL DEFAULT 'LINGUISTICS' (db/011), so no row
-     * can be blank and there is no '지정 없음' to preserve. Pinned because the obvious "tidy-up" is to
-     * make all five selects look alike.
+     * 업무 구분 is the one field that gets a bare `null` rather than the helper, on the job form and
+     * on the PO form alike, and that is correct rather than an oversight. On a job, `job.job_type` is
+     * NOT NULL DEFAULT 'LINGUISTICS' (db/011), so no row can be blank and there is no '지정 없음' to
+     * preserve. On a PO the displayed value falls back to the job's type whenever `form.poType` is
+     * empty, so the blank state does not exist there either. Pinned because the obvious "tidy-up" is
+     * to make every select on these forms look alike.
      */
     expect(job).toContain("placeholder={null}");
+    expect(po).toContain("placeholder={null}");
 
     const codes = frontendFile("apis", "neotms.codes.ts");
     expect(codes).toContain("export const unsetPlaceholder");
@@ -3219,5 +3236,51 @@ describe("the 분야 / 세부 분야 split", () => {
     // The one place the fill actually happens. An effect, and the only one of its kind in these
     // forms, because the cause is arriving data rather than an input - see its comment.
     expect(frontendFile("shared", "ui", "CodeSelect.tsx")).toContain("onChange(first)");
+  });
+
+  test("세금계산서 left the screens but not the database", () => {
+    /*
+     * The request was explicit about the asymmetry: take 세금계산서 and 세금계산서 번호 off the
+     * frontend, leave the backend alone, because they may come back. So both halves are asserted, and
+     * the backend half is the one that needs a test - "we removed a field" is the kind of task that
+     * drifts into removing the column, the schema entry and the SELECT too, and once the column is
+     * dropped the data that was in it is not coming back with it.
+     *
+     * The frontend half is restricted to the project side on purpose. `po_invoice_state` still has a
+     * writer - `SettlementModal` on the 결제 screen - so the PO list's 계산서 filter and column stay,
+     * and `invoiceState` remains a live query parameter there. `prj_invoice_state` has none left,
+     * which is why its filter, column and detail row went with the form fields rather than lingering
+     * as read-only values nobody can change.
+     */
+    expect(sql("002_tables.sql")).toContain("prj_invoice_state");
+    expect(tsCode("neotms.schemas.ts")).toContain("prjInvoiceState");
+    expect(tsCode("projects/NeotmsProject.dbops.ts")).toContain("prj_invoice_state");
+    expect(tsCode("projects/NeotmsProject.dbops.ts")).toContain(
+      'invoiceState: { column: "p.prj_invoice_state"',
+    );
+
+    for (const file of [
+      frontendFile("features", "projects", "ProjectFormModal.tsx"),
+      frontendFile("features", "projects", "ProjectsView.tsx"),
+      frontendFile("features", "projects", "ProjectDetailView.tsx"),
+      frontendFile("features", "purchaseorders", "PurchaseOrderFormModal.tsx"),
+    ]) {
+      /*
+       * `project.prjInvoiceState` / `po.invCode` and friends - the JSX reads, not the prose. The
+       * comments left behind at each vacated slot name these fields deliberately, so a bare substring
+       * search would fail on the explanation rather than on the code.
+       */
+      expect(file).not.toMatch(/\b(project|po|row|form)\.(prj|po)?[Ii]nvoiceState\b/);
+      expect(file).not.toMatch(/\b(project|po|row|form)\.invCode\b/);
+    }
+
+    // The PO side keeps its writer, and therefore keeps its screens. Stated as an assertion so that
+    // "finish the job" does not quietly take these out too.
+    expect(frontendFile("features", "payment", "SettlementModal.tsx")).toContain(
+      "poInvoiceState: form.poInvoiceState.trim() || null",
+    );
+    expect(frontendFile("features", "purchaseorders", "PurchaseOrdersView.tsx")).toContain(
+      "INVOICE_STATES",
+    );
   });
 });

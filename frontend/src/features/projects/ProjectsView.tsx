@@ -2,12 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
 import { useProfile, useProjects } from '@/apis/queries/neotms.query'
 import { useDeleteProject } from '@/apis/queries/neotms.mutation'
-import {
-  codeOptions,
-  INVOICE_STATES,
-  MONEY_STATES,
-  PROJECT_STATES,
-} from '@/apis/neotms.codes'
+import { codeOptions, MONEY_STATES, PROJECT_STATES } from '@/apis/neotms.codes'
 import type { ProjectRow } from '@/apis/neotms.types'
 import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
@@ -22,12 +17,18 @@ import { ProjectFormModal } from './ProjectFormModal'
 /**
  * 프로젝트 목록.
  *
- * ## 세 가지 상태를 모두 세운다
+ * ## 두 가지 상태를 모두 세운다
  *
- * 진행 상태·세금계산서·입금은 서로 다른 축이고, 담당자가 실제로 찾는 것은 그 **조합**이다 —
- * "완료됐는데 계산서가 안 나간 프로젝트", "계산서는 나갔는데 입금이 안 된 프로젝트". 레거시에서
- * 이 조합을 찾는 방법은 목록을 눈으로 훑는 것뿐이었고, 그래서 입금 누락이 몇 달씩 남아 있었다.
- * 세 열을 모두 세우고 세 필터를 모두 주는 이유가 그것이다.
+ * 진행 상태와 입금은 서로 다른 축이고, 담당자가 실제로 찾는 것은 그 **조합**이다 — "완료됐는데
+ * 입금이 안 된 프로젝트". 레거시에서 이 조합을 찾는 방법은 목록을 눈으로 훑는 것뿐이었고,
+ * 그래서 입금 누락이 몇 달씩 남아 있었다. 두 열을 모두 세우고 두 필터를 모두 주는 이유가 그것이다.
+ *
+ * 세금계산서는 **세 번째 축이었다가 화면에서 빠졌다.** `project.prj_invoice_state` 와
+ * `project.inv_code` 컬럼은 그대로 있고 서버도 `invoiceState` 걸러내기를 그대로 받지만, 그 값을
+ * 쓰는 화면이 이제 하나도 없다 — 프로젝트 등록 폼에서 두 칸을 뺐기 때문이다. 아무도 채울 수
+ * 없는 값으로 거르는 필터와, 영원히 비어 있는 열은 조건이 듣지 않는다는 오해만 만든다. 발주
+ * 쪽은 다르다: `po_invoice_state` 는 결제 화면의 `SettlementModal` 이 계속 쓰므로
+ * `PurchaseOrdersView` 의 계산서 필터와 열은 그대로 남아 있다.
  *
  * ## 프로젝트명이 링크다
  *
@@ -49,7 +50,7 @@ import { ProjectFormModal } from './ProjectFormModal'
  * 화면을 어지럽히지 않는다는 쪽을 골랐다.
  */
 
-const FILTER_KEYS = ['q', 'state', 'invoiceState', 'moneyState', 'basis', 'from', 'to'] as const
+const FILTER_KEYS = ['q', 'state', 'moneyState', 'basis', 'from', 'to'] as const
 
 /**
  * 기간 검색의 기준. 주소에 적히는 값이므로 **짧고 안 바뀌어야** 한다.
@@ -72,7 +73,6 @@ export function ProjectsView() {
   const [draft, setDraft] = useState({
     q: filters.q,
     state: filters.state,
-    invoiceState: filters.invoiceState,
     moneyState: filters.moneyState,
     basis: filters.basis || 'start',
     from: filters.from,
@@ -100,7 +100,6 @@ export function ProjectsView() {
     limit: LIST_PAGE_SIZE,
     q: filters.q || undefined,
     state: filters.state || undefined,
-    invoiceState: filters.invoiceState || undefined,
     moneyState: filters.moneyState || undefined,
     startFrom: useDueBasis ? undefined : periodFrom,
     startTo: useDueBasis ? undefined : periodTo,
@@ -144,7 +143,6 @@ export function ProjectsView() {
     setDraft({
       q: '',
       state: '',
-      invoiceState: '',
       moneyState: '',
       // 기준은 비우지 않고 기본값으로 되돌린다 — 드롭다운에 빈 항목이 없으므로 빈 문자열을
       // 넣으면 `<select>` 의 value 가 어느 option 과도 안 맞아 브라우저가 첫 항목을 고른 척
@@ -240,24 +238,7 @@ export function ProjectsView() {
             </select>
           </div>
 
-          <div className={ui.filterField}>
-            <label className={ui.label} htmlFor="pf-invoice">
-              세금계산서
-            </label>
-            <select
-              id="pf-invoice"
-              className={ui.select}
-              value={draft.invoiceState}
-              onChange={(e) => setDraft((p) => ({ ...p, invoiceState: e.target.value }))}
-            >
-              <option value="">전체</option>
-              {codeOptions(INVOICE_STATES, draft.invoiceState).map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* 세금계산서 걸러내기가 있던 자리. 파일 머리말의 마지막 문단 참고. */}
 
           <div className={ui.filterField}>
             <label className={ui.label} htmlFor="pf-money">
@@ -355,7 +336,6 @@ export function ProjectsView() {
                 <th>담당</th>
                 <th>기간</th>
                 <th>진행</th>
-                <th>계산서</th>
                 <th>입금</th>
                 <th>수정</th>
               </tr>
@@ -370,7 +350,7 @@ export function ProjectsView() {
                     ? '조건에 맞는 프로젝트가 없습니다.'
                     : '등록된 프로젝트가 없습니다. 먼저 고객사를 등록한 뒤 프로젝트를 만듭니다.'
                 }
-                colSpan={9}
+                colSpan={8}
               />
               {rows.map((row) => (
                 <tr key={row.id}>
@@ -418,9 +398,7 @@ export function ProjectsView() {
                   <td>
                     <StatusChip value={row.prjState} />
                   </td>
-                  <td>
-                    <StatusChip value={row.prjInvoiceState} />
-                  </td>
+                  {/* 계산서 열이 있던 자리. 파일 머리말의 마지막 문단 참고. */}
                   <td>
                     <StatusChip value={row.prjMoneyState} />
                   </td>

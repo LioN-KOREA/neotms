@@ -4,7 +4,6 @@ import {
   CODE_DOMAIN,
   codeOptions,
   COIN_CODES,
-  INVOICE_STATES,
   MONEY_STATE_UNPAID,
   MONEY_STATES,
   PROJECT_STATE_QUOTE,
@@ -69,13 +68,11 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
     prjField: project?.prjField ?? '',
     prjField2: project?.prjField2 ?? '',
     prjState: project?.prjState ?? PROJECT_STATE_QUOTE,
-    prjInvoiceState: project?.prjInvoiceState ?? '미발행',
     prjMoneyState: project?.prjMoneyState ?? MONEY_STATE_UNPAID,
     prjSday: toDateInputValue(project?.prjSday),
     prjSdayTime: project?.prjSdayTime ?? '',
     prjEday: toDateInputValue(project?.prjEday),
     prjEdayTime: project?.prjEdayTime ?? '',
-    invCode: project?.invCode ?? '',
     prjContent: project?.prjContent ?? '',
   })
   const [dirty, setDirty] = useState(false)
@@ -89,11 +86,18 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
   const canSave = name.length > 0 && !!customer && !pending
 
   /*
-   * 네 칸('진행 상태'·'입금'·'분야'·'세부 분야')은 '선택 없음' 을 제공하지 않는다. 비워 둘 이유가
-   * 없는 칸이고, 그 항목이 첫 번째에 있으면 기본값이 빈 값이 된다 — 판단과 이유는 전부
+   * 다섯 칸('진행 상태'·'통화'·'입금'·'분야'·'세부 분야')은 '선택 없음' 을 제공하지 않는다. 비워 둘
+   * 이유가 없는 칸이고, 그 항목이 첫 번째에 있으면 기본값이 빈 값이 된다 — 판단과 이유는 전부
    * `unsetPlaceholder` 주석에 있다. 이미 비어 있는 행을 수정할 때만 항목이 돌아온다.
+   *
+   * 통화의 '선택 없음' 은 조금 다른 이유로 없어진다. 비워 두어도 **고장나지는 않는다** — 서버는
+   * `COALESCE(coin_code, 'KRW')` 로 읽고, 통화가 없는 금액은 이미 원화라고 결론 내린다
+   * (NeotmsMoney.ts 가 그 선택을 명시해 두고 있다). 문제는 그 다음이다: 빈 값은 `KRW` 와 효과가
+   * 완전히 같은데 화면에는 "통화 미지정" 으로 보인다. 같은 사실을 두 가지로 적는 선택지이고,
+   * 둘이 다르다고 믿게 만드는 쪽이 비싸다. 기본값은 이미 `KRW` 였다.
    */
   const unsetState = unsetPlaceholder(isEdit, form.prjState)
+  const unsetCoin = unsetPlaceholder(isEdit, form.coinCode)
   const unsetMoney = unsetPlaceholder(isEdit, form.prjMoneyState)
 
   const onSubmit = async () => {
@@ -113,13 +117,18 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
       prjField: form.prjField.trim() || null,
       prjField2: form.prjField2.trim() || null,
       prjState: form.prjState.trim() || null,
-      prjInvoiceState: form.prjInvoiceState.trim() || null,
+      /*
+       * `prjInvoiceState` 와 `invCode` 가 여기 없는 것은 **의도다.** 세금계산서와 세금계산서 번호
+       * 두 칸을 화면에서 뺐고, 보내지 않으므로 수정 경로에서 기존 값이 지워지지 않는다 — 부분
+       * 수정이고, 본문에 없는 필드는 서버가 건드리지 않는다. 컬럼(`project.prj_invoice_state`,
+       * `project.inv_code`)과 쓰기 스키마, 타입은 그대로 남아 있으므로 되돌리는 것은 칸을 다시
+       * 그리고 이 두 줄을 넣는 일이다.
+       */
       prjMoneyState: form.prjMoneyState.trim() || null,
       prjSday: form.prjSday || null,
       prjSdayTime: form.prjSdayTime || null,
       prjEday: form.prjEday || null,
       prjEdayTime: form.prjEdayTime || null,
-      invCode: form.invCode.trim() || null,
       prjContent: form.prjContent.trim() || null,
     }
 
@@ -226,7 +235,8 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             value={form.coinCode}
             onChange={(e) => set('coinCode', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {/* '선택 없음' 이 없다 — 통화 없는 금액은 금액이 아니다. `unsetCoin` 주석 참고. */}
+            {unsetCoin ? <option value="">{unsetCoin}</option> : null}
             {codeOptions(COIN_CODES, form.coinCode).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -235,25 +245,10 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
           </select>
         </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="prj-invoice-state">
-            세금계산서
-          </label>
-          <select
-            id="prj-invoice-state"
-            className={ui.select}
-            value={form.prjInvoiceState}
-            onChange={(e) => set('prjInvoiceState', e.target.value)}
-          >
-            <option value="">선택 없음</option>
-            {codeOptions(INVOICE_STATES, form.prjInvoiceState).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
+        {/*
+         * '세금계산서' 가 있던 자리. 지금 쓰지 않으므로 뺐다 — 컬럼과 쓰기 스키마는 그대로이고,
+         * 저장 본문에서 빠진 이유와 그 안전함은 위 `input` 주석에 적혀 있다.
+         */}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="prj-money-state">
             입금
@@ -366,18 +361,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
           />
         </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="prj-inv-code">
-            세금계산서 번호
-          </label>
-          <input
-            id="prj-inv-code"
-            className={`${ui.input} ${ui.inputMono}`}
-            value={form.invCode}
-            onChange={(e) => set('invCode', e.target.value)}
-          />
-        </div>
-
+        {/* '세금계산서 번호' 가 있던 자리 — 위 세금계산서 칸과 같은 이유로 뺐다. */}
         <div className={ui.fieldWide}>
           <label className={ui.label} htmlFor="prj-content">
             내용

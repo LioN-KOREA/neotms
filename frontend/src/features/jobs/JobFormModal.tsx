@@ -271,9 +271,16 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
   const linguistic = isLinguistic(form.jobType)
 
   /*
-   * 다섯 칸('작업 종류'·'진행 상태'·'업무 구분'·'출발어'·'도착어')은 '선택 없음' 을 제공하지
-   * 않는다. 기본값이 이미 첫 항목이거나(작업 종류 `번역`, 진행 상태 `대기`, 업무 구분
-   * `LINGUISTICS`) 비워 둘 이유가 없는 칸이고, 그 항목은 고를 일 없이 자리만 차지하고 있었다.
+   * 여섯 칸('작업 종류'·'진행 상태'·'업무 구분'·'출발어'·'도착어'·'통화')은 '선택 없음' 을
+   * 제공하지 않는다. 기본값이 이미 첫 항목이거나(작업 종류 `번역`, 진행 상태 `대기`, 업무 구분
+   * `LINGUISTICS`, 통화 `KRW`) 비워 둘 이유가 없는 칸이고, 그 항목은 고를 일 없이 자리만
+   * 차지하고 있었다.
+   *
+   * **통화는 비어도 고장나지 않는다** — 바로 아래 `coin` 이 빈 값을 `KRW` 로 읽고, 서버도
+   * `COALESCE(coin_code, 'KRW')` 로 같게 읽는다(NeotmsMoney.ts 의 `krwAmount` 가 그 선택을
+   * 명시해 두고 있다). 없애는 이유는 다르다: 빈 값은 `KRW` 와 효과가 완전히 같은데 화면에는
+   * "통화 미지정" 으로 보인다. 같은 사실을 두 가지로 적는 선택지이고, 둘이 다르다고 믿게 만드는
+   * 쪽이 비싸다.
    *
    * **출발어·도착어가 이 목록에 있는 것은 조심해서 읽어야 한다.** 언어를 비워 둔 작업은 수천 건
    * 있고 그 행들은 그대로 보존되어야 한다(db/011_job_types.sql 의 "금지하되 요구하지 않는다").
@@ -285,6 +292,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
    */
   const unsetWork = unsetPlaceholder(isEdit, form.workCode)
   const unsetState = unsetPlaceholder(isEdit, form.jobState)
+  const unsetCoin = unsetPlaceholder(isEdit, form.coinCode)
 
   /* ------------------------------------------------------------------------ */
   /* 원화 환산 — 파일 머리말의 세 경우가 여기서 갈린다                           */
@@ -728,7 +736,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
             value={form.coinCode}
             onChange={(e) => set('coinCode', e.target.value)}
           >
-            <option value="">선택 없음</option>
+            {unsetCoin ? <option value="">{unsetCoin}</option> : null}
             {codeOptions(COIN_CODES, form.coinCode).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}

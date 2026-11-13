@@ -195,10 +195,14 @@ export function ProjectDetailView() {
           <h1 className={ui.pageTitle}>{project.prjName || '(이름 없음)'}</h1>
           <span className={ui.cellMono}>{project.prjCode}</span>
           {project.cusCodeName ? <span className={ui.hint}>{project.cusCodeName}</span> : null}
-          {/* 상태 세 개를 제목 줄에 붙인다. 아래 '프로젝트 정보' 카드에도 같은 값이 있지만,
-              이 화면에서 가장 먼저 묻는 질문이 "이거 지금 어디까지 왔나" 다. */}
+          {/* 상태 두 개를 제목 줄에 붙인다. 아래 '프로젝트 정보' 카드에도 같은 값이 있지만,
+              이 화면에서 가장 먼저 묻는 질문이 "이거 지금 어디까지 왔나" 다.
+
+              세금계산서 칩이 여기 있었다. 프로젝트 등록 폼에서 세금계산서와 세금계산서 번호 두
+              칸을 뺐으므로 `prj_invoice_state` 를 쓰는 화면이 하나도 남지 않았고, 아무도 채울
+              수 없는 값은 늘 같은 칩으로만 서 있게 된다. 컬럼과 타입은 그대로이므로 되돌리는
+              것은 이 줄을 다시 넣는 일이다(`ProjectsView` 머리말 참고). */}
           <StatusChip value={project.prjState} />
-          <StatusChip value={project.prjInvoiceState} />
           <StatusChip value={project.prjMoneyState} />
         </div>
         {mayUpdateProject ? (
@@ -268,20 +272,17 @@ export function ProjectDetailView() {
         </div>
         <div className={ui.cardBody}>
           <div className={ui.detailGrid}>
-            {/* 세 상태는 위 제목 줄에도 칩으로 서 있다. 여기 한 번 더 두는 이유는 이 격자가
+            {/* 두 상태는 위 제목 줄에도 칩으로 서 있다. 여기 한 번 더 두는 이유는 이 격자가
                 '이 프로젝트의 모든 필드' 를 훑는 자리이고, 그 목록에서 상태만 빠지면 "여기
-                없다 = 값이 없다" 로 읽히기 때문이다. */}
+                없다 = 값이 없다" 로 읽히기 때문이다.
+
+                같은 이유로 세금계산서 칸은 **남겨 두지 않았다.** 등록 폼에 그 칸이 없어진 뒤로는
+                여기 서 있는 값이 영원히 같은 값이고, '모든 필드' 격자에 바뀔 수 없는 칸이 끼면
+                담당자는 어디서 고치는지를 찾게 된다. */}
             <div className={ui.detailItem}>
               <span className={ui.detailLabel}>진행 상태</span>
               <span className={ui.detailValue}>
                 <StatusChip value={project.prjState} />
-              </span>
-            </div>
-            <div className={ui.detailItem}>
-              <span className={ui.detailLabel}>세금계산서</span>
-              <span className={ui.detailValue}>
-                <StatusChip value={project.prjInvoiceState} />
-                {project.invCode ? ` ${project.invCode}` : ''}
               </span>
             </div>
             <div className={ui.detailItem}>
