@@ -13,6 +13,7 @@ import { ApprovalChip, StatusChip } from '@/shared/ui/StatusChip'
 import { dateKstOffsetDays, formatDate, formatDateTime } from '@/shared/utils/format'
 import { decimalSum, krwToShow } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
+import { PoDocButtons, type PoPrintRequest } from './print/PoDocButtons'
 import { PoPrintModal } from './print/PoPrintModal'
 import { SettlementModal } from './SettlementModal'
 
@@ -145,8 +146,8 @@ export function PoPaymentView() {
 
   const [draft, setDraft] = useState(chosen)
   const [settling, setSettling] = useState<PurchaseOrderRow | null>(null)
-  /** PO 문서를 출력 중인 PO. 위 주석 참고 — 승인된 PO만 여기 들어온다. */
-  const [printing, setPrinting] = useState<PurchaseOrderRow | null>(null)
+  /** 지금 뽑으려는 PO 문서와 그 서식. 위 주석 참고 — 승인된 PO만 여기 들어온다. */
+  const [printing, setPrinting] = useState<PoPrintRequest | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   /**
@@ -459,24 +460,18 @@ export function PoPaymentView() {
                   <td>
                     <div className={ui.rowActions}>
                       {/*
-                       * PO 문서 출력은 **쓰기 권한과 무관하다.** 종이를 뽑는 것은 아무것도
-                       * 바꾸지 않고, 이 화면을 열 수 있는 사람은 이미 금액을 보고 있다.
-                       * 승인 여부로만 막는다 — 이 화면의 머리글 주석과 승인 해제 경고문이
-                       * 약속한 그대로다.
+                       * PO 문서 — 국 / 영 두 버튼.
+                       *
+                       * 'PO문서' 한 버튼이 있던 자리다. 그 버튼은 `po_lang` 이 정한 서식으로
+                       * 열렸고, 다른 서식이 필요하면 창 안에서 한 번 더 골라야 했다. 같은
+                       * 버튼이 PO 목록과 프로젝트 상세에도 필요해지면서 둘로 나눴다 —
+                       * 레거시의 두 링크로 되돌리는 것이기도 하다(`PoDocButtons`).
+                       *
+                       * **출력은 쓰기 권한과 무관하고 승인 여부로만 막힌다**는 이 화면의 판단이
+                       * 그 컴포넌트로 옮겨 갔고, 이제 세 화면이 그 하나를 쓴다. 한 화면에서만
+                       * 막는 제약은 막은 것이 아니라는 이유까지 저쪽에 적어 두었다.
                        */}
-                      <button
-                        type="button"
-                        className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
-                        onClick={() => setPrinting(row)}
-                        disabled={!row.poApproved}
-                        title={
-                          row.poApproved
-                            ? undefined
-                            : '승인되지 않은 PO는 출력할 수 없습니다.'
-                        }
-                      >
-                        PO문서
-                      </button>
+                      <PoDocButtons po={row} onPick={setPrinting} />
                       {mayWrite ? (
                         <>
                           <button
@@ -528,7 +523,11 @@ export function PoPaymentView() {
       ) : null}
 
       {printing ? (
-        <PoPrintModal po={printing} onClose={() => setPrinting(null)} />
+        <PoPrintModal
+          po={printing.po}
+          lang={printing.lang}
+          onClose={() => setPrinting(null)}
+        />
       ) : null}
     </div>
   )

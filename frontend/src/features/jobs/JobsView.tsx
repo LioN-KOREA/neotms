@@ -11,11 +11,13 @@ import { Amount } from '@/shared/ui/Amount'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
+import { InlinePickerCell } from '@/shared/ui/InlineEditCell'
 import { KindTag, StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import { decimalSum, krwToShow } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
 import { JobFormModal } from './JobFormModal'
+import { JobTypeSwapModal, jobTypeSummary } from './JobTypeSwapModal'
 
 /**
  * 작업 목록. **이 화면의 금액이 매출이다.**
@@ -59,6 +61,12 @@ export function JobsView() {
     elang: filters.elang,
   })
   const [editing, setEditing] = useState<JobRow | null | undefined>(undefined)
+  /*
+   * 업무 구분을 바꾸는 중인 작업. 서식(`editing`)과 따로 두는 이유는 두 대화상자가 **다른 것을
+   * 저장**하기 때문이다 — 서식은 작업의 모든 칸을, 이쪽은 구분과 그에 딸린 값만 보낸다. 하나로
+   * 합치면 구분 하나 고치러 열었다가 다른 칸의 낡은 초안을 함께 덮어쓴다.
+   */
+  const [swappingType, setSwappingType] = useState<JobRow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   const jobsQuery = useJobs({
@@ -386,15 +394,20 @@ export function JobsView() {
                     <KindTag value={row.workCode} />
                   </td>
                   {/*
-                   * 비언어 작업에는 업무 구분까지 같이 적는다. 업무 분류만으로는 MICE 의 '행사운영'
-                   * 인지 IMC 의 '행사운영' 인지 알 수 없고, 그 둘은 다른 사업이다.
+                   * 두 번 눌러 업무 구분을 바꾼다. 칸 안의 드롭다운이 아닌 이유와, 언어 작업에서
+                   * 떠날 때 물량·단가가 함께 지워지는 사정은 `JobTypeSwapModal` 머리말에 있다.
+                   *
+                   * 칸에 그리는 한 줄도 그 파일(`jobTypeSummary`)에서 온다. 프로젝트 상세가 같은
+                   * 칸을 그리므로, 여기에 삼항 연산자를 두면 한쪽만 고쳐지는 날이 온다.
                    */}
-                  <td className={ui.cellMuted}>
-                    {isLinguistic(row.jobType)
-                      ? [row.jobSlang, row.jobElang].filter(Boolean).join(' → ') || '-'
-                      : [row.jobType, categoryName(row.jobCategory)].filter(Boolean).join(' · ') ||
-                        '-'}
-                  </td>
+                  <InlinePickerCell
+                    editable={mayUpdate}
+                    title="두 번 눌러 업무 구분 변경"
+                    className={ui.cellMuted}
+                    onOpen={() => setSwappingType(row)}
+                  >
+                    {jobTypeSummary(row, categoryName)}
+                  </InlinePickerCell>
                   {/*
                    * 물량/단가. **비언어 작업에서는 두 줄이 모두 `-` 가 되고, 그게 의도한
                    * 모습이다.** 분기가 없는 것은 빠뜨린 것이 아니다 — 네 값 모두
@@ -473,6 +486,14 @@ export function JobsView() {
 
       {editing !== undefined ? (
         <JobFormModal job={editing} onClose={() => setEditing(undefined)} onSaved={setNotice} />
+      ) : null}
+
+      {swappingType ? (
+        <JobTypeSwapModal
+          job={swappingType}
+          onClose={() => setSwappingType(null)}
+          onSaved={setNotice}
+        />
       ) : null}
     </div>
   )

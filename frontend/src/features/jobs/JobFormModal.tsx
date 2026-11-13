@@ -6,6 +6,7 @@ import {
   codeOptions,
   COIN_CODES,
   isLinguistic,
+  JOB_STATE_WAITING,
   JOB_STATES,
   JOB_TYPE_LINGUISTIC,
   unsetPlaceholder,
@@ -15,7 +16,8 @@ import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
-import { formatDate, toDateInputValue } from '@/shared/utils/format'
+import { alignPeriod, formatDate, nowTimeKst, toDateInputValue, todayKst } from '@/shared/utils/format'
+import { DateField } from '@/shared/ui/DateField'
 import {
   decimalCompare,
   decimalMultiply,
@@ -129,11 +131,17 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
     coinRate: job?.coinRate ?? '',
     jobPriceSum: job?.jobPriceSum ?? '',
     jobPriceKsum: job?.jobPriceKsum ?? '',
-    jobSday: toDateInputValue(job?.jobSday),
-    jobSdayTime: job?.jobSdayTime ?? '',
+    /*
+     * 신규 작업의 시작일은 **지금**이다. 판단과 `??` 를 쓰지 않는 이유는
+     * `ProjectFormModal` 의 같은 자리에 적어 두었다 — 요약하면, `job?.jobSdayTime ??
+     * nowTimeKst()` 는 시작 시각이 비어 있는 기존 작업을 열었다 닫는 것만으로 없던 시각을
+     * 만들어 낸다.
+     */
+    jobSday: job ? toDateInputValue(job.jobSday) : todayKst(),
+    jobSdayTime: job ? (job.jobSdayTime ?? '') : nowTimeKst(),
     jobEday: toDateInputValue(job?.jobEday),
     jobEdayTime: job?.jobEdayTime ?? '',
-    jobState: job?.jobState ?? '대기',
+    jobState: job?.jobState ?? JOB_STATE_WAITING,
     jobMemo: job?.jobMemo ?? '',
   })
   const [dirty, setDirty] = useState(false)
@@ -254,6 +262,18 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
       }
       return next
     })
+  }
+
+  /**
+   * 시작일·납기를 한 번에 넣는다 — 거꾸로 된 기간은 `alignPeriod` 가 맞춘다.
+   *
+   * 프로젝트 서식의 같은 이름 함수와 같은 이유다(그쪽 주석). 금액 계산을 거치지 않으므로
+   * `set` 의 파생값 분기를 탈 일이 없고, 날짜 두 칸은 아무것도 촉발하지 않는다.
+   */
+  const setPeriod = (start: string, end: string, changed: 'start' | 'end') => {
+    const next = alignPeriod(start, end, changed)
+    setDirty(true)
+    setForm((prev) => ({ ...prev, jobSday: next.start, jobEday: next.end }))
   }
 
   /** 자동 계산으로 되돌린다. 직접 고친 뒤 "원래 값이 뭐였지" 가 되는 경우가 실제로 많다. */
@@ -527,8 +547,8 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
         </div>
 
         <div className={ui.fieldWide}>
-          <label className={ui.label} htmlFor="job-name">
-            작업명 <span className={ui.required}>*</span>
+          <label className={`${ui.label} ${ui.required}`} htmlFor="job-name">
+            작업명
           </label>
           <input
             id="job-name"
@@ -855,48 +875,33 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           </span>
         </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-sday">
-            시작일
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="job-sday"
-              className={ui.input}
-              type="date"
-              value={form.jobSday}
-              onChange={(e) => set('jobSday', e.target.value)}
-            />
-            <input
-              className={ui.input}
-              type="time"
-              aria-label="시작 시각"
-              value={form.jobSdayTime}
-              onChange={(e) => set('jobSdayTime', e.target.value)}
-            />
-          </div>
-        </div>
+        {/* 기간의 두 끝은 한 줄에 묶는다 — 프로젝트 서식과 같은 이유(그쪽 `.datePair` 주석). */}
+        <div className={ui.datePair}>
+          <DateField
+            id="job-sday"
+            label="시작일"
+            value={form.jobSday}
+            onChange={(v) => setPeriod(v, form.jobEday, 'start')}
+            disabled={pending}
+            time={{
+              value: form.jobSdayTime,
+              onChange: (v) => set('jobSdayTime', v),
+              ariaLabel: '시작 시각',
+            }}
+          />
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-eday">
-            납기
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="job-eday"
-              className={ui.input}
-              type="date"
-              value={form.jobEday}
-              onChange={(e) => set('jobEday', e.target.value)}
-            />
-            <input
-              className={ui.input}
-              type="time"
-              aria-label="납기 시각"
-              value={form.jobEdayTime}
-              onChange={(e) => set('jobEdayTime', e.target.value)}
-            />
-          </div>
+          <DateField
+            id="job-eday"
+            label="납기"
+            value={form.jobEday}
+            onChange={(v) => setPeriod(form.jobSday, v, 'end')}
+            disabled={pending}
+            time={{
+              value: form.jobEdayTime,
+              onChange: (v) => set('jobEdayTime', v),
+              ariaLabel: '납기 시각',
+            }}
+          />
         </div>
 
         <div className={ui.fieldWide}>

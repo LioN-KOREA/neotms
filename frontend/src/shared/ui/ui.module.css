@@ -379,6 +379,249 @@
   letter-spacing: -0.02em;
 }
 
+/* ── 날짜 입력칸 ─────────────────────────────────────────────────────────────
+ *
+ * `DateField` 한 벌. 세 줄이 세로로 쌓이고(글자칸 / 달력·today·+N / 시각), 달력 팝업은 그
+ * 전체에 겹쳐 뜬다.
+ */
+
+/*
+ * 날짜 도구를 쌓는 상자이자 달력 팝업의 기준점.
+ *
+ * **줄 구성은 마크업이 정한다.** 전에는 전부 한 줄(`flex-wrap: wrap`)이었고, 줄이 바뀌기는
+ * 했지만 어디서 바뀔지는 내용이 정했다. 그래서 나란히 선 시작일과 납기가 서로 다른 모양으로
+ * 접혔다 — 한쪽 시각칸은 `오후 12:45` 로 차 있고 한쪽은 `--:--` 로 비어 있으면 글자 폭이 달라
+ * 접히는 자리가 달라지고, 두 칸의 `+3` 버튼이 다른 높이에 선다. 넘치지도 겹치지도 않으므로
+ * 오류로 보이지 않고, 그냥 **정리가 안 된 것처럼** 보인다.
+ *
+ * 줄을 세 개로 못 박으면 두 칸의 높이와 버튼 자리가 모달 폭과 상관없이 언제나 같아진다.
+ */
+.dateStack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/*
+ * 달력·today·+1·+3·+7 다섯 개. 칸을 **고르게 나눈다.**
+ *
+ * 플렉스로 두면 버튼 폭이 글자 수를 따라가 `today` 만 넓고 `+1` 은 좁다. 버튼 하나만 보면
+ * 그게 맞지만, 날짜칸 둘이 나란히 서면 +N 의 세로줄이 어긋나 보인다. 격자로 두면 모달 폭이
+ * 얼마든 두 칸의 같은 버튼이 같은 자리에 선다.
+ */
+.dateBtns {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+/*
+ * 격자가 폭을 정하므로 버튼의 좌우 여백은 필요 없다 — 오히려 해가 된다.
+ *
+ * `.btn` 은 `white-space: nowrap` 이라 좁아져도 글자를 접지 않고 **넘친다.** 세 열짜리 서식에서
+ * 한 열은 200px 쯤이고, 다섯으로 나누면 칸이 37px 다. 거기에 좌우 7px 씩을 더하면 '달력' 두
+ * 글자가 들어갈 자리가 23px 밖에 남지 않아 칸 밖으로 비어져 나온다. 여백을 줄이면 글자가
+ * 가운데 서고(`.btn` 의 `justify-content: center`), 넓은 서식에서는 어차피 자리가 남는다.
+ */
+.dateBtns > .btn {
+  padding: 0 2px;
+  min-width: 0;
+}
+
+/* 시각칸과 12시·18시. 시각칸이 남는 자리를 먹고, 버튼 둘은 제 크기로 오른쪽 끝에 붙는다. */
+.dateTimeRow {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 4px;
+  align-items: center;
+}
+
+/*
+ * 날짜 글자칸. `type="date"` 가 아니라 평범한 글자칸이므로 `.input[type='date']` 의 최소 너비가
+ * 걸리지 않는다.
+ *
+ * 폭은 칸을 다 쓴다. 들어갈 글자는 `2026-11-11(수)` 열네 자뿐이라 고정 폭(148px)으로 두었던
+ * 자리인데, 그러면 이 칸만 위아래 다른 입력란보다 짧게 끝나 서식의 오른쪽 끝이 들쭉날쭉해진다.
+ * 남는 자리는 비어 있어도 되지만, 줄이 맞는 쪽이 읽기 쉽다.
+ */
+.dateText {
+  width: 100%;
+}
+
+/*
+ * 날짜 두 칸(시작일·납기)을 한 줄에 묶는다. `.formGrid` 의 한 줄을 통째로 쓴다.
+ *
+ * 자동 열 수에 맡기면 열이 셋일 때 기간의 두 끝 사이에 **관계없는 칸이 끼어들거나**(프로젝트
+ * 서식에서는 '분야' 가 그랬다) 두 끝이 다른 줄에 선다. 기간은 한눈에 한 쌍으로 읽혀야 하고,
+ * 묶어 두면 그 뒤의 칸들도 제 짝끼리 붙는다 — '분야' 와 '세부 분야' 가 그렇다.
+ */
+.datePair {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px 14px;
+}
+
+/*
+ * 달력 팝업.
+ *
+ * 입력 줄 바로 아래에 겹쳐 띄운다. 자리를 차지하게 두면(`position: static`) 달력을 여는 순간
+ * 아래 입력란들이 전부 300px 씩 밀려 내려가고, 날짜를 고르면 도로 올라온다 — 고르려던 칸이
+ * 눈앞에서 움직인다.
+ *
+ * `z-index` 는 모달 안에서만 의미가 있다. 모달 자신이 이미 `position: fixed` 레이어이므로
+ * 바깥의 어떤 요소와도 겨루지 않는다.
+ *
+ * ## `width: max-content` — **이것이 빠져서 석 달이 세로로 쌓였다**
+ *
+ * 절대 위치 상자의 기본 폭은 '내용만큼, 단 **담는 상자를 넘지 않게**' 다. 여기서 담는 상자는
+ * 기준점인 `.dateStack`, 즉 서식의 한 열(300px 안팎)이다. 그래서 석 달(약 590px)은 그 폭에
+ * 맞춰 접혔고 — `.calendarMonths` 의 `flex-wrap` 이 시키는 대로 — 달력이 세로로 길어졌다.
+ * 석 달을 한눈에 보여 주려고 만든 것이 스크롤을 요구하는 물건이 된 셈이고, 그러면 한 달짜리
+ * 달력보다 나쁘다.
+ *
+ * `max-content` 는 '담는 상자' 를 무시하고 내용이 원하는 폭을 그대로 쓴다. 모달 본문은 최소
+ * 692px(720px 짜리 프로젝트 서식)이므로 석 달이 들어간다.
+ *
+ * `max-width` 는 그 예외를 위해 남겨 둔다. 화면이 정말 좁으면 `flex-wrap` 이 다시 일하고,
+ * 그때는 접히는 쪽이 잘려 나가는 것보다 낫다 — 즉 `.calendarMonths` 의 줄바꿈은 기본 동작이
+ * 아니라 **최후의 수단**이 됐다.
+ */
+.calendarPop {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  /*
+   * 평소에는 아무 일도 하지 않는다 — `max-height` 가 여기 없기 때문이다. `CalendarPopup` 이
+   * 자르는 상자를 재서 **들어가지 않을 때만** `max-height` 를 인라인으로 걸고, 그때 이 줄이
+   * 일한다. 없으면 그 `max-height` 는 달력을 자르기만 한다. 즉 둘은 한 쌍이고, 한쪽만 지우면
+   * 좁은 화면에서 마지막 주가 조용히 사라진다.
+   */
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--nt-line2);
+  border-radius: var(--nt-r-md);
+  background: var(--nt-surface);
+  box-shadow: var(--nt-sh-pop);
+}
+
+.calendarBar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+/*
+ * 석 달을 **나란히.** 그 가로 배치가 석 달을 띄우는 이유 전부다 — 이번 달 말일에서 다음 달
+ * 10일까지 며칠인지를 눈으로 세는 것이 목적인데, 세로로 쌓이면 두 달을 같이 볼 수 없고
+ * 스크롤까지 필요해져 한 달짜리 달력보다 못해진다.
+ *
+ * `flex-wrap: wrap` 은 남겨 둔다. 다만 이제는 기본 동작이 아니라 **최후의 수단**이다 —
+ * `.calendarPop` 의 `width: max-content` 가 석 달이 들어갈 폭을 먼저 확보하므로, 줄이 바뀌는
+ * 것은 `max-width`(화면 폭)에 걸릴 만큼 좁은 화면뿐이다. 거기서는 접히는 쪽이 세 번째 달이
+ * 잘려 나가는 것보다 낫다.
+ */
+.calendarMonths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.calendarTitle {
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--nt-ink);
+  text-align: center;
+}
+
+/*
+ * 한 달. 7칸 고정 격자다.
+ *
+ * `grid-template-columns: repeat(7, 26px)` 로 **칸 너비를 못 박는다.** `1fr` 로 두면 칸 너비가
+ * 그 달에 든 글자(한 자리 수인지 두 자리 수인지)에 따라 달라져서, 나란히 선 세 달의 격자가
+ * 서로 어긋난다.
+ */
+.calendarGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 26px);
+  gap: 1px;
+}
+
+.calendarHead {
+  padding: 2px 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--nt-ink3);
+  text-align: center;
+}
+
+.calendarDay {
+  padding: 4px 0;
+  border: 0;
+  border-radius: var(--nt-r-sm);
+  background: transparent;
+  color: var(--nt-ink);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.calendarDay:hover {
+  background: var(--nt-tint);
+}
+
+/* 그 달에 없는 칸. 버튼이 아니라 빈 칸이다 — 누를 것이 없다. */
+.calendarBlank {
+  padding: 4px 0;
+}
+
+/*
+ * 토·일. 견본의 색을 따른다(토 파랑, 일 빨강).
+ *
+ * `.calendarSel` 보다 **먼저** 와야 한다. 고른 날이 일요일이면 글자색이 빨강이 아니라 흰색이어야
+ * 하는데, CSS 는 특정도가 같으면 뒤에 온 규칙을 쓴다.
+ */
+.calendarSat {
+  color: var(--nt-ind-d);
+}
+
+.calendarSun {
+  color: var(--nt-dan);
+}
+
+/* 오늘. 고른 날과 다른 표시여야 한다 — 둘은 같은 날일 수도, 아닐 수도 있다. */
+.calendarToday {
+  background: var(--nt-tint2);
+  font-weight: 700;
+}
+
+.calendarSel {
+  background: var(--nt-ind);
+  color: var(--nt-surface);
+  font-weight: 700;
+}
+
+.calendarSel:hover {
+  background: var(--nt-ind-d);
+}
+
+/*
+ * `.labelHint` 가 있던 자리 — 라벨 옆에 붙는 입력 안내("yymmdd 로 적어도 됩니다")의 것이다.
+ *
+ * 명세대로 제목 옆에 두었고, 근거는 "제목 줄의 남는 가로 공간은 어차피 비어 있다" 였다. 비어
+ * 있지 않았다. 한 열은 240px 남짓이고 `시작일` 뒤에 형식 세 가지를 적으면 라벨이 두 줄이 되어,
+ * 그 칸만 입력란이 한 줄 내려앉는다 — 나란히 선 '납기' 와 높이가 어긋난다. 안내는 `title`
+ * 툴팁으로 옮겼다(DateField.tsx 의 `DATE_INPUT_HINT` 주석에 전말이 있다).
+ */
+
 /*
  * 입력란 아래에 붙는 경고. `.hint` 와 같은 크기, 다른 색.
  *
@@ -709,6 +952,169 @@
   display: flex;
   gap: 4px;
   justify-content: flex-start;
+}
+
+/* ── 고르기 칸과 제자리 수정 ──────────────────────────────────────────── */
+
+/*
+ * 맨 왼쪽 체크박스 칸.
+ *
+ * 너비를 못 박는다. 이 열의 내용은 언제나 체크박스 하나이므로 내용에 맞춰 늘어날 이유가 없고,
+ * 고정하지 않으면 표의 열 너비 계산이 옆 열(JOB코드)에서 1~2px 를 가져가 두 표의 첫 열이
+ * 서로 어긋나 보인다.
+ */
+.cellCheck {
+  width: 28px;
+  text-align: center;
+  padding: 5px 0;
+}
+
+.cellCheck input {
+  accent-color: var(--nt-ind);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+/* 선택된 행. `tr:hover` 보다 진해야 한다 — 그렇지 않으면 마우스를 올린 행이 선택된 것처럼 읽힌다. */
+.rowSelected td {
+  background: var(--nt-tint2);
+}
+
+.table tbody tr.rowSelected:hover td {
+  background: var(--nt-tint);
+}
+
+/*
+ * 두 번 눌러 고칠 수 있는 칸.
+ *
+ * 점선 밑줄이 **유일한 단서다.** 두 번 누르기는 보이지 않는 동작이므로, 어디가 그렇게 되는지
+ * 표시가 없으면 기능이 있다는 사실 자체를 아무도 모른다. 평소에는 아주 옅게 두고
+ * (`--nt-line2`) 마우스를 올렸을 때 진해지게 한다 — 열 전체에 진한 밑줄이 그려지면 표가
+ * 읽히지 않는다.
+ *
+ * `cursor: text` 가 아니라 기본 커서를 둔다. 글자칸처럼 보이면 **한 번** 눌러 타이핑할 수
+ * 있을 것으로 읽히고, 그게 안 되면 고장난 것으로 읽힌다.
+ */
+.cellEditable {
+  border-bottom: 1px solid var(--nt-grid);
+  text-decoration: underline dotted var(--nt-line2);
+  text-underline-offset: 3px;
+}
+
+.cellEditable:hover {
+  text-decoration-color: var(--nt-ind);
+}
+
+.cellEditable:focus-visible {
+  outline: 2px solid var(--nt-ind);
+  outline-offset: -2px;
+}
+
+/*
+ * 칸 안에서 수정 중인 컨트롤.
+ *
+ * `.input`/`.select` 의 키(`--nt-ctl-h`, 28px 급)를 쓰지 않는다. 표의 행 높이는 그보다 낮고,
+ * 큰 컨트롤이 들어오면 수정하는 동안 그 행만 키가 늘어나 아래 행들이 전부 밀린다 — 고치려던
+ * 칸이 마우스 아래에서 움직인다.
+ */
+.cellInput {
+  width: 100%;
+  min-width: 0;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--nt-ind);
+  border-radius: var(--nt-r-sm);
+  background: var(--nt-surface);
+  color: var(--nt-ink);
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: -0.02em;
+}
+
+.cellInput:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--nt-tint2);
+}
+
+/*
+ * 보여 주는 글자와 고치는 컨트롤이 **같은 자리에 겹쳐 있는** 상자.
+ *
+ * ## 두 번 눌렀을 때 열 폭이 변하던 이유
+ *
+ * `.table` 은 `table-layout` 을 지정하지 않으므로 `auto` 다. 자동 배치는 열 폭을 **그 열에 든
+ * 내용**에서 계산하고, 내용이 바뀌면 표 전체를 다시 푼다. 글자 `2026-11-11(수)` 가
+ * `<input>` 으로 바뀌는 순간 그 칸이 내놓는 폭이 달라지는데 — 입력란의 기본 폭은 글자 수가 아니라
+ * `size` 속성(기본 20자, 170px 안팎)에서 오고, `<select>` 의 폭은 **가장 긴 선택지**에서 온다 —
+ * 그래서 열이 넓어지거나 좁아지고, 그 오른쪽의 모든 열이 함께 밀렸다. `width: 100%` 로는 막을 수
+ * 없다: 그 100% 가 가리키는 값 자체를 입력란이 바꿔 버린다.
+ *
+ * ## 그래서 흐름에 남는 내용을 바꾸지 않는다
+ *
+ * 글자는 편집 중에도 **자리를 지킨 채 안 보이게만** 둔다(`visibility: hidden` — `display: none`
+ * 이면 폭 기여가 사라져 같은 문제가 반대 방향으로 난다). 컨트롤은 `position: absolute` 로 띄운다.
+ * 절대 위치 상자는 흐름에서 빠지므로 조상의 내용 폭 계산에 **아무것도 기여하지 않는다.** 즉 열
+ * 폭은 두 상태에서 같은 글자로 계산되고, 같을 수밖에 없다.
+ *
+ * `table-layout: fixed` 로 가지 않은 이유: 그러면 스무 개 표의 열 폭을 전부 손으로 적어야 하고,
+ * 적지 않은 열은 내용과 무관하게 균등 분할된다 — 금액 열과 코드 열이 같은 폭이 된다.
+ *
+ * 행 높이도 덤으로 고정된다. 22px 컨트롤이 흐름에 있던 동안은 그 행만 6px 씩 키가 늘어
+ * 아래 행들이 밀렸는데(`.cellInput` 주석이 걱정하던 것), 이제 늘어날 것이 없다.
+ *
+ * ## `min-height` 가 컨트롤 높이와 같은 수인 이유
+ *
+ * 두 가지를 같이 막는다.
+ *
+ * - 글자가 **빈 칸**에서는 줄상자가 0 이 되고, 그러면 `top: 50%` 가 상자의 맨 위를 가리켜
+ *   컨트롤이 칸 위로 솟는다.
+ * - 한 줄 글자(17px)보다 컨트롤(`.cellInput` 의 22px)이 크므로, 바닥을 깔지 않으면 컨트롤이
+ *   위아래 2~3px 씩 **행 경계선을 넘어** 그려진다. `td` 는 자르지 않으므로 그 넘침은 보인다.
+ *
+ * 즉 이 수는 `.cellInput` 의 `height` 와 한 쌍이다. 한쪽만 키우면 다시 넘친다.
+ */
+.cellSwap {
+  position: relative;
+  min-height: 22px;
+}
+
+.cellSwapText {
+  visibility: hidden;
+}
+
+.cellSwapEdit {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 3;
+  width: 100%;
+  transform: translateY(-50%);
+}
+
+/*
+ * 드롭다운만 열 폭을 넘어설 수 있다.
+ *
+ * 글자칸은 보이던 글자와 같은 글자를 담으므로 열 폭이면 충분하지만, `<select>` 의 선택지는 칸에
+ * 보이던 상태 배지보다 길다('정산완료' 배지 vs '부분정산(일부 지급)' 선택지). 열 폭에 가두면
+ * 고르는 사람이 무엇을 고르는지 읽을 수 없다. 절대 위치 상자 안에서 넘치는 것이므로 이웃 칸 위에
+ * 겹쳐 그려질 뿐, 배치는 건드리지 않는다.
+ */
+.cellSwapEdit > select.cellInput {
+  min-width: 100%;
+  width: max-content;
+  max-width: 260px;
+}
+
+/*
+ * 날짜를 읽지 못했을 때의 오류. 아래 행 위에 겹쳐 그려지므로 배경이 불투명해야 한다 — 투명하면
+ * 경고문과 아래 행의 글자가 서로를 뚫고 읽힌다.
+ */
+.cellSwapEdit > .hintWarn {
+  display: block;
+  margin-top: 2px;
+  padding: 1px 4px;
+  border-radius: var(--nt-r-sm);
+  background: var(--nt-surface);
+  box-shadow: var(--nt-sh-pop);
 }
 
 /* ── 돈 ───────────────────────────────────────────────────────────────── */
@@ -1518,10 +1924,17 @@
   background: var(--nt-surface);
 }
 
+/*
+ * 결과 한 줄. `.pickerSelected` 와 같은 구조다 — 가로로 흐르는 상자 안에 세로로 쌓는 상자
+ * (`.pickerItemText`)를 두는 방식.
+ *
+ * 전에는 이 상자가 직접 `flex-direction: column` 이어서 제목과 부제만 쌓았다. 왼쪽에 번호를
+ * 붙이려면 가로 축이 필요하고, 번호를 제목 위에 쌓을 수는 없다.
+ */
 .pickerItem {
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  align-items: center;
+  gap: 8px;
   padding: 5px 9px;
   border: 0;
   border-bottom: 1px solid var(--nt-line);
@@ -1537,6 +1950,44 @@
 
 .pickerItem:hover {
   background: var(--nt-tint);
+}
+
+/*
+ * 방향키로 옮긴 줄. 전역 `:focus-visible` 의 테두리만으로는 부족하다 — 이 목록은
+ * `overflow: auto` 상자 안에 있고, `outline-offset: 1px` 짜리 테두리는 위아래 끝 줄에서
+ * 잘려 보인다. 배경색은 잘리지 않는다.
+ *
+ * `:hover` 와 같은 색을 쓴다. 마우스로 가리킨 줄과 키보드로 고른 줄은 "다음에 Enter 를 누르면
+ * 이것이 선택된다" 는 같은 뜻이고, 다른 색을 쓰면 그 차이에 뜻이 있는지부터 의심하게 된다.
+ */
+.pickerItem:focus-visible {
+  background: var(--nt-tint);
+}
+
+.pickerItemText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/*
+ * 1~9 번호. 눌러서 고를 수 있다는 **유일한 단서**이므로 회색으로 묻어 두지 않는다.
+ *
+ * `tabular-nums` 가 아니라 고정 폭(`min-width`)으로 줄을 맞춘다. 한 자리 숫자뿐이라 숫자
+ * 폭을 맞출 것이 없고, 맞춰야 하는 것은 **번호 칸의 폭**이다 — 그게 흔들리면 제목들의 왼쪽
+ * 끝이 줄마다 다른 자리에 선다.
+ */
+.pickerItemKey {
+  flex: 0 0 auto;
+  min-width: 15px;
+  padding: 1px 0;
+  border-radius: var(--nt-r-sm);
+  background: var(--nt-tint3);
+  color: var(--nt-ink3);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .pickerItemTitle {

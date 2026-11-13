@@ -62,9 +62,18 @@ export const PROJECT_STATES: readonly CodeOption[] = [
   opt('취소', '취소'),
 ]
 
-/** 작업(JOB) 진행 상태. */
+/**
+ * 작업이 **시작하는** 상태. 이름이 붙은 이유는 `PROJECT_STATE_QUOTE` 와 같다 — 등록 폼의
+ * 기본값이고, 복제한 작업이 되돌려지는 값이다(ProjectDetailView 의 복제 주석).
+ *
+ * 복제 쪽이 특히 리터럴로 적을 수 없는 자리다. '검수' 까지 간 작업을 복제했는데 새 작업이
+ * 그대로 '검수' 로 태어나면, 아무도 손대지 않은 일이 검수 대기 목록에 섞인다.
+ */
+export const JOB_STATE_WAITING = '대기'
+
+/** 작업(JOB) 진행 상태. 첫 항목이 등록 기본값이다. */
 export const JOB_STATES: readonly CodeOption[] = [
-  opt('대기', '대기'),
+  opt(JOB_STATE_WAITING),
   opt('진행', '진행'),
   opt('검수', '검수'),
   opt('완료', '완료'),

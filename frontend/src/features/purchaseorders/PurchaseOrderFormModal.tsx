@@ -25,7 +25,8 @@ import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
-import { formatDate, toDateInputValue } from '@/shared/utils/format'
+import { alignPeriod, formatDate, nowTimeKst, toDateInputValue, todayKst } from '@/shared/utils/format'
+import { DateField } from '@/shared/ui/DateField'
 import {
   decimalCompare,
   decimalMultiply,
@@ -48,6 +49,13 @@ interface Props {
   purchaseOrder: PurchaseOrderRow | null
   /** 소속 작업이 이미 정해진 경우(프로젝트 상세의 '발주 추가'). */
   fixedJob?: PickerOption | null
+  /**
+   * 작업 검색을 이 프로젝트로 한정한다(프로젝트 상세의 PO 카드 'PO 추가').
+   *
+   * `fixedJob` 과 둘 중 하나다 — 작업이 **정해져 있으면** `fixedJob`, 이 프로젝트 안에서
+   * **고르게 하려면** 이것. 왜 한정해야 하는지는 `JobPicker` 주석에 있다.
+   */
+  jobScopeProjectId?: string | null
   onClose: () => void
   onSaved: (message: string) => void
 }
@@ -92,6 +100,7 @@ interface Props {
 export function PurchaseOrderFormModal({
   purchaseOrder: po,
   fixedJob = null,
+  jobScopeProjectId = null,
   onClose,
   onSaved,
 }: Props) {
@@ -144,8 +153,13 @@ export function PurchaseOrderFormModal({
     poTax: po?.poTax ?? '',
     poTaxPrice: po?.poTaxPrice ?? '',
     poTaxSum: po?.poTaxSum ?? '',
-    poSday: toDateInputValue(po?.poSday),
-    poSdayTime: po?.poSdayTime ?? '',
+    /*
+     * 신규 발주의 시작일은 **지금**이다. `??` 를 쓰지 않는 이유는 `ProjectFormModal` 의 같은
+     * 자리에 적어 두었다 — 시작 시각이 비어 있는 기존 발주를 열었다 그대로 저장하면 없던
+     * 시각이 생긴다.
+     */
+    poSday: po ? toDateInputValue(po.poSday) : todayKst(),
+    poSdayTime: po ? (po.poSdayTime ?? '') : nowTimeKst(),
     poEday: toDateInputValue(po?.poEday),
     poEdayTime: po?.poEdayTime ?? '',
     poState: po?.poState ?? PO_STATE_UNAPPROVED,
@@ -266,6 +280,19 @@ export function PurchaseOrderFormModal({
       }
       return next
     })
+  }
+
+  /**
+   * 시작일·납기를 한 번에 넣는다 — 거꾸로 된 기간은 `alignPeriod` 가 맞춘다.
+   *
+   * 프로젝트 서식의 같은 이름 함수와 같은 이유(그쪽 주석). 이 맞춤은 **발주 안의 두 날짜**만
+   * 본다. 발주 납기가 작업 납기보다 뒤인지는 건드리지 않는다 — 칸 아래 문장이 그걸 권하지만
+   * 권고이고, 검수 시간을 포기하고 납기를 맞추는 일이 실제로 있다.
+   */
+  const setPeriod = (start: string, end: string, changed: 'start' | 'end') => {
+    const next = alignPeriod(start, end, changed)
+    setDirty(true)
+    setForm((prev) => ({ ...prev, poSday: next.start, poEday: next.end }))
   }
 
   const applySuggestion = () => {
@@ -498,13 +525,14 @@ export function PurchaseOrderFormModal({
               }}
               required
               disabled={pending}
+              projectId={jobScopeProjectId}
             />
           )}
         </div>
 
         <div className={ui.fieldWide}>
-          <label className={ui.label} htmlFor="po-name">
-            PO명 <span className={ui.required}>*</span>
+          <label className={`${ui.label} ${ui.required}`} htmlFor="po-name">
+            PO명
           </label>
           <input
             id="po-name"
@@ -811,49 +839,35 @@ export function PurchaseOrderFormModal({
           </span>
         </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-sday">
-            시작일
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="po-sday"
-              className={ui.input}
-              type="date"
-              value={form.poSday}
-              onChange={(e) => set('poSday', e.target.value)}
-            />
-            <input
-              className={ui.input}
-              type="time"
-              aria-label="시작 시각"
-              value={form.poSdayTime}
-              onChange={(e) => set('poSdayTime', e.target.value)}
-            />
-          </div>
-        </div>
+        {/* 기간의 두 끝은 한 줄에 묶는다 — 프로젝트 서식과 같은 이유(그쪽 `.datePair` 주석). */}
+        <div className={ui.datePair}>
+          <DateField
+            id="po-sday"
+            label="시작일"
+            value={form.poSday}
+            onChange={(v) => setPeriod(v, form.poEday, 'start')}
+            disabled={pending}
+            time={{
+              value: form.poSdayTime,
+              onChange: (v) => set('poSdayTime', v),
+              ariaLabel: '시작 시각',
+            }}
+          />
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-eday">
-            납기
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="po-eday"
-              className={ui.input}
-              type="date"
-              value={form.poEday}
-              onChange={(e) => set('poEday', e.target.value)}
-            />
-            <input
-              className={ui.input}
-              type="time"
-              aria-label="납기 시각"
-              value={form.poEdayTime}
-              onChange={(e) => set('poEdayTime', e.target.value)}
-            />
-          </div>
-          <span className={ui.hint}>작업 납기보다 앞서야 검수 시간이 남습니다.</span>
+          <DateField
+            id="po-eday"
+            label="납기"
+            value={form.poEday}
+            onChange={(v) => setPeriod(form.poSday, v, 'end')}
+            disabled={pending}
+            time={{
+              value: form.poEdayTime,
+              onChange: (v) => set('poEdayTime', v),
+              ariaLabel: '납기 시각',
+            }}
+          >
+            <span className={ui.hint}>작업 납기보다 앞서야 검수 시간이 남습니다.</span>
+          </DateField>
         </div>
 
         {/*
@@ -927,18 +941,20 @@ export function PurchaseOrderFormModal({
           </select>
         </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-money-day">
-            지급일
-          </label>
-          <input
-            id="po-money-day"
-            className={ui.input}
-            type="date"
-            value={form.poMoneyDay}
-            onChange={(e) => set('poMoneyDay', e.target.value)}
-          />
-        </div>
+        {/*
+         * 지급일도 같은 칸을 쓴다. 기간이 아니므로 맞춤(`setPeriod`)은 없고 시각 칸도 없다.
+         *
+         * 한 서식 안에서 이 칸만 기본 날짜 입력으로 남겨 두는 쪽이 더 나쁘다 — `261130` 이
+         * 위에서는 되고 여기서는 안 되면, 사람은 "가끔 된다" 를 배우고 **모든 칸에서** 손으로
+         * 치기를 그만둔다. 규칙은 전부에 적용되어야 규칙이다.
+         */}
+        <DateField
+          id="po-money-day"
+          label="지급일"
+          value={form.poMoneyDay}
+          onChange={(v) => set('poMoneyDay', v)}
+          disabled={pending}
+        />
 
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-money-price">

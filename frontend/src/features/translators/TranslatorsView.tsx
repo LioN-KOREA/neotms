@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { useProfile, useTranslators } from '@/apis/queries/neotms.query'
+import { useCodeNames, useProfile, useTranslators } from '@/apis/queries/neotms.query'
 import { useDeleteTranslator } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN, codeOptions, COIN_CODES } from '@/apis/neotms.codes'
 import type { TranslatorRow } from '@/apis/neotms.types'
@@ -55,6 +55,15 @@ export function TranslatorsView() {
     coin: filters.coin || undefined,
   })
   const deleteTranslator = useDeleteTranslator()
+
+  /*
+   * 분야 코드를 이름으로. 가능·불가 두 칸이 같은 `FIELD` 도메인을 쓰므로 함수 하나면 된다.
+   *
+   * 이 화면에서는 특히 불가 분야가 코드로 보이면 곤란하다. 그 칸은 "이 사람에게 맡기면 안 되는
+   * 일" 을 배정 직전에 읽히려고 목록에 세운 것인데, `FIELD12` 는 읽고 판단할 수 있는 글자가
+   * 아니다 — 읽을 수 없는 경고는 없는 경고와 같다.
+   */
+  const fieldName = useCodeNames(CODE_DOMAIN.FIELD)
 
   const rows = useMemo(
     () => translatorsQuery.data?.pages.flatMap((p) => p.items) ?? [],
@@ -232,7 +241,7 @@ export function TranslatorsView() {
                   <td className={ui.cellMuted}>
                     {[row.tranUpro, row.tranWorkCon].filter(Boolean).join(' · ') || '-'}
                   </td>
-                  <td className={ui.cellClamp}>{row.tranField || '-'}</td>
+                  <td className={ui.cellClamp}>{fieldName(row.tranField) || '-'}</td>
                   {/*
                    * 불가 분야를 목록에 세운다.
                    *
@@ -241,7 +250,9 @@ export function TranslatorsView() {
                    */}
                   <td className={ui.cellClamp}>
                     {row.tranUnfield ? (
-                      <span className={`${ui.badge} ${ui.badgeWarn}`}>{row.tranUnfield}</span>
+                      <span className={`${ui.badge} ${ui.badgeWarn}`}>
+                        {fieldName(row.tranUnfield)}
+                      </span>
                     ) : (
                       '-'
                     )}

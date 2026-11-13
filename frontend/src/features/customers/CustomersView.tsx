@@ -1,6 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { useCustomers, useProfile } from '@/apis/queries/neotms.query'
+import { useCodeNames, useCustomers, useProfile } from '@/apis/queries/neotms.query'
 import { useDeleteCustomer } from '@/apis/queries/neotms.mutation'
+import { CODE_DOMAIN } from '@/apis/neotms.codes'
 import type { CustomerRow } from '@/apis/neotms.types'
 import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
 import { mayDo } from '@/shared/permissions'
@@ -42,6 +43,13 @@ export function CustomersView() {
 
   const customersQuery = useCustomers({ limit: LIST_PAGE_SIZE, q: filters.q || undefined })
   const deleteCustomer = useDeleteCustomer()
+
+  /*
+   * 분야 코드를 이름으로. 서식(`CustomerFormModal`)은 `FIELD` 드롭다운에서 **이름**을 보여 주고
+   * 코드를 저장하므로, 표가 코드를 찍으면 두 화면이 같은 값을 다른 글자로 부른다. 행마다 부르지
+   * 않고 화면에서 한 번 받는다 — `useCodeNames` 머리말의 마지막 문단.
+   */
+  const fieldName = useCodeNames(CODE_DOMAIN.FIELD)
 
   const rows = useMemo(
     () => customersQuery.data?.pages.flatMap((p) => p.items) ?? [],
@@ -169,7 +177,7 @@ export function CustomersView() {
                   <td>
                     <Amount value={row.cusMincost} coinCode={row.cusCoin} />
                   </td>
-                  <td className={ui.cellClamp}>{row.cusField || '-'}</td>
+                  <td className={ui.cellClamp}>{fieldName(row.cusField) || '-'}</td>
                   <td>
                     <ActiveChip active={row.active} on="거래 중" off="거래 종료" />
                   </td>

@@ -13,8 +13,16 @@ import { Icon } from '@/shared/ui/Icon'
 import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import { decimalSum, krwToShow } from '@/shared/utils/money'
+import { InlinePickerCell } from '@/shared/ui/InlineEditCell'
 import ui from '@/shared/ui/ui.module.css'
+import { PoDocButtons, type PoPrintRequest } from '@/features/payment/print/PoDocButtons'
+import { PoPrintModal } from '@/features/payment/print/PoPrintModal'
 import { PurchaseOrderFormModal } from './PurchaseOrderFormModal'
+import {
+  mayChangeTranslator,
+  translatorLockReason,
+  TranslatorSwapModal,
+} from './TranslatorSwapModal'
 
 /**
  * 발주 목록. **이 화면의 금액이 원가다.**
@@ -29,6 +37,18 @@ import { PurchaseOrderFormModal } from './PurchaseOrderFormModal'
  *
  * 번역가 없이 발주를 만들 수 있다(단가 협의 중인 상태). 그 상태로 잊히면 원가는 잡혀 있는데
  * 지급 대상이 없는 행이 남으므로, 목록에서 바로 보이게 한다.
+ *
+ * ## 번역가 칸만 제자리에서 고친다
+ *
+ * 이 화면에서 두 번 눌러 고칠 수 있는 칸은 **번역가 하나**다. 그 칸이 선택된 이유는 위 문단과
+ * 같다 — 미지정 발주를 찾아 주는 화면에서 그걸 고치려면 수정 모달을 열어야 한다는 것은, 찾는
+ * 일과 고치는 일을 다른 화면에 둔다는 뜻이다. 그 모달에는 환산 금액과 환율이 함께 열린다.
+ *
+ * 나머지 칸(PO명·납기·진행)이 프로젝트 상세에서는 제자리 수정이 되고 여기서는 아닌 것은
+ * 의도다. 저쪽은 **한 프로젝트의 발주 열몇 건**을 훑으며 손보는 화면이고, 여기는 **전체 발주를
+ * 조건으로 걸러 보는** 화면이다. 거른 결과를 고치면 그 행이 조건에서 빠져 눈앞에서 사라지므로
+ * (진행을 '완료' 로 바꾸면 진행=진행중 필터에서 빠진다), 여기서의 제자리 수정은 "방금 무엇을
+ * 고쳤는지" 를 화면에서 지운다. 번역가는 필터 대상이 아니므로 그 문제가 없다.
  */
 
 const FILTER_KEYS = ['q', 'state', 'invoiceState', 'moneyState'] as const
@@ -45,6 +65,10 @@ export function PurchaseOrdersView() {
   })
   const [editing, setEditing] = useState<PurchaseOrderRow | null | undefined>(undefined)
   const [notice, setNotice] = useState<string | null>(null)
+  /** 지금 뽑으려는 PO 문서와 그 서식. 모달은 화면 밑단에 하나만 둔다 — `PoDocButtons` 주석. */
+  const [printing, setPrinting] = useState<PoPrintRequest | null>(null)
+  /** 번역가를 바꾸려고 연 발주. `printing` 과 같은 이유로 행이 아니라 화면이 들고 있다. */
+  const [swapping, setSwapping] = useState<PurchaseOrderRow | null>(null)
 
   const posQuery = usePurchaseOrders({
     limit: LIST_PAGE_SIZE,
@@ -250,14 +274,23 @@ export function PurchaseOrdersView() {
                       </Link>
                     </div>
                   </td>
-                  <td>
+                  {/*
+                   * 두 번 눌러 번역가를 바꾼다. 비활성 조건과 그 이유는 `TranslatorSwapModal` 이
+                   * 들고 있다 — 이 칸과 대화상자가 **같은 함수**로 판단해야 "눌리는데 저장이
+                   * 안 된다" 가 생기지 않는다.
+                   */}
+                  <InlinePickerCell
+                    editable={mayUpdate && !deletePo.isPending && mayChangeTranslator(row)}
+                    title={translatorLockReason(row) ?? '두 번 눌러 번역가 변경'}
+                    onOpen={() => setSwapping(row)}
+                  >
                     {row.poTranName ? (
                       row.poTranName
                     ) : (
                       // 지급 대상이 없는 발주. 위 주석 참고.
                       <span className={`${ui.badge} ${ui.badgeWarn}`}>미지정</span>
                     )}
-                  </td>
+                  </InlinePickerCell>
                   {/*
                    * 물량/단가. **비언어 발주에서는 두 줄 모두 `-` 다.** 분기를 쓰지 않은 것이
                    * 아니라, 분기가 필요 없다 — 네 값 모두 `po_detail_linguistic` 의 컬럼이므로
@@ -296,6 +329,11 @@ export function PurchaseOrdersView() {
                   </td>
                   <td>
                     <div className={ui.rowActions}>
+                      {/*
+                       * 국 / 영 두 버튼. 레거시 PO 목록의 두 링크를 되돌린 것이고, 미승인
+                       * PO 에서 비활성인 이유까지 전부 `PoDocButtons` 에 적혀 있다.
+                       */}
+                      <PoDocButtons po={row} onPick={setPrinting} />
                       {mayUpdate ? (
                         <button
                           type="button"
@@ -334,6 +372,22 @@ export function PurchaseOrdersView() {
         <PurchaseOrderFormModal
           purchaseOrder={editing}
           onClose={() => setEditing(undefined)}
+          onSaved={setNotice}
+        />
+      ) : null}
+
+      {printing ? (
+        <PoPrintModal
+          po={printing.po}
+          lang={printing.lang}
+          onClose={() => setPrinting(null)}
+        />
+      ) : null}
+
+      {swapping ? (
+        <TranslatorSwapModal
+          purchaseOrder={swapping}
+          onClose={() => setSwapping(null)}
           onSaved={setNotice}
         />
       ) : null}

@@ -16,6 +16,15 @@ interface Props {
 }
 
 /**
+ * 신규 고객사의 국가 기본값.
+ *
+ * 코드값이 아니라 표기 그대로다 — `cus_nation` 은 `sys_code` 를 참조하지 않는 자유 입력 컬럼이고,
+ * 운영 데이터에 이미 '대한민국' 으로 적혀 있다. 여기서 'KR' 같은 다른 표기를 넣으면 같은 나라가
+ * 두 가지로 저장되기 시작하고, 국가로 묶어 세는 조회가 생기는 날 둘 중 어느 쪽이 맞는지 알 수 없다.
+ */
+const DEFAULT_NATION = '대한민국'
+
+/**
  * 고객사 등록·수정.
  *
  * 코드(`cusCode`)는 입력란이 없다. 서버가 시퀀스로 발급하고(`CUS_000001`), 발급 시점은 INSERT
@@ -32,7 +41,16 @@ export function CustomerFormModal({ customer, onClose, onSaved }: Props) {
     cusName: customer?.cusName ?? '',
     cusEmail: customer?.cusEmail ?? '',
     cusPhone: customer?.cusPhone ?? '',
-    cusNation: customer?.cusNation ?? '',
+    /*
+     * 국가는 신규 등록에서 **대한민국**으로 시작한다. 고객사의 압도적 다수가 국내이고, 빈 칸에서
+     * 시작하면 그 다수가 매번 같은 네 글자를 타이핑한다. 해외 고객사는 지우고 적는다.
+     *
+     * `?? DEFAULT_NATION` 이 아니라 행으로 분기하는 것이 요점이다. `??` 로 쓰면 국가가 비어 있는
+     * 기존 고객사를 열었다 **그대로 저장하는 것만으로** 없던 '대한민국' 이 생긴다 — 그 고객사가
+     * 실제로 국내인지는 아무도 확인하지 않았고, 레거시에서 넘어온 행에는 그런 빈 국가가 많다.
+     * 같은 함정과 같은 처방이 `ProjectFormModal` 의 시작일에도 적혀 있다.
+     */
+    cusNation: customer ? (customer.cusNation ?? '') : DEFAULT_NATION,
     cusCoin: customer?.cusCoin ?? 'KRW',
     cusMincost: customer?.cusMincost ?? '',
     cusField: customer?.cusField ?? '',

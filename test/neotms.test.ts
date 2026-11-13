@@ -35,6 +35,25 @@ import { NeotmsMenu } from "../lambdas/neotms/nodejs/neotms/NeotmsMenus.js";
 // the third member of a set of three lists that have to agree and that nothing reconciles at
 // runtime; see `describe("the currency seed")`.
 import { CURRENCY_CODES, FX_CURRENCY_CODES } from "../lambdas/neotms/nodejs/neotms/NeotmsCurrency.js";
+/*
+ * The one frontend module imported rather than read as text, and the exception proves the rule the
+ * other frontend assertions follow.
+ *
+ * Those read source because `@/...` aliases would have to be taught to jest. `format.ts` has no
+ * imports at all, so there is nothing to resolve. More to the point, string-matching is the wrong
+ * instrument here: every other frontend assertion guards a DECISION that is visible in the source,
+ * whereas these four functions do arithmetic, and the failures worth catching - a +1 that lands on
+ * the 32nd, a 2026-02-30 that silently becomes March - are not visible in any substring. They have
+ * to be executed.
+ */
+import {
+  addDays,
+  alignPeriod,
+  calendarMonth,
+  formatDateField,
+  parseDateField,
+  shiftMonth,
+} from "../frontend/src/shared/utils/format.js";
 
 /*
  * The synthesised template for a stage, built at most once per run.
@@ -2948,12 +2967,24 @@ describe("the 결제 print documents", () => {
      * The asserted wording says PO, not 발주. That is this company's own vocabulary and the reason
      * the string reads the way it does; pinning it here is what stops a later "tidy-up" from
      * reintroducing a word the business does not use.
+     *
+     * ## The gate moved, deliberately, and this assertion moved with it
+     *
+     * It used to read `disabled={!row.poApproved}` on a single PO문서 button right here. The feedback
+     * asked for the legacy 국/영 pair back and for the same buttons on two more screens, and three
+     * copies of this condition is three chances for one of them to drift - at which point the
+     * confirm dialog's promise above is kept on one screen and broken on the others, which is the
+     * failure this test exists to prevent in the first place.
+     *
+     * So the condition now lives once, in `PoDocButtons`, and what is asserted here is that this
+     * screen reaches printing only through it. `PoDocButtons`'s own test covers the condition.
      */
     const view = frontendFile("features", "payment", "PoPaymentView.tsx");
     expect(view).toContain("해제된 PO는 출력도 정산도 할 수 없습니다");
-    expect(view).toMatch(
-      /onClick=\{\(\) => setPrinting\(row\)\}\s*\n\s*disabled=\{!row\.poApproved\}/,
-    );
+    expect(view).toContain("<PoDocButtons po={row} onPick={setPrinting} />");
+    // No local copy of the gate left behind. `setPrinting` must have exactly one caller - the
+    // component - rather than a button this screen still owns.
+    expect(view).not.toMatch(/onClick=\{\(\) => setPrinting\(/);
   });
 
   test("the payment screens open already filtered, and only when the URL says nothing", () => {
@@ -3093,6 +3124,18 @@ describe("the 분야 / 세부 분야 split", () => {
       "utf8",
     );
 
+  /*
+   * Comments stripped, for the negative assertions only. The last test in this block asserts that
+   * `{row.cusField}` does NOT appear - and the screens being pinned document the defect they just
+   * had, by name, in prose. Against the raw text such a test fails on the explanation, and the
+   * cheapest way to a green run becomes deleting the explanation. Same reasoning, at length, above
+   * the identical helper in the "날짜·시간" block.
+   */
+  const frontendCode = (...segments: string[]) =>
+    frontendFile(...segments)
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ");
+
   test("the coarse list is a new domain and the eighteen detailed codes are left where they are", () => {
     /*
      * The defect being fixed is that both project 분야 columns read ONE list, and that the list is the
@@ -3171,6 +3214,47 @@ describe("the 분야 / 세부 분야 split", () => {
     const form = frontendFile("features", "projects", "ProjectFormModal.tsx");
     expect(form).toContain("domain={CODE_DOMAIN.PRJCAT}");
     expect(form.match(/domain=\{CODE_DOMAIN\.FIELD\}/g)).toHaveLength(1);
+  });
+
+  test("every screen that shows a 분야 shows the name, and the project detail reads two domains to do it", () => {
+    /*
+     * Reported: the project's 분야 rendered as `PRJ_FIELD1` instead of 번역.
+     *
+     * What is stored is a `sys_code.code`; what a person can read is its `code_name`. Printing the
+     * code is not merely ugly - the FORM shows the name in its dropdown, so the detail panel
+     * displays different text for the value that was just picked, and that reads as a save that
+     * went wrong.
+     *
+     * The project panel needs TWO lookups, which is the part that is easy to get half right. Since
+     * db/016 the two columns read different domains: `prj_field` is PRJCAT (the seven coarse
+     * groups) and `prj_field2` is FIELD (the eighteen detailed ones). One shared resolver would
+     * silently fail on whichever column it was not built for and fall through to the raw code -
+     * leaving one of the two halves looking exactly as it did before the fix.
+     */
+    const detail = frontendCode("features", "projects", "ProjectDetailView.tsx");
+    expect(detail).toContain("const fieldName = useCodeNames(CODE_DOMAIN.PRJCAT)");
+    expect(detail).toContain("const subFieldName = useCodeNames(CODE_DOMAIN.FIELD)");
+    expect(detail).toContain("fieldName(project.prjField), subFieldName(project.prjField2)");
+
+    /*
+     * The same defect sat in the two neighbouring lists, on the same FIELD domain. They are pinned
+     * here rather than in their own tests because the three are one bug, and a reader fixing a
+     * fourth screen should find all of them in one place.
+     *
+     * The negative assertions are what keep it fixed: they fail on the exact edit that caused this
+     * - interpolating the column straight into the cell.
+     */
+    for (const [feature, file, fields] of [
+      ["customers", "CustomersView.tsx", ["cusField"]],
+      ["translators", "TranslatorsView.tsx", ["tranField", "tranUnfield"]],
+    ] as const) {
+      const view = frontendCode("features", feature, file);
+      expect(view).toContain("const fieldName = useCodeNames(CODE_DOMAIN.FIELD)");
+      for (const column of fields) {
+        expect(view).toContain(`fieldName(row.${column})`);
+        expect(view).not.toContain(`{row.${column}}`);
+      }
+    }
   });
 
   test("the fields that cannot be empty commit a value instead of merely hiding the empty option", () => {
@@ -3282,5 +3366,977 @@ describe("the 분야 / 세부 분야 split", () => {
     expect(frontendFile("features", "purchaseorders", "PurchaseOrdersView.tsx")).toContain(
       "INVOICE_STATES",
     );
+  });
+});
+
+describe("the date field's arithmetic", () => {
+  /*
+   * The only executed frontend code in this suite. Everything else here asserts that a decision is
+   * written down; these assert that a calculation is right, which no amount of reading the source
+   * establishes.
+   *
+   * All four functions work in UTC midnight (`Date.UTC` in, `getUTC*` out) and never touch the
+   * viewer's zone. Tested that way deliberately: these cases would pass in Seoul and fail in a DST
+   * zone if the implementation ever reached for local-time accessors, and CI runs in UTC.
+   */
+
+  test("a typed date is read in five shapes and a two-digit year means 2000-2099", () => {
+    // The six-key gesture the whole component exists for.
+    expect(parseDateField("261111")).toEqual({ ok: true, value: "2026-11-11" });
+    expect(parseDateField("20261111")).toEqual({ ok: true, value: "2026-11-11" });
+    expect(parseDateField("26-11-11")).toEqual({ ok: true, value: "2026-11-11" });
+    expect(parseDateField("2026-11-11")).toEqual({ ok: true, value: "2026-11-11" });
+    // Single-digit month and day, which is what people actually type.
+    expect(parseDateField("2026-1-1")).toEqual({ ok: true, value: "2026-01-01" });
+
+    /*
+     * The app's own output, pasted back in. `formatDate` prints `2026. 10. 27.` into every table, so
+     * copying a date out of a table and into a date box is the most natural gesture available -
+     * and rejecting it would be the app refusing to read its own handwriting. The Excel form with
+     * slashes is the same argument.
+     */
+    expect(parseDateField("2026. 10. 27.")).toEqual({ ok: true, value: "2026-10-27" });
+    expect(parseDateField("2026/10/27")).toEqual({ ok: true, value: "2026-10-27" });
+
+    /*
+     * The weekday suffix is stripped and NOT verified. The box renders `2026-11-11(수)`, so editing
+     * it in place leaves the old weekday attached to a new date - `2026-11-12(수)` - and 12 Nov 2026
+     * is a Thursday. Checking the suffix would reject the single most likely edit there is.
+     */
+    expect(parseDateField("2026-11-12(수)")).toEqual({ ok: true, value: "2026-11-12" });
+
+    // Clearing a date is a normal operation - jobs without a deadline exist, and `InlineDateCell`
+    // turns the empty string into null. Making blank an error would remove the only way to clear it.
+    expect(parseDateField("")).toEqual({ ok: true, value: "" });
+    expect(parseDateField("   ")).toEqual({ ok: true, value: "" });
+
+    // Two-digit years are 2000-2099 per the spec. 99 is 2099, not 1999.
+    expect(parseDateField("991231")).toEqual({ ok: true, value: "2099-12-31" });
+  });
+
+  test("a date that does not exist is an error, not a different date", () => {
+    /*
+     * The single most important assertion in this block. `new Date(2026, 1, 30)` rolls forward to
+     * 2 March without complaint, which is the default behaviour of every naive implementation and
+     * the worst possible one: it stores a day the operator never typed and renders it as success.
+     * A deadline silently two days late is not discoverable by looking at the screen.
+     */
+    const feb30 = parseDateField("2026-02-30");
+    expect(feb30.ok).toBe(false);
+    expect(parseDateField("20260230").ok).toBe(false);
+
+    expect(parseDateField("2026-13-01").ok).toBe(false);
+    expect(parseDateField("2026-00-10").ok).toBe(false);
+    expect(parseDateField("2026-11-00").ok).toBe(false);
+    expect(parseDateField("2026-11-31").ok).toBe(false);
+    expect(parseDateField("ㅁㄴㅇㄹ").ok).toBe(false);
+    expect(parseDateField("11111").ok).toBe(false); // five digits is neither shape
+
+    // A real leap day passes - the round-trip check must not reject 29 Feb in a leap year.
+    expect(parseDateField("2024-02-29")).toEqual({ ok: true, value: "2024-02-29" });
+    expect(parseDateField("2026-02-29").ok).toBe(false);
+
+    /*
+     * Before 1990 is refused because `toDate` treats it as legacy garbage and returns null. Accept
+     * it here and the value saves but every table renders it as '-': the input box and the list
+     * would disagree about the same stored value, and nobody tracks that down.
+     */
+    expect(parseDateField("1989-12-31").ok).toBe(false);
+    expect(parseDateField("1990-01-01").ok).toBe(true);
+
+    // Failure carries a sentence, not a boolean. The box shows it verbatim.
+    if (!feb30.ok) expect(feb30.reason.length).toBeGreaterThan(0);
+  });
+
+  test("the weekday is computed from the date, with Sunday at index 0", () => {
+    /*
+     * The Python reference indexes "월화수목금토일" with `weekday()`, which is Monday-0. `getUTCDay()`
+     * is Sunday-0. Copying the reference string verbatim shifts every weekday by one day, and the
+     * only symptom is somebody saying "the date is right but the day looks wrong" - which reads like
+     * a cosmetic complaint and is instead the thing the weekday was added to prevent.
+     */
+    expect(formatDateField("2026-11-11")).toBe("2026-11-11(수)"); // Wednesday
+    expect(formatDateField("2026-11-14")).toBe("2026-11-14(토)"); // Saturday
+    expect(formatDateField("2026-11-15")).toBe("2026-11-15(일)"); // Sunday
+    expect(formatDateField("2026-11-16")).toBe("2026-11-16(월)"); // Monday
+    expect(formatDateField("")).toBe("");
+
+    // Round-trips with the parser, which is what lets the box normalise what was typed.
+    const parsed = parseDateField("261111");
+    expect(parsed.ok && formatDateField(parsed.value)).toBe("2026-11-11(수)");
+  });
+
+  test("+N days crosses month, year and leap boundaries", () => {
+    /*
+     * `Date.UTC` carries the overflow, so these are free - but only while the arithmetic stays in
+     * UTC. The reason to pin them is that "simplifying" to a local-time Date is an easy and
+     * plausible edit, and in a DST zone `+1` becomes 23 hours: the result lands on the same calendar
+     * day, so pressing +1 appears to do nothing twice a year.
+     */
+    expect(addDays("2026-11-11", 1)).toBe("2026-11-12");
+    expect(addDays("2026-11-30", 1)).toBe("2026-12-01");
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
+    expect(addDays("2024-02-28", 1)).toBe("2024-02-29"); // leap
+    expect(addDays("2026-02-28", 1)).toBe("2026-03-01"); // not
+    expect(addDays("2026-01-01", -1)).toBe("2025-12-31");
+
+    // +3 then +7 composes to +10. This is the gesture today-based buttons could not express, and
+    // the reason `DateField` bases its steps on the field rather than on today.
+    expect(addDays(addDays("2026-11-11", 3), 7)).toBe("2026-11-21");
+
+    expect(addDays("", 1)).toBe("");
+  });
+
+  test("the calendar is Monday-first and always six rows tall", () => {
+    /*
+     * Six rows regardless of the month is a layout decision with a correctness symptom. Three months
+     * sit side by side; if each grid were as tall as its month needs, moving between months would
+     * change the popup's height, which moves the day cells under a cursor that is already heading
+     * for one. Clicking the wrong deadline is the failure mode, not a cosmetic jump.
+     */
+    const nov = calendarMonth(2026, 11);
+    expect(nov.weeks).toHaveLength(6);
+    expect(nov.weeks.every((w) => w.length === 7)).toBe(true);
+    expect(nov.title).toBe("2026년 11월");
+
+    // 1 Nov 2026 is a Sunday, so a Monday-first grid puts it in the LAST column of the first row.
+    expect(nov.weeks[0]![6]).toBe("2026-11-01");
+    expect(nov.weeks[0]!.slice(0, 6).every((d) => d === null)).toBe(true);
+
+    // Days outside the month are blanks, not the neighbouring month's dates - a cell showing 30 Nov
+    // inside the December grid is a click that sets a date in the wrong month.
+    expect(nov.weeks.flat().filter((d) => d !== null)).toHaveLength(30);
+    expect(nov.weeks.flat().filter((d) => d !== null).every((d) => d!.startsWith("2026-11-"))).toBe(
+      true,
+    );
+
+    // February 2026 starts on a Sunday too and has 28 days - the tightest month, still six rows.
+    expect(calendarMonth(2026, 2).weeks).toHaveLength(6);
+    expect(calendarMonth(2024, 2).weeks.flat().filter(Boolean)).toHaveLength(29);
+
+    // Month stepping wraps the year in both directions.
+    expect(shiftMonth(2026, 12, 1)).toEqual({ year: 2027, month: 1 });
+    expect(shiftMonth(2026, 1, -1)).toEqual({ year: 2025, month: 12 });
+    expect(shiftMonth(2026, 1, -13)).toEqual({ year: 2024, month: 12 });
+  });
+
+  test("an inverted period is clamped toward whichever end was just edited", () => {
+    /*
+     * Which end moves is the whole rule. Pushing the START past the end drags the end along; pulling
+     * the END in front of the start drags the start back. Getting it backwards is invisible in the
+     * source and obvious only to the person whose other date just jumped.
+     */
+    expect(alignPeriod("2026-12-01", "2026-11-01", "start")).toEqual({
+      start: "2026-12-01",
+      end: "2026-12-01",
+    });
+    expect(alignPeriod("2026-12-01", "2026-11-01", "end")).toEqual({
+      start: "2026-11-01",
+      end: "2026-11-01",
+    });
+
+    // A period that is already in order is returned untouched, including the equal case - a job that
+    // starts and ends on the same day is ordinary and must not be nudged.
+    expect(alignPeriod("2026-11-01", "2026-12-01", "start")).toEqual({
+      start: "2026-11-01",
+      end: "2026-12-01",
+    });
+    expect(alignPeriod("2026-11-01", "2026-11-01", "end")).toEqual({
+      start: "2026-11-01",
+      end: "2026-11-01",
+    });
+
+    /*
+     * A blank end is left blank. Filling it from the start would make someone who entered only a
+     * start date save a deadline they never typed - and a deadline is what the overdue colouring,
+     * the settlement queue and the PM dashboard all key on.
+     */
+    expect(alignPeriod("2026-11-01", "", "start")).toEqual({ start: "2026-11-01", end: "" });
+    expect(alignPeriod("", "2026-11-01", "end")).toEqual({ start: "", end: "2026-11-01" });
+  });
+});
+
+describe("date defaults, bulk operations and in-place editing", () => {
+  const frontendFile = (...segments: string[]) =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  /**
+   * `tsCode`'s frontend counterpart, and needed here more sharply than on the lambda side.
+   *
+   * Every module in this section documents the WRONG version of itself by name, because the wrong
+   * version is the plausible one: `DateField` explains at length why `<input type="date">` and a
+   * today-based `+N` were abandoned, `useRowSelection` explains why the selection is not synced by a
+   * `useEffect`, the three form modals quote `?? nowTimeKst()` as the trap being avoided. So a
+   * negative assertion against the
+   * raw text fails on the explanation - which would push the next person to delete the explanation
+   * to get a green run, the one outcome worth less than no test at all.
+   *
+   * Same text-level limitation as `tsCode`: a `//` inside a string literal is stripped too. These
+   * files hold no URLs, and `import` paths use no comment sequences.
+   */
+  const frontendCode = (...segments: string[]) =>
+    frontendFile(...segments)
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ");
+
+  test("the current-time default uses hourCycle, not hour12", () => {
+    /*
+     * `hour12: false` and `hourCycle: 'h23'` are not synonyms. `hour12: false` leaves the engine free
+     * to pick h23 (0-23) or h24 (1-24), and under h24 midnight formats as `24:00`. `<input
+     * type="time">` does not accept `24:00`: it drops the value and the field renders empty. So the
+     * wrong option here is a bug that reproduces for one minute a day and is invisible the other
+     * 1439 - precisely the kind that gets "cleaned up" to match the `hour12: false` already used by
+     * the display formatter above it, which is fine there because it formats for human eyes rather
+     * than for an input element.
+     */
+    const format = frontendCode("shared", "utils", "format.ts");
+    const fn = format.slice(format.indexOf("const TIME_KST"), format.indexOf("export function isOverdue"));
+    expect(fn).toContain("hourCycle: 'h23'");
+    // Scoped to this one formatter. `hour12: false` is correct in the display formatter above it,
+    // which formats for human eyes rather than for an `<input>` that validates what it is given.
+    expect(fn).not.toContain("hour12");
+    expect(format).toContain("hour12: false");
+  });
+
+  test("today/now is a create-path default only, branched on the row rather than coalesced", () => {
+    /*
+     * The request was "default 시작일 to today, at current time" - on NEW items. `project?.prjSdayTime
+     * ?? nowTimeKst()` reads as the same thing and is not: a start TIME is nullable and thousands of
+     * existing rows have none, so on an EDIT that expression injects the moment the form was opened.
+     * Opening a job to fix a typo in its memo and pressing 저장 would then record a start time that
+     * never happened, and nothing on screen would say so. Branching on the row object - `job ? ... :
+     * ...` - is what keeps "no value" distinguishable from "no value yet".
+     *
+     * Asserted as the absence of `?? nowTimeKst()` on all three forms because that is the exact edit
+     * someone makes when tidying the ternaries into the `??` chains used everywhere else in the same
+     * initialiser.
+     */
+    for (const [file, prefix] of [
+      [frontendCode("features", "projects", "ProjectFormModal.tsx"), "prj"],
+      [frontendCode("features", "jobs", "JobFormModal.tsx"), "job"],
+      [frontendCode("features", "purchaseorders", "PurchaseOrderFormModal.tsx"), "po"],
+    ] as const) {
+      expect(file).toMatch(new RegExp(`${prefix}Sday: \\w+ \\? toDateInputValue\\([^)]+\\) : todayKst\\(\\)`));
+      expect(file).toMatch(new RegExp(`${prefix}SdayTime: \\w+ \\? \\([^)]+ \\?\\? ''\\) : nowTimeKst\\(\\)`));
+      expect(file).not.toMatch(/\?\?\s*nowTimeKst\(\)/);
+      expect(file).not.toMatch(/\?\?\s*todayKst\(\)/);
+    }
+  });
+
+  test("the +N buttons count from the field, not from today, and do not submit", () => {
+    /*
+     * This reverses `DeadlineQuickPick`, which is now deleted. The old assertion here demanded
+     * `dateKstOffsetDays(days)` - a TODAY-based base - and justified it by idempotence: two presses
+     * of +3 give the same date, so a mispress costs one click.
+     *
+     * That argument holds only for a button considered alone. The real gesture is "pick a start date
+     * in the calendar, then a week from there", and a today-based button cannot express it - if the
+     * start date is next month, +7 still points at this week, so the operator abandons the button and
+     * reopens the calendar. The idempotent button was safe and unused. Undo is what `today` and the
+     * calendar are for, and +3 then +7 composing to +10 is the intended use.
+     *
+     * `type="button"` survives the reversal unchanged: a button inside a form defaults to submit, so
+     * without it pressing +1 saves the record and closes the modal.
+     *
+     * The empty-field case is the one place today still appears - `+3` on a blank box can only mean
+     * "three days from today", and anything else would be a date out of nowhere.
+     */
+    const field = frontendCode("shared", "ui", "DateField.tsx");
+    expect(field).toContain("const DAY_STEPS = [1, 3, 7] as const");
+    expect(field).toContain("onChange(addDays(value || todayKst(), days))");
+    expect(field).not.toContain("dateKstOffsetDays");
+    // Two `type="button"`s per step button is not checkable by count, so assert the attribute sits on
+    // the mapped step button specifically.
+    expect(field).toMatch(/DAY_STEPS\.map\(\(days\) => \([\s\S]{0,400}?type="button"/);
+
+    // The component it replaced is gone, not merely unused. A dead module that argues the reversed
+    // position is worse than no module - the next reader cannot tell which one is current.
+    expect(
+      readdirSync(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", "shared", "ui"),
+      ),
+    ).not.toContain("DeadlineQuickPick.tsx");
+
+    /*
+     * Time is still a separate box, so the date buttons cannot touch it. That was the third claim of
+     * the old test (`not.toMatch(/Time/)` on the quick-pick file) and it is now structural rather
+     * than textual: `DateField` only ever writes `time.onChange` from the time input and the two
+     * o'clock buttons, never from `step()`.
+     */
+    expect(field).not.toMatch(/step\([^)]*\)[\s\S]{0,80}time\.onChange/);
+  });
+
+  test("the three forms clamp the period together, in one state update", () => {
+    /*
+     * `alignPeriod` pulls the other end along rather than rejecting the inversion. Blocking strands
+     * the operator: moving a November period to December means both boxes change, and whichever is
+     * edited first produces an inverted period as an intermediate state. Clamping lets that state be
+     * passed through; blocking makes it a wall.
+     *
+     * Each form writes BOTH dates in a single `setForm`. Two sequential `set()` calls would be
+     * correct in value - the updater form reads `prev` - but would render once with the inverted
+     * pair, which is the exact flicker the clamp exists to remove.
+     */
+    for (const [file, sday, eday] of [
+      ["ProjectFormModal.tsx", "prjSday", "prjEday"],
+      ["JobFormModal.tsx", "jobSday", "jobEday"],
+      ["PurchaseOrderFormModal.tsx", "poSday", "poEday"],
+    ] as const) {
+      const dir =
+        file === "ProjectFormModal.tsx"
+          ? "projects"
+          : file === "JobFormModal.tsx"
+            ? "jobs"
+            : "purchaseorders";
+      const code = frontendCode("features", dir, file);
+      expect(code).toContain("const next = alignPeriod(start, end, changed)");
+      expect(code).toContain(`{ ...prev, ${sday}: next.start, ${eday}: next.end }`);
+      // The start box reports itself as the changed end, and vice versa - swapping these two makes
+      // the clamp pull the wrong way and is invisible until someone inverts a period.
+      expect(code).toContain(`onChange={(v) => setPeriod(v, form.${eday}, 'start')}`);
+      expect(code).toContain(`onChange={(v) => setPeriod(form.${sday}, v, 'end')}`);
+      /*
+       * The two ends of the period sit in one `.datePair` row.
+       *
+       * Left to `.formGrid`'s auto-fit columns this breaks at three columns wide: an unrelated field
+       * lands BETWEEN the start and the end. In the project form that field was 분야, which has its
+       * own partner (세부 분야) and got separated from it in the same stroke - one wrong wrap, two
+       * pairs broken. Wrapping the dates fixes both, because the pairs after it re-flow together.
+       */
+      expect(code).toMatch(
+        /<div className=\{ui\.datePair\}>[\s\S]{0,1200}?label="시작일"[\s\S]{0,1200}?<\/div>/,
+      );
+      // No form passes `hint` any more - see the `DATE_INPUT_HINT` reversal below.
+      expect(code).not.toContain("DATE_INPUT_HINT");
+      // And no native date input survives in any of the three.
+      expect(code).not.toContain('type="date"');
+    }
+  });
+
+  test("the typing hint is a tooltip, and no format template is painted on screen", () => {
+    /*
+     * Reversal, reported as a bug: "the datetime template yyyy-mm-dd is exposed to the user".
+     *
+     * It was in two places at once. `DATE_INPUT_HINT` sat beside the label (the spec's placement, on
+     * the argument that a label row's spare width is free) and `yyyy-mm-dd` sat in the empty box as a
+     * placeholder. Neither is wrong alone; together they read as a leaked internal string rather than
+     * as guidance, because the same token appears twice in two different registers.
+     *
+     * The label slot was not free either. A form column is ~240px, and `시작일` plus three formats
+     * wraps - so that one field's label becomes two lines and its input drops a row below the 납기
+     * input standing next to it. The period's two ends end up on different baselines, which is most
+     * of what "disorganized" meant in the report.
+     *
+     * `title` keeps the knowledge and costs no layout. It is a learn-once rule, not a per-use one.
+     */
+    const field = frontendCode("shared", "ui", "DateField.tsx");
+    expect(field).toContain("title={DATE_INPUT_HINT}");
+    // The placeholder is gone, and so is the label slot that held the other copy.
+    expect(field).not.toContain("placeholder=");
+    expect(field).not.toContain("labelHint");
+    expect(frontendCode("shared", "ui", "ui.module.css")).not.toMatch(/^\.labelHint \{/m);
+    // The hint names real example dates now, not a template - a template is what got mistaken for a
+    // value. Three of the five accepted shapes; the parser's own test covers all five.
+    expect(field).toMatch(/DATE_INPUT_HINT = '[^']*261111[^']*2026-11-11/);
+  });
+
+  test("the date field is three fixed rows, not one wrapping row", () => {
+    /*
+     * The controls used to be a single `flex-wrap: wrap` line of ten-odd items, so where it broke was
+     * decided by the text inside them. A filled time box (`오후 12:45`) and an empty one (`--:--`) are
+     * different widths, so 시작일 and 납기 - standing side by side, same component - folded at
+     * different points and their `+3` buttons landed at different heights. Nothing overflowed and
+     * nothing overlapped, which is why it read as untidy rather than as broken.
+     *
+     * Three rows in the markup (text box / 달력·오늘·+N / time) make the geometry independent of the
+     * content, and a 5-column grid makes the step buttons line up between the two fields.
+     */
+    const field = frontendCode("shared", "ui", "DateField.tsx");
+    expect(field).toContain("ui.dateStack");
+    expect(field).toContain("ui.dateBtns");
+    expect(field).toContain("ui.dateTimeRow");
+    // The inline width override on the time box is gone - the row grid sizes it now.
+    expect(field).not.toContain("style={{ width: 92");
+
+    const css = frontendCode("shared", "ui", "ui.module.css");
+    // `.dateStack` is also the calendar popup's anchor; without `position: relative` the popup
+    // measures itself against the modal and lands somewhere else entirely.
+    expect(css).toMatch(/\.dateStack \{[^}]*position: relative/);
+    expect(css).toMatch(/\.dateBtns \{[^}]*grid-template-columns: repeat\(5, 1fr\)/);
+    // No wrapping survives in the date rows. A re-added `flex-wrap` would silently restore the
+    // content-dependent breaking this test exists to prevent.
+    expect(css).not.toMatch(/\.date\w* \{[^}]*flex-wrap/);
+  });
+
+  test("the three months stand side by side, and the popup is measured back inside its clip box", () => {
+    /*
+     * Reported: "when I click the calendar it shows 3 months vertically... the user needs to scroll".
+     *
+     * The cause was NOT `.calendarMonths`'s `flex-wrap` - the wrap was doing as it was told. An
+     * absolutely-positioned box's default width is shrink-to-fit CAPPED BY ITS CONTAINING BLOCK, and
+     * the containing block is `.dateStack`, one ~300px form column. Three 188px months do not fit in
+     * 300px, so they folded. Deleting the wrap would have produced a 590px box overflowing a 300px
+     * one instead - a different bug with the same root. `width: max-content` is the fix: it ignores
+     * the containing block. So the wrap stays, as the narrow-screen fallback `max-width` reaches.
+     */
+    const css = frontendCode("shared", "ui", "ui.module.css");
+    expect(css).toMatch(/\.calendarPop \{[^}]*width: max-content/);
+    expect(css).toMatch(/\.calendarPop \{[^}]*max-width: calc\(100vw - 32px\)/);
+    // The wrap is deliberately kept. If a later reader deletes it as "the cause", this fails.
+    expect(css).toMatch(/\.calendarMonths \{[^}]*flex-wrap: wrap/);
+
+    /*
+     * 610px of popup hanging off a 300px anchor overflows one side or the other, and which side
+     * cannot be chosen in CSS: `left: 0` is right for 시작일, `right: 0` is right for 납기, and which
+     * column a field lands in depends on the modal width (720/820/860) and the live column count.
+     * So it is measured. The clip box is found by walking up for a non-`visible` `overflow-x` -
+     * the modal body is `overflow-y: auto`, and CSS forces the other axis non-`visible` too, so an
+     * over-wide popup grows a HORIZONTAL SCROLLBAR rather than being quietly hidden.
+     */
+    const field = frontendCode("shared", "ui", "DateField.tsx");
+    expect(field).toContain("function clipBox(node: HTMLElement)");
+    expect(field).toMatch(/overflowX !== 'visible'/);
+    expect(field).toContain("translate(${fit.dx}px, ${fit.dy}px)");
+    // `useLayoutEffect`, not `useEffect`: the latter runs after paint, so the calendar would show
+    // clipped for a frame and then jump - and a click inside that frame lands on the wrong day.
+    expect(field).toContain("useLayoutEffect(() => {");
+    expect(field).not.toContain("useEffect(() => {");
+  });
+
+  test("a calendar that does not fit below its field flips above it", () => {
+    /*
+     * Reported: "the calendar view should show up completely when clicked, without requiring the
+     * user to scroll down".
+     *
+     * Same clip box as the test above, the other axis. The popup sits at `top: calc(100% + 4px)`,
+     * so a date field in the lower half of a form opens it below the modal body's floor. This is
+     * NOT fixable in CSS, and not for the usual "CSS cannot measure" reason - it is that the floor
+     * is not in the CSS at all: `.panel` is `max-height: calc(100vh - 80px)` and `.body` declares
+     * no `max-height`, so the same form overflows on a laptop and does not on a large monitor.
+     *
+     * Hence `clipBox` returns all four edges, and the vertical fit is ordered: fits below -> leave
+     * it; fits above -> flip over the field; neither -> pin to the top of the clip box. The flip
+     * measures from `offsetParent` (`.dateStack`), which holds the input AND the today/+1/+3/+7
+     * row - measuring from the input alone would drop the flipped calendar onto the buttons.
+     */
+    const field = frontendCode("shared", "ui", "DateField.tsx");
+    expect(field).toMatch(/overflowY !== 'visible'/);
+    expect(field).toContain("return { left, right, top, bottom }");
+    expect(field).toContain("pop.offsetParent as HTMLElement | null");
+    expect(field).toContain("anchor.top - gap - height");
+
+    /*
+     * The last resort is a pair, and the halves live in different files. A popup taller than the
+     * clip box (three months folded on a narrow screen) gets an inline `max-height`; without
+     * `overflow-y: auto` on the class that `max-height` would CUT the last week off rather than
+     * let it scroll. Deleting either half alone loses days silently.
+     */
+    expect(field).toContain("const maxHeight = box.height > room ? room : undefined");
+    expect(frontendCode("shared", "ui", "ui.module.css")).toMatch(
+      /\.calendarPop \{[^}]*overflow-y: auto/,
+    );
+  });
+
+  test("a date that cannot be read keeps the cell open instead of reverting", () => {
+    /*
+     * `DateTextInput` reports whether the commit parsed, and `InlineDateCell` closes only on success.
+     *
+     * Without that boolean the cell would close on blur regardless, and `2026-02-30` would vanish:
+     * the error message lives inside the cell, so closing takes it away at the same moment, and the
+     * cell falls back to rendering the OLD value. Nothing on screen says the edit failed, which reads
+     * exactly like a successful save of a date that was never entered.
+     *
+     * The other half is that the input must not quietly fix the date. Rolling 2026-02-30 forward to
+     * 2026-03-02 is what the Date constructor does by default and is the worst available behaviour -
+     * it stores a day the user did not type and shows it as success.
+     */
+    const field = frontendCode("shared", "ui", "DateField.tsx");
+    expect(field).toContain("onBlur?: (ok: boolean) => void");
+    expect(field).toContain("onBlur?.(commit())");
+    expect(field).toContain("onDone?.(commit())");
+
+    const cell = frontendCode("shared", "ui", "InlineEditCell.tsx");
+    expect(cell).toContain("if (ok) setEditing(false)");
+
+    /*
+     * Scoped to the one function. A bare `/InlineDateCell[\s\S]*?useInlineEdit/` passes through the
+     * end of the component and matches `InlineSelectCell` below it, which uses the hook correctly -
+     * so the negative assertion would fail on code that is right.
+     */
+    const dateCell = cell.slice(
+      cell.indexOf("export function InlineDateCell"),
+      cell.indexOf("export function InlinePickerCell"),
+    );
+    expect(dateCell.length).toBeGreaterThan(0);
+    // The draft, the display text and the parse all live in `DateTextInput`. A second draft here
+    // would be a second answer to the same question.
+    expect(dateCell).toContain("<DateTextInput");
+    expect(dateCell).not.toContain("useInlineEdit");
+    expect(dateCell).not.toContain('type="date"');
+
+    /*
+     * Escape has to suppress the blur that follows it. Removing a focused input fires blur, and that
+     * blur's commit would save the very text Escape just discarded - the same trap `useInlineEdit`
+     * documents with its `skip` ref, and a ref for the same reason: a state flag is not visible until
+     * the next render.
+     */
+    expect(field).toContain("const cancelled = useRef(false)");
+    expect(field).toContain("if (cancelled.current) return");
+  });
+
+  test("an inline-edit cell contributes the same width whether it is being edited or not", () => {
+    /*
+     * Reported: "when I double click on the items on the table, the width changes as the text
+     * changes to an input field".
+     *
+     * The tables are `table-layout: auto`, which sizes every column from its CELLS' CONTENT. An
+     * `<input>`'s intrinsic width comes from its `size` attribute - 20 characters, ~170px, by
+     * default - and a `<select>`'s from its LONGEST OPTION. Neither has anything to do with the
+     * text that was in the cell a moment earlier, so the column jumps and every column after it
+     * shifts with it.
+     *
+     * `width: 100%` cannot fix this, and the reason is worth keeping: the input is itself one of
+     * the contents the browser measures to decide what 100% refers to. It is a circular
+     * constraint, and `auto` resolves it in favour of the intrinsic width.
+     *
+     * The fix is structural. The display text stays IN FLOW and keeps sizing the column; the
+     * editor is taken OUT of flow (`position: absolute`), and an absolutely-positioned box
+     * contributes nothing to an ancestor's min/max-content size. So the two states are provably
+     * identical in what they contribute - not merely close.
+     */
+    const css = frontendCode("shared", "ui", "ui.module.css");
+    expect(css).toMatch(/\.cellSwap \{[^}]*position: relative/);
+    expect(css).toMatch(/\.cellSwapEdit \{[^}]*position: absolute/);
+
+    /*
+     * `visibility: hidden`, NOT `display: none`. The hidden text is the thing doing the measuring;
+     * `display: none` removes it from the box tree and re-creates the identical bug pointing the
+     * other way - the column would then collapse to the editor's width on open.
+     */
+    expect(css).toMatch(/\.cellSwapText \{\s*visibility: hidden/);
+    expect(css).not.toMatch(/\.cellSwapText \{[^}]*display: none/);
+
+    /*
+     * Both states render the same wrapper. If only the editing branch were wrapped, the wrapper
+     * itself (its `position: relative`, its `min-height`) would become a difference between the
+     * two states - which is the class of bug being fixed here.
+     */
+    const cell = frontendCode("shared", "ui", "InlineEditCell.tsx");
+    expect(cell).toContain("function CellSwap({");
+    expect(cell).toMatch(/<div className=\{ui\.cellSwap\}>/);
+    expect(cell).toContain("className={editing ? ui.cellSwapText : undefined}");
+    // Three editors, one wrapper. A fourth editor added without it would reintroduce the jump.
+    expect(cell.match(/<CellSwap/g)?.length).toBe(3);
+  });
+
+  test("the job type is changed from a dialog, and both job tables draw that cell with one function", () => {
+    /*
+     * Asked: "would it be possible to make the language pair / job type updatable from the table
+     * view too?". It is, but not with an in-cell dropdown, for two independent reasons.
+     *
+     * First, that cell is not one value. A LINGUISTICS job holds TWO (출발어, 도착어); a MICE or IMC
+     * job holds one (업무 분류). The number and kind of controls needed depends on the value being
+     * edited, which one `<select>` cannot express.
+     *
+     * Second - and this is why it is a dialog rather than three controls crammed into a cell -
+     * leaving LINGUISTICS is IRREVERSIBLE. 물량/단위/단가/할인 are columns of
+     * `job_detail_linguistic` (db/012_job_pricing.sql), the server drops that row on a type
+     * change (`JobDetailClearOps`), and the job's revenue goes to 0. A cell that saves the moment
+     * you pick has nowhere to put that warning.
+     */
+    const modal = frontendCode("features", "jobs", "JobTypeSwapModal.tsx");
+    expect(modal).toContain("export function JobTypeSwapModal");
+    expect(modal).toMatch(/losesPricing =\s*\n?\s*wasLinguistic && !linguistic/);
+
+    /*
+     * The payload rule, which is the easiest thing in this file to get wrong. MICE and IMC SHARE
+     * `job_detail_non_linguistic`, so the server's "clear the leaving type's table" also fires on
+     * MICE -> IMC. Sending `{ jobType }` alone there deletes the row and writes nothing back, and
+     * the category disappears with no error. Hence: if the type changed, re-send the whole
+     * relevant side even when its values did not change.
+     */
+    expect(modal).toContain("if (typeChanged || (slang.trim() || null) !== (job.jobSlang?.trim() || null))");
+    expect(modal).toContain("} else if (typeChanged || (category.trim() || null) !== (job.jobCategory?.trim() || null)) {");
+
+    /*
+     * One summary function, two tables. 작업 목록 and 프로젝트 상세 each held their own copy of the
+     * same nested ternary; pairs like that get fixed on one side only. The assertion is that the
+     * ternary exists in exactly one place - `jobTypeSummary` - so neither view can drift.
+     */
+    expect(modal).toContain("export function jobTypeSummary");
+    for (const [feature, file] of [
+      ["jobs", "JobsView.tsx"],
+      ["projects", "ProjectDetailView.tsx"],
+    ] as const) {
+      const view = frontendCode("features", feature, file);
+      expect(view).toContain("jobTypeSummary(");
+      expect(view).toContain("<JobTypeSwapModal");
+      // The cell only OPENS; the dialog owns the mutation. `InlinePickerCell` is that contract.
+      expect(view).toContain('title="두 번 눌러 업무 구분 변경"');
+      expect(view).not.toMatch(/isLinguistic\((row|job)\.jobType\)/);
+    }
+  });
+
+  test("select-all recomputes inside the state updater and selection is an intersection with what is on screen", () => {
+    /*
+     * Two bugs that only appear under load, both avoided by where the computation sits.
+     *
+     * `toggleAll` must decide "are all rows already on?" INSIDE `setIds`, from `next`. A boolean
+     * captured in the render can be one tick stale - click the header box twice quickly and the
+     * second click reads the first click's pre-state, turning select-all into select-none (or the
+     * reverse) with no way for the user to tell which happened except by counting checkboxes.
+     *
+     * `selected` is `rows.filter(...)` at render, not a state array kept in sync by an effect. This
+     * screen genuinely destroys rows - bulk delete, 더 보기, filter changes - and an effect runs
+     * AFTER a render in which the stale selection was already displayed and the 선택 삭제 button was
+     * already clickable. One render is enough.
+     */
+    const hook = frontendCode("shared", "hooks", "useRowSelection.ts");
+    expect(hook).toContain("const selected = useMemo(() => rows.filter((r) => ids.has(r.id)), [rows, ids])");
+    expect(hook).toMatch(/setIds\(\([^)]*\) => \{[\s\S]*const everyOn = rows\.length > 0 && rows\.every/);
+    expect(hook).not.toContain("useEffect");
+  });
+
+  test("bulk runs sequentially and reports partial failure honestly", () => {
+    /*
+     * `Promise.all` over a thirty-row selection - an ordinary selection size here - is wrong twice
+     * over. It would claim thirty of the forty PostgreSQL connections this system has, so one
+     * person's one click starves every other screen; and finishing thirty writes at once stacks
+     * thirty copies of `JOB_AFFECTS`' five-key invalidation, turning thirty writes into a few hundred
+     * reads. Sequential costs wall-clock time that is hidden behind the confirm dialog the user is
+     * reading anyway.
+     *
+     * Not stopping on the first error is the other half. A job with a PO attached is legitimately
+     * refused by the server, and three such rows in a selection of ten is a normal Tuesday. Aborting
+     * there leaves the seven deletable rows behind and re-pressing the button stops in the same
+     * place. So the run completes and the counts are reported - `describeBulk` prints the total even
+     * on full success, because "selected 10, did 10" is the sentence that is worth reading.
+     */
+    const bulk = frontendCode("shared", "utils", "bulk.ts");
+    expect(bulk).toContain("for (const item of items)");
+    expect(bulk).not.toContain("Promise.all");
+    expect(bulk).toMatch(/catch \(error\) \{[\s\S]*failed \+= 1/);
+    expect(bulk).toContain("return `${total}건 중 ${result.ok}건을 ${verb}했습니다.");
+
+    /*
+     * The view keeps `bulkError` in its own state rather than reading the mutation hook's `error`.
+     * react-query's `error` is per-call, so in a ten-row run where row 2 failed and row 10 succeeded
+     * the hook has already forgotten the failure by the time the summary appears - the count would
+     * say "3건은 실패했습니다" with no reason anywhere on the screen.
+     */
+    const view = frontendCode("features", "projects", "ProjectDetailView.tsx");
+    expect(view).toContain("const [bulkError, setBulkError] = useState<unknown>(null)");
+    expect(view).toContain("setBulkError(result.firstError)");
+    expect(view).toContain("<ErrorNotice error={bulkError} />");
+    // Every bulk path goes through the one confirm-then-run helper; a second hand-rolled loop is how
+    // one of the four ends up without a confirmation.
+    expect(view.match(/runSequential\(/g)).toHaveLength(1);
+    expect(view.match(/runBulk\(/g)).toHaveLength(4);
+  });
+
+  test("a copy keeps the work and the price but not what happened to the original", () => {
+    /*
+     * The request said the copies "should have the exactly same contents". This is the one place that
+     * is deliberately not honoured, and the reason is money.
+     *
+     * A PO carries records of events: that it was billed on an invoice (`invCode`, `invDt`,
+     * `poInvoiceState`) and that the translator was paid (`poMoneyState` and its three companions).
+     * Copied verbatim, a PO that has never been sent to anyone is born holding an invoice number it
+     * does not appear on - reprint that invoice and the amount doubles, with nothing on the document
+     * saying which line is the ghost - and born 정산완료, so money genuinely owed to a translator
+     * disappears from the settlement list. That second one fails silently in the direction nobody
+     * reports.
+     *
+     * Everything describing the WORK and its PRICE is copied exactly, `coinRate` included: that field
+     * is a settlement flag with a value rather than a rate, so clearing it would set the copy's KRW
+     * amount moving with the daily rate - which is not "the same amount".
+     */
+    const po = frontendCode("features", "purchaseorders", "poDuplicate.ts");
+    for (const cleared of ["poStateDt: null", "poInvoiceState: null", "poMoneyDay: null", "poMoneyPrice: null", "poMoneyGubun: null", "invCode: null", "invDt: null"]) {
+      expect(po).toContain(cleared);
+    }
+    expect(po).toContain("poState: PO_STATE_UNAPPROVED");
+    expect(po).toContain("poMoneyState: MONEY_STATE_UNPAID");
+    expect(po).toContain("poCoinRate: row.poCoinRate");
+    /*
+     * Approval and invoice ownership are absent from `PurchaseOrderInput` altogether, which is why
+     * this mapper cannot leak them even by accident. Asserted so that "the duplicate should carry
+     * everything" cannot be answered by widening the input type.
+     */
+    expect(po).not.toMatch(/poApproved\w*:/);
+    expect(po).not.toMatch(/invoiceTranslatorId:/);
+
+    const job = frontendCode("features", "jobs", "jobDuplicate.ts");
+    expect(job).toContain("jobState: JOB_STATE_WAITING");
+    expect(job).toContain("coinRate: row.coinRate");
+    expect(job).toContain("jobPriceSum: row.jobPriceSum");
+    // A job's only event is its progress. `jobCode` is not here and cannot be: `JobInput` has none,
+    // the server mints it - which is the entire reason a duplicate is not a duplicate code.
+    expect(job).not.toContain("jobCode:");
+    expect(job).toContain("row.jobName || row.jobCode");
+
+    // '대기' as a literal was already in three places. A drifted copy of a status string does not
+    // throw; it makes a filter return nothing and a new row land in the wrong queue.
+    expect(frontendFile("apis", "neotms.codes.ts")).toContain("export const JOB_STATE_WAITING = '대기'");
+    expect(frontendCode("features", "jobs", "JobFormModal.tsx")).not.toContain("'대기'");
+  });
+
+  test("in-place editing sends one field, skips no-ops, and routes the status list through codeOptions", () => {
+    /*
+     * The edit modal holds every field of a row, including the money ones. Opening it to move a
+     * deadline by a day is how a converted amount gets changed by accident, and that is the risk the
+     * double-click cells remove: the body is `{ jobEday }` and nothing else, so partial-update
+     * semantics make the amounts structurally unable to move.
+     *
+     * `draft !== value` guards the common gesture of opening a cell and clicking away. Saving there
+     * would bump `updatedAt`/`updatedBy` on a row nobody changed, and an audit trail with entries
+     * that mean nothing cannot answer the question it exists for.
+     *
+     * `codeOptions(JOB_STATES, job.jobState)` rather than `JOB_STATES`: operational data holds status
+     * values that predate this list, and a `<select>` whose value matches no option displays the
+     * first one. The user would see '대기' on a row that says something else and committing anything
+     * - or nothing - would write it.
+     */
+    const cell = frontendCode("shared", "ui", "InlineEditCell.tsx");
+    expect(cell).toContain("if (draft !== value) onCommit(draft)");
+    expect(cell).toContain("const skip = useRef(false)");
+    expect(cell).toContain("onCommit(next || null)");
+    expect(cell).not.toContain("useEffect");
+    /*
+     * The date cell used to be asserted here as `type="date"`. It is now a `DateTextInput`, and the
+     * two guarantees this test cares about did not move with it - they were re-derived rather than
+     * dropped. `DateTextInput` calls `onChange` only when the parsed date DIFFERS from the one it was
+     * given, which is the same no-op skip as `draft !== value`; the one-field body is unchanged
+     * because the cell still commits through `onCommit(next || null)` above. The typing rules and the
+     * close-on-success behaviour have their own test.
+     */
+    expect(cell).toContain("<DateTextInput");
+
+    const view = frontendCode("features", "projects", "ProjectDetailView.tsx");
+    expect(view).toContain("options={codeOptions(JOB_STATES, job.jobState)}");
+    expect(view).toContain("options={codeOptions(PO_STATES, po.poState)}");
+    expect(view).toContain("onCommit={(jobState) => patchJob(job, { jobState })}");
+    expect(view).toContain("onCommit={(poState) => patchPo(po, { poState })}");
+
+    /*
+     * 지급 is the one status-shaped column left as a plain chip, and that asymmetry is the decision.
+     * Writing `poMoneyState` alone produces a 정산완료 with no amount, no date and no method: the row
+     * leaves the settlement list while no payment record exists anywhere. The server agrees - it
+     * takes those four fields together through a separate endpoint - so 지급 goes through the
+     * settlement modal only.
+     */
+    expect(view).toContain("<StatusChip value={po.poMoneyState} />");
+    expect(view).not.toMatch(/poMoneyState\s*\}\s*\)/);
+
+    // Both tables grew a leading checkbox column, so both empty/loading rows must span ten. A missed
+    // one is a cell short and the message sits under the wrong heading.
+    expect(view.match(/colSpan=\{10\}/g)).toHaveLength(2);
+    expect(view).not.toContain("colSpan={9}");
+    // `indeterminate` is a DOM property with no HTML attribute, so it can only be set through a ref.
+    // Without it a partial selection renders as an empty box, and the header reads "nothing selected"
+    // while 선택 삭제 is live.
+    expect(view.match(/el\.indeterminate = \w+Sel\.someSelected/g)).toHaveLength(2);
+  });
+
+  test("the PO document buttons carry the approval gate into every screen that shows them", () => {
+    /*
+     * The gate is the whole reason this component exists. `PoPaymentView` had blocked printing an
+     * unapproved PO with a written rationale - a 발주서 is a document sent OUT to a translator, and an
+     * amount nobody approved reads as a promise once it is on paper. The feedback asked for the same
+     * 국/영 buttons on the PO list and on 프로젝트 상세, and adding them as plain buttons there would
+     * have left the gate standing on one screen out of three.
+     *
+     * That failure mode is the dangerous shape: nothing breaks, no test goes red, and the warning
+     * sentence on the settlement screen quietly becomes false. So the assertion is not "the gate
+     * exists" but "no screen reaches printing except through the component that holds it".
+     *
+     * Checked as the absence of any direct `setPrinting` click handler rather than as the absence of
+     * `poApproved`: 결제 reads that flag for its OWN reasons - the 정산 button needs it too, and the
+     * 승인/승인 해제 toggle is the thing that writes it - so banning the word there would be a test
+     * asserting the wrong fact, and the next person would satisfy it by hiding the flag behind a
+     * local alias.
+     */
+    const buttons = frontendCode("features", "payment", "print", "PoDocButtons.tsx");
+    expect(buttons).toContain("const blocked = !po.poApproved");
+    expect(buttons).toContain("disabled={disabled || blocked}");
+    // The reason must reach the user. A button that does not react is read as broken, and the next
+    // report is "the print button is dead" rather than "this PO needs approval".
+    expect(buttons).toContain("승인되지 않은 PO는 출력할 수 없습니다.");
+    // Two buttons, one per 서식 - the legacy pair of links (PDF_Po_KOR.asp / PDF_Po_ENG.asp) that a
+    // single button plus an in-modal dropdown had turned into three clicks.
+    expect(buttons).toContain("button(PRINT_LANG_KOR, '국')");
+    expect(buttons).toContain("button(PRINT_LANG_ENG, '영')");
+
+    for (const view of [
+      frontendCode("features", "payment", "PoPaymentView.tsx"),
+      frontendCode("features", "purchaseorders", "PurchaseOrdersView.tsx"),
+      frontendCode("features", "projects", "ProjectDetailView.tsx"),
+    ]) {
+      expect(view).toContain("<PoDocButtons po=");
+      expect(view).not.toMatch(/onClick=\{\(\) => setPrinting\(/);
+      // And no screen keeps its own copy of the sentence, which is how two wordings drift apart.
+      expect(view).not.toContain("출력할 수 없습니다");
+    }
+
+    /*
+     * `lang` is optional and falls back to `po_lang`. Making it required would have been the tidier
+     * signature and would have broken the modal's own rule: when nobody picked a 서식, the PO's own
+     * stored letterhead language is the answer, not whichever constant the call site happened to
+     * name.
+     */
+    const modal = frontendCode("features", "payment", "print", "PoPrintModal.tsx");
+    expect(modal).toContain("initialLang={lang ?? printLangOf(po.poLang)}");
+  });
+
+  test("the translator swap is blocked by approval and by full settlement, but not by a partial one", () => {
+    /*
+     * Two locks with two different reasons, which is why they are listed separately rather than
+     * folded into one "is editable" flag.
+     *
+     * 승인 writes who approved and when (`po_approved_by`/`po_approved_at`). Swapping the translator
+     * underneath that record makes it read as a decision about a payment to someone who was never
+     * approved - and the approver is the only person who could notice, on a screen that does not
+     * show it.
+     *
+     * 정산완료 means the money has left. The four payment fields are facts about the person who
+     * received it, so a swap turns "paid A" into "B's payment history": B never got it and does not
+     * appear in the unpaid list, so nobody files it, while A finds the entry gone.
+     *
+     * 부분정산 is deliberately allowed. Being replaced after an advance is a real sequence (hand in a
+     * first draft, get swapped out), and the remaining balance SHOULD go to the new person. The
+     * settlement screen still holds what already went out, so no fact disappears.
+     */
+    const swap = frontendCode("features", "purchaseorders", "TranslatorSwapModal.tsx");
+    expect(swap).toContain("return !po.poApproved && po.poMoneyState !== MONEY_STATE_PAID");
+    expect(swap).not.toContain("MONEY_STATE_PARTIAL");
+
+    // The cell and the dialog must agree. A cell that opens on a PO the dialog refuses to save is a
+    // dialog whose 저장 button never enables, with nothing on screen explaining why.
+    for (const view of [
+      frontendCode("features", "purchaseorders", "PurchaseOrdersView.tsx"),
+      frontendCode("features", "projects", "ProjectDetailView.tsx"),
+    ]) {
+      expect(view).toContain("mayChangeTranslator(");
+      expect(view).toContain("title={translatorLockReason(");
+      expect(view).toContain("<TranslatorSwapModal");
+    }
+
+    /*
+     * One field in the body. This is the same guarantee the inline cells rely on: the 수정 modal
+     * holds the converted amount and the FX rate, so opening it to change a person is how an amount
+     * gets changed by accident. `{ translatorId }` makes the amounts structurally unable to move.
+     */
+    expect(swap).toContain("input: { translatorId: nextId }");
+    expect(swap).not.toContain("poCoinCode:");
+
+    /*
+     * Two states, not one nullable one. If 'nothing picked yet' and 'clear the assignment' were both
+     * `null`, 저장 would be live the moment the dialog opened and that first click would wipe a
+     * perfectly good translator.
+     */
+    expect(swap).toContain("const [clearing, setClearing] = useState(false)");
+    expect(swap).toContain("const canSave = (clearing || picked !== null) && changed");
+  });
+
+  test("the picker's number keys live on the result list, never on the search box", () => {
+    /*
+     * The split is the point, not an implementation detail. Translator and job codes are numeric
+     * (`TRN_000123`, `JOB_071763`), so digits are among the most common keystrokes IN the search
+     * box: intercepting them there would both break code search and - worse - select a row while the
+     * user believed they were still typing. On a PO form that silently attaches cost to the wrong
+     * job, and both margins are then wrong with nothing on screen saying so.
+     *
+     * So letters go to the input, numbers to the list, and ArrowDown is the single keystroke that
+     * crosses between them.
+     */
+    const picker = frontendCode("shared", "ui", "RecordPicker.tsx");
+    const onInput = picker.slice(picker.indexOf("const onKeyDown"), picker.indexOf("const onResultsKeyDown"));
+    expect(onInput).toContain("if (e.key === 'ArrowDown')");
+    // No digit handling in the input - the assertion that protects code search.
+    expect(onInput).not.toMatch(/e\.key >= '1'/);
+    expect(picker).toMatch(/const onResultsKeyDown[\s\S]*?e\.key >= '1' && e\.key <= String\(NUMBERED\)/);
+
+    /*
+     * Escape is unusable here. `Modal` listens for it on `document` and is not portaled, so an
+     * Escape swallowed by the picker still closes the whole form - the user loses twenty filled
+     * fields to a keystroke they expected to clear a search box. ArrowUp from the first row is the
+     * way back to the input instead.
+     */
+    expect(picker).not.toContain("'Escape'");
+    expect(picker).toContain("if (at === 0) inputRef.current?.focus()");
+
+    /*
+     * Focus is read from the DOM rather than tracked as an index. A separate `activeIndex` goes out
+     * of step with a mouse hover the moment both are in play, and the arrow key then appears to jump
+     * to a row the user was not on.
+     */
+    expect(picker).toContain("querySelectorAll<HTMLButtonElement>('button')");
+    expect(picker).not.toContain("activeIndex");
+
+    // Single digits only. Two-digit entry cannot work - pressing the first digit has already
+    // selected a row - and a wait-for-the-second-key timer would tax everyone picking #1.
+    expect(picker).toContain("const NUMBERED = 9");
+  });
+
+  test("the project's PO form scopes the job search to that project, on the server", () => {
+    /*
+     * 프로젝트 상세 grew a PO 추가 button in the PO card header, which means a `JobPicker` opens on a
+     * screen where the project is already decided. Left unscoped, a search for a name as common as
+     * '번역' returns other projects' jobs, and the person picking reads the results as belonging to
+     * the project they are looking at. Picking wrong attaches THIS project's cost to ANOTHER
+     * project's revenue - two margins wrong at once, neither screen complaining.
+     *
+     * The filter must go to the server. Filtering the 20 rows after they arrive means the cap of 20
+     * was applied BEFORE the filter, so other projects' jobs occupy the slots and the job being
+     * looked for is simply absent from the list.
+     */
+    const picker = frontendCode("features", "jobs", "JobPicker.tsx");
+    expect(picker).toContain("projectId: projectId || undefined");
+    expect(picker).not.toMatch(/\.filter\(\([^)]*\) => [^)]*projectId/);
+
+    const view = frontendCode("features", "projects", "ProjectDetailView.tsx");
+    expect(view).toContain("jobScopeProjectId={id}");
+    /*
+     * The row-level 'PO 추가' stays. It opens with the job already fixed, which is faster when the
+     * job is the thing being looked at - the two entrances answer different questions.
+     */
+    expect(view).toContain("fixedJob={poForJob}");
+  });
+
+  test("the two create-path defaults branch on the row, and the margin rate keeps its zero case", () => {
+    /*
+     * Same trap as 시작일, in two more places. `customer?.cusNation ?? DEFAULT_NATION` would write
+     * '대한민국' into any existing customer whose 국가 is blank the moment somebody opens the form and
+     * presses 저장 - a country nobody verified, indistinguishable from one that was entered. Same for
+     * 등록일: coalescing turns `tran_reg_day` into "the last day anyone pressed save", which breaks
+     * the already-documented distinction between it and `createdAt`.
+     */
+    const customer = frontendCode("features", "customers", "CustomerFormModal.tsx");
+    expect(customer).toContain("const DEFAULT_NATION = '대한민국'");
+    expect(customer).toMatch(/cusNation: customer \? \(customer\.cusNation \?\? ''\) : DEFAULT_NATION/);
+    expect(customer).not.toMatch(/\?\?\s*DEFAULT_NATION/);
+
+    const translator = frontendCode("features", "translators", "TranslatorFormModal.tsx");
+    expect(translator).toMatch(/tranRegDay: translator \? toDateInputValue\([^)]+\) : todayKst\(\)/);
+    expect(translator).not.toMatch(/\?\?\s*todayKst\(\)/);
+
+    /*
+     * 수익률 reverses an earlier decision, and the reversal is the thing worth pinning. "마진율은
+     * 보여 주지 않는다" was argued from division by zero, which is a reason to handle that one case -
+     * not a reason to withhold the number on every project that has revenue.
+     *
+     * `decimalPercent` returns null for a zero denominator, and that null has to stay a sentence. A
+     * `?? 0` there prints 0% on a project with no revenue, which reads as a measured result; a '-'
+     * reads as a loading state. Negative rates are not clamped - a project that cost more than it
+     * sold is a fact, and hiding the sign is how it stays unnoticed.
+     */
+    const view = frontendCode("features", "projects", "ProjectDetailView.tsx");
+    expect(view).toContain("decimalPercent(margin, revenue.total)");
+    expect(view).toContain("매출이 0이라 수익률을 셀 수 없습니다.");
+    expect(view).not.toMatch(/marginRate \?\? 0/);
+    expect(view).not.toMatch(/Math\.(max|abs)\(marginRate/);
   });
 });

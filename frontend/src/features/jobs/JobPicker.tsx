@@ -23,17 +23,43 @@ interface Props {
   onChange: (option: PickerOption | null) => void
   required?: boolean
   disabled?: boolean
+  /**
+   * 이 프로젝트의 작업만 찾는다. 프로젝트 상세에서 PO 를 등록할 때 쓴다 — 아래 주석 참고.
+   */
+  projectId?: string | null
 }
 
 const PICK_LIMIT = 20
 
-/** 작업을 검색해서 고른다. 동작 규칙은 `CustomerPicker` 와 같다. */
-export function JobPicker({ value, onChange, required = false, disabled = false }: Props) {
+/**
+ * 작업을 검색해서 고른다. 동작 규칙은 `CustomerPicker` 와 같다.
+ *
+ * ## `projectId` 를 주면 그 프로젝트 안에서만 찾는다
+ *
+ * 전체 작업을 검색하는 것이 기본값인 이유는, PO 목록 화면에서 PO 를 등록할 때는 어느 프로젝트의
+ * 작업인지가 아직 정해지지 않았기 때문이다.
+ *
+ * 하지만 **프로젝트 상세에서 열었다면 정해져 있다.** 거기서 전체를 검색하게 두면 '번역' 같은
+ * 흔한 작업명으로 다른 프로젝트의 작업이 결과에 섞이고, 고르는 사람은 지금 보고 있는 화면이
+ * 그 프로젝트의 것이므로 결과도 그렇다고 읽는다. 잘못 고르면 **이 프로젝트의 원가가 다른
+ * 프로젝트의 매출에 붙고**, 두 프로젝트의 마진이 동시에 틀리면서 어느 화면도 틀렸다고 말해 주지
+ * 않는다(위 `jobOption` 주석의 같은 사고다 — 부제에 프로젝트명을 넣는 것만으로는 막지 못한다).
+ *
+ * 걸러 내는 일은 서버가 한다(`projectId` 필터). 받아서 화면에서 거르면 상한 20건이 **거르기
+ * 전의** 20건이므로, 다른 프로젝트의 작업이 그 자리를 차지해 찾는 작업이 결과에서 빠진다.
+ */
+export function JobPicker({
+  value,
+  onChange,
+  required = false,
+  disabled = false,
+  projectId = null,
+}: Props) {
   const [keyword, setKeyword] = useState('')
   const [submitted, setSubmitted] = useState('')
 
   const jobsQuery = useJobs(
-    { limit: PICK_LIMIT, q: submitted || undefined },
+    { limit: PICK_LIMIT, q: submitted || undefined, projectId: projectId || undefined },
     submitted.trim().length > 0 && !value,
   )
 
@@ -59,10 +85,16 @@ export function JobPicker({ value, onChange, required = false, disabled = false 
         onChange(option)
         if (!option) setSubmitted('')
       }}
-      placeholder="작업명 · 코드 · 프로젝트"
+      placeholder={projectId ? '작업명 · 코드' : '작업명 · 코드 · 프로젝트'}
       hint={
         submitted && !value && options.length === 0 && !jobsQuery.isLoading
-          ? `'${submitted}' 로 찾은 작업이 없습니다. PO 는 작업에 달립니다 — 작업을 먼저 등록해 주세요.`
+          ? projectId
+            ? /*
+               * 범위를 밝힌다. 밝히지 않으면 "작업이 없습니다" 가 전체에 없다는 뜻으로 읽히고,
+               * 담당자는 있는 작업을 다시 등록한다.
+               */
+              `이 프로젝트에 '${submitted}' 로 찾은 작업이 없습니다. PO 는 작업에 달립니다 — 작업을 먼저 등록해 주세요.`
+            : `'${submitted}' 로 찾은 작업이 없습니다. PO 는 작업에 달립니다 — 작업을 먼저 등록해 주세요.`
           : undefined
       }
     />

@@ -15,7 +15,8 @@ import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
-import { toDateInputValue } from '@/shared/utils/format'
+import { alignPeriod, nowTimeKst, toDateInputValue, todayKst } from '@/shared/utils/format'
+import { DateField } from '@/shared/ui/DateField'
 import ui from '@/shared/ui/ui.module.css'
 import { CustomerPicker } from '@/features/customers/CustomerPicker'
 
@@ -69,8 +70,17 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
     prjField2: project?.prjField2 ?? '',
     prjState: project?.prjState ?? PROJECT_STATE_QUOTE,
     prjMoneyState: project?.prjMoneyState ?? MONEY_STATE_UNPAID,
-    prjSday: toDateInputValue(project?.prjSday),
-    prjSdayTime: project?.prjSdayTime ?? '',
+    /*
+     * 신규는 시작일이 **지금**이다. 거의 모든 프로젝트가 등록하는 날 시작하므로, 비워 두고
+     * 매번 고르게 하면 그 칸은 셋 중 하나가 된다 — 오늘로 채워지거나, 빈 채로 저장되거나,
+     * 틀린 날짜로 저장된다.
+     *
+     * `??` 가 아니라 `project ? :` 로 갈라야 한다. `project?.prjSdayTime ?? nowTimeKst()` 는
+     * **시작 시각이 비어 있는 기존 행을 수정할 때 현재 시각을 집어넣는다** — 폼을 열었다
+     * 그대로 저장하면 없던 시각이 생긴다. 기본값은 신규에만 해당한다.
+     */
+    prjSday: project ? toDateInputValue(project.prjSday) : todayKst(),
+    prjSdayTime: project ? (project.prjSdayTime ?? '') : nowTimeKst(),
     prjEday: toDateInputValue(project?.prjEday),
     prjEdayTime: project?.prjEdayTime ?? '',
     prjContent: project?.prjContent ?? '',
@@ -80,6 +90,19 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setDirty(true)
     setForm((prev) => ({ ...prev, [key]: value }))
+  }
+
+  /**
+   * 시작일·마감일을 **함께** 넣는다. 거꾸로 된 기간은 `alignPeriod` 가 맞춘다.
+   *
+   * 두 칸을 각각 `set` 으로 넣지 않는 이유는 `alignPeriod` 가 두 값을 보고 한 쌍을 돌려주기
+   * 때문이다. 한 번에 넣어야 "시작일을 밀었더니 마감일이 따라온" 것이 한 번의 렌더로 보인다 —
+   * 두 번 나누면 중간에 거꾸로 된 기간이 한 프레임 섞인다.
+   */
+  const setPeriod = (start: string, end: string, changed: 'start' | 'end') => {
+    const next = alignPeriod(start, end, changed)
+    setDirty(true)
+    setForm((prev) => ({ ...prev, prjSday: next.start, prjEday: next.end }))
   }
 
   const name = form.prjName.trim()
@@ -174,8 +197,8 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
 
       <div className={ui.formGrid}>
         <div className={ui.fieldWide}>
-          <label className={ui.label} htmlFor="prj-name">
-            프로젝트명 <span className={ui.required}>*</span>
+          <label className={`${ui.label} ${ui.required}`} htmlFor="prj-name">
+            프로젝트명
           </label>
           <input
             id="prj-name"
@@ -270,53 +293,42 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
         </div>
 
         {/*
-         * 시작일·납기를 날짜와 시각 두 칸으로 나눈 것은 컬럼이 그렇게 생겼기 때문이다
+         * 시작일·마감일을 날짜와 시각 두 칸으로 나눈 것은 컬럼이 그렇게 생겼기 때문이다
          * (`prj_sday` 는 date, `prj_sday_time` 은 별도 text). 하나의 datetime 입력으로 합치면
          * 시각이 비어 있는 기존 행에 00:00 이 들어가고, "그날 중" 이 "자정까지" 로 바뀐다.
+         *
+         * 둘을 `.datePair` 로 묶어 **한 줄을 통째로** 쓴다. 자동 열 수(`.formGrid`)에 맡기면
+         * 열이 셋일 때 기간의 두 끝 사이에 '분야' 가 끼어들어, 한 쌍으로 읽혀야 할 것이 셋으로
+         * 보이고 '분야' 는 제 짝인 '세부 분야' 와 떨어진다.
          */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="prj-sday">
-            시작일
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="prj-sday"
-              className={ui.input}
-              type="date"
-              value={form.prjSday}
-              onChange={(e) => set('prjSday', e.target.value)}
-            />
-            <input
-              className={ui.input}
-              type="time"
-              aria-label="시작 시각"
-              value={form.prjSdayTime}
-              onChange={(e) => set('prjSdayTime', e.target.value)}
-            />
-          </div>
-        </div>
+        <div className={ui.datePair}>
+          <DateField
+            id="prj-sday"
+            label="시작일"
+            value={form.prjSday}
+            onChange={(v) => setPeriod(v, form.prjEday, 'start')}
+            disabled={pending}
+            time={{
+              value: form.prjSdayTime,
+              onChange: (v) => set('prjSdayTime', v),
+              ariaLabel: '시작 시각',
+            }}
+          />
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="prj-eday">
-            마감일
-          </label>
-          <div className={ui.inputRow}>
-            <input
-              id="prj-eday"
-              className={ui.input}
-              type="date"
-              value={form.prjEday}
-              onChange={(e) => set('prjEday', e.target.value)}
-            />
-            <input
-              className={ui.input}
-              type="time"
-              aria-label="마감시각"
-              value={form.prjEdayTime}
-              onChange={(e) => set('prjEdayTime', e.target.value)}
-            />
-          </div>
-          <span className={ui.hint}>시각을 비워 두면 '그날 중' 으로 봅니다.</span>
+          <DateField
+            id="prj-eday"
+            label="마감일"
+            value={form.prjEday}
+            onChange={(v) => setPeriod(form.prjSday, v, 'end')}
+            disabled={pending}
+            time={{
+              value: form.prjEdayTime,
+              onChange: (v) => set('prjEdayTime', v),
+              ariaLabel: '마감시각',
+            }}
+          >
+            <span className={ui.hint}>시각을 비워 두면 '그날 중' 으로 봅니다.</span>
+          </DateField>
         </div>
 
         {/*

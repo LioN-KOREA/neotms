@@ -5,7 +5,7 @@ import type { TranslatorInput, TranslatorRow } from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
-import { toDateInputValue } from '@/shared/utils/format'
+import { toDateInputValue, todayKst } from '@/shared/utils/format'
 import ui from '@/shared/ui/ui.module.css'
 
 interface Props {
@@ -56,8 +56,19 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
     tranBank: translator?.tranBank ?? '',
     tranAcc: translator?.tranAcc ?? '',
     tranPaypal: translator?.tranPaypal ?? '',
-    // `<input type="date">` 는 YYYY-MM-DD 만 받는다. 서버가 주는 날짜 문자열을 그 형태로 맞춘다.
-    tranRegDay: toDateInputValue(translator?.tranRegDay),
+    /*
+     * `<input type="date">` 는 YYYY-MM-DD 만 받는다. 서버가 주는 날짜 문자열을 그 형태로 맞춘다.
+     *
+     * 신규 등록에서는 **오늘**이다. 번역가를 등록하는 날이 곧 등록일인 경우가 사실상 전부이고,
+     * 비워 두면 등록일이 없는 번역가가 쌓인다 — 그 값은 뒤에 와서 채울 방법이 없다(그 사람이
+     * 언제 등록되었는지를 기억하는 사람이 없으므로).
+     *
+     * 여기서도 `?? todayKst()` 가 아니라 행으로 분기한다. `??` 였다면 등록일이 비어 있는 기존
+     * 번역가를 열었다 그대로 저장하는 것만으로 **오늘 등록된 사람**이 되고, 그러면 이 컬럼은
+     * 등록일이 아니라 '마지막으로 아무나 저장을 누른 날' 이 된다. `createdAt` 과 다른 값이라는
+     * 아래 주석의 요점이 바로 깨지는 자리다.
+     */
+    tranRegDay: translator ? toDateInputValue(translator.tranRegDay) : todayKst(),
     tranMsg: translator?.tranMsg ?? '',
     active: translator?.active ?? true,
   })
