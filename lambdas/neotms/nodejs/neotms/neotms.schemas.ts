@@ -588,6 +588,16 @@ export const HandoverMailSchema = v.object({
    * API.
    */
   recipient: v.pipe(v.string(), v.trim(), v.email("must be an email address"), v.maxLength(300)),
+  /**
+   * The remarks cell (기타요청), typed when sending. Optional, and optional means EMPTY rather
+   * than absent: the row exists on the official form whether or not anything was asked for.
+   *
+   * The only field in this body that is free text a person composes, so it is also the only one
+   * with a ceiling worth arguing about. 2000 characters is about a screen of prose - more than
+   * any remark seen on the paper form, and small enough that it cannot be used to post a
+   * document through this endpoint.
+   */
+  note: v.optional(v.pipe(v.string(), v.maxLength(2000)), ""),
   hiworksId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
   /** NOT trimmed. A leading or trailing space may be part of a password, and only Hiworks knows. */
   hiworksPassword: v.pipe(v.string(), v.minLength(1), v.maxLength(300)),

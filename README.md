@@ -332,30 +332,34 @@ because Supavisor routes on the tenant encoded in the username.
 
 | File | Contents |
 |---|---|
-| `001_extensions.sql` | `pgroonga`, `pg_trgm` |
-| `002_tables.sql` | schema |
-| `003_indexes.sql` | 16 PGroonga indexes plus the trigram ones |
-| `004_rollup.sql` | **tears the old reporting rollup down** and records why the reports aggregate live — see below |
-| `004_verify_search.sql` | **asserts the search plan and fails loudly** — see below |
-| `005_code_sequences.sql` | code sequences |
-| `006_bootstrap.sql` | the six business menus, the 시스템관리자 superuser role, and the way back into an empty NEOTMS — **required, see §6.1** |
-| `007_codes.sql` | the `sys_code` dropdown domains: 분야, 작업 종류, 단가 단위, 언어, 사용 프로그램 — **see §6.2** |
-| `008_admin.sql` | the two administrative menus (유지보수, 사용자 관리) and the re-grant that makes them usable — **see §6.2** |
-| `009_selfservice.sql` | `staff_self_register()`, the function behind the sign-up form — **see §6.2** |
-| `010_currency.sql` | the seven currencies the console can submit (KRW USD EUR JPY CNH GBP HKD), plus retired CNY. Without it **every create in the system fails**; **re-apply it if your database predates CNH/GBP/HKD** — **see §6.2** |
-| `011_job_types.sql` | 업무 구분 (Linguistics / MICE / IMC) and 업무 분류: two `sys_code` domains, `job.job_type` / `purchase_order.po_type`, the four detail tables that replace the language columns, **and a migration that drops `job_slang` / `job_elang` / `po_slang` / `po_elang`** — **see §6.2** |
-| `012_job_pricing.sql` | moves the nine pricing *inputs* (`job_volume`, `unit_code`, `job_price_sel`, `job_price`, `job_price_dis`; `po_volume`, `po_unit_code`, `po_price_sel`, `po_price`) onto the linguistic detail tables, so a MICE or IMC job records a total without a fabricated word count. **The totals — `job_price_sum` / `job_price_ksum` / `po_price_sum` / `po_price_ksum` — stay on the parents.** Drops the nine columns it moved — **see §6.2** |
-| `013_dashboard_menus.sql` | the two 대시보드 menus (`DASHBOARD_SALES`, `DASHBOARD_PM`) and the re-grant that makes them usable. Without it the two dashboards are **unreachable by everyone**, including the superuser; nothing else is affected — **see §6.2** |
-| `014_fx_rates.sql` | `fx_rate_latest`, the view every KRW figure in the system reads through, plus a one-time `UPDATE` that pins `coin_rate` on legacy foreign-currency rows so their stored totals stop floating. **Without it every report, dashboard, rollup and list fails with `42P01 relation "fx_rate_latest" does not exist`** — **see §6.2** |
-| `015_payment.sql` | the 결제 section: the PO approval gate (`po_approved` / `po_approved_at` / `po_approved_by`), `purchase_order.invoice_translator_id` as a real FK so one invoice can group several POs, the two columns `invoice_translator` needed to be writable by an application (`updated_at`, `inv_pm_id`), the `POL_` invoice code sequence, the one `PAYMENT` menu plus its superuser re-grant (**one menu id, two rail entries** — see §6.2), **and a rename of two live `po_state` values — 발주 → 미승인 and 수락 → 진행.** Every PO read selects `po_approved`, so **without it the PO, project and job screens all fail with `42703`** — **see §6.2** |
-| `016_project_fields.sql` | splits 분야 from 세부 분야. Until now both project columns read the **one** `sys_code` FIELD domain, and the eighteen values in it are the *detailed* ones (legacy `PRJ_FIELD2`) — so `prj_field`, the column the margin report's 분야별 dimension groups on, held detailed values and gave eighteen thin bars. Adds a `PRJCAT` domain (seven coarse fields, a starter set), **moves each project's existing `prj_field` value into `prj_field2` and derives the new coarse value from it**, and rewrites both column comments. Changes no column and drops nothing, so it is the one migration here that is **quiet** if skipped — see the table in §6.2 — **see §6.2** |
+| `001_schemas.sql` | **the whole structure.** Extensions, the five code sequences plus the invoice-code one, all 32 tables with their table and column comments, the constraints that cannot be written inline, the three functions the application calls by name, `fx_rate_latest`, and all 82 indexes |
+| `002_initial_seeding.sql` | **the rows the application will not run without.** The `sys_code` domains (분야, 세부 분야, 작업 종류, 단가 단위, 언어, 사용 프로그램, 업무 구분, 업무 분류), the eight currencies, the eleven `sys_menu` rows, and the 시스템관리자 role granted over all of them |
+| `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
+
+These two replace the sixteen numbered migrations that used to build the schema a step
+at a time. Every one of them had been applied everywhere, so what they recorded was no
+longer a plan but history — spread across seventeen files, in which the final shape of a
+table could only be worked out by reading four of them in order.
+
+**They build a new database; they do not migrate an existing one.** The data migrations
+those files carried — the two backfills, the `po_state` rename, the invoice regrouping
+and the 분야 reclassification — are deliberately not here, because on a fresh database
+they match nothing and an `UPDATE` that touches no rows reads as having run and been
+fine. They remain in git history, which is where a question about what happened to the
+production data belongs.
+
+The consolidation was checked by applying both chains to throwaway databases and diffing
+them: same columns, constraints, indexes, sequences, functions, views, table and column
+comments, and the same seeded rows. The only difference is the physical order of columns
+that used to be added by `ALTER` and are now declared in place — nothing in this
+application reads a column by position.
 
 Every file in `db/` is applicable **as-is**: plain DDL, no placeholders. That matters because the
 application's dbops modules write `:name` parameters (rewritten to `$1` by `toPositional` in
 `PostgresUtils.ts`), and `psql` and the Supabase SQL editor have no such rewrite — they answer
 `42601 syntax error at or near ":"`. If you ever hit that while applying something from `db/`, the
 file is wrong, not your invocation. A test now reads every one of these files and fails on a stray
-`:name` or a `\`-prefixed `psql` meta-command, so it cannot come back; `004_verify_search.sql` is the
+`:name` or a `\`-prefixed `psql` meta-command, so it cannot come back; `verify_search.sql` is the
 one deliberate exception, and it is psql-only by name in that test.
 
 Unlike the Aurora variant there is **no runner to write.** The Data API's one-statement-per-call
@@ -367,7 +371,7 @@ export NEOTMS_DB_PASSWORD='<the-supabase-password>'
 PGPASSWORD=$NEOTMS_DB_PASSWORD psql \
   -h aws-0-ap-northeast-2.pooler.supabase.com -p 6543 \
   -U postgres.<project-ref> -d postgres \
-  -v ON_ERROR_STOP=1 -f db/001_extensions.sql
+  -v ON_ERROR_STOP=1 -f db/001_schemas.sql
 ```
 
 Repeat for `002` … `012` **in order**; `001` must complete before `002`. Pass
@@ -490,13 +494,11 @@ of the symptom points away from the cause.
 
 | File | The only source of | Symptom if skipped |
 |---|---|---|
-| `007_codes.sql` | the five `sys_code` dropdown domains | every dropdown on the project, customer and translator forms is empty — `GET /api/v0/codes` answers `200 []` |
-| `008_admin.sql` | the `sys_menu` rows for 유지보수 and 사용자 관리 | both administrative screens are unreachable **by everyone, including the superuser**; the sidebar just has six entries |
-| `009_selfservice.sql` | `staff_self_register()` | the sign-up form submits and answers **500**, with the cause visible only in CloudWatch |
-| `010_currency.sql` | the `currency` rows every `*_coin` / `coin_code` foreign key points at | **every create in the system fails**, on a field nobody touched, reporting a constraint name |
-| `013_dashboard_menus.sql` | the `sys_menu` rows for 대시보드(영업) and 대시보드(PM) | both dashboards are unreachable **by everyone, including the superuser**, and 대시보드 — the first rail entry — is absent, so a signed-in user lands on 프로젝트 instead. Nothing else is affected: no table, column or other route is touched |
-| `016_project_fields.sql` | the `PRJCAT` domain behind the project form's 분야 dropdown, and the one-time move of every existing `prj_field` value into `prj_field2` | **quiet, and the quietest entry in this table.** Nothing fails: the 분야 dropdown is simply empty (`codesToOptions` has no fallback for `PRJCAT`, deliberately — a project saves fine without a 분야), and every existing project keeps a *detailed* value in the column the 분야별 report groups on. So the report answers, it just answers the old wrong question, with eighteen thin bars instead of seven. Skip it and the two dropdowns offer two lists of which one is never populated |
-| `015_payment.sql` **§5** | the `po_state` rename 발주 → 미승인, 수락 → 진행 | the only **quiet** part of an otherwise loud file. Apply `015` but skip its section 5 and everything still runs — but the two 결제 screens filter on 미승인 and 진행 while the rows still say 발주 and 수락, so a 진행 상태 filter lists **nothing** and reads as "there is nothing here" rather than as an error. Apply the file whole |
+| `001_schemas.sql` | every table, index, sequence, function and view | nothing works. The API answers `42P01` on the first query of every screen |
+| `002_initial_seeding.sql` | the `sys_code` domains, the currencies, the menus and the one role | **the loud part is loud and the quiet part is quiet.** Without the currencies **every create in the system fails**, on a field nobody touched, reporting a constraint name. Without the menus every screen is unreachable *including for the superuser*, because the permission system is per menu. Without the codes every dropdown on the project, customer and translator forms is empty and `GET /api/v0/codes` answers `200 []` — a project still saves, so this one is only noticed by somebody looking for a 분야 that is not there |
+
+Both files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
+applying `002` to a database that already has some of these rows adds only what is missing.
 
 `013` is the one of these an operator is most likely to defer, because the screens it unlocks are
 the only part of the application nobody's day depends on. It is in this table anyway for the reason
@@ -560,6 +562,12 @@ price. Those rows load correctly as they are. Re-typing one to MICE or IMC throu
 its linguistic detail row — the fabricated pair and the `1 단어` go with it — while the total stays
 untouched on the parent, so the cleanup cannot introduce a transcription error into the one number
 the margin report reads.
+
+> **The sections below are written against the migrations as they were applied**, and
+> name them by their old numbers. Those files are consolidated now — `001_schemas.sql`
+> and `002_initial_seeding.sql` carry everything they did — but the reasoning is why the
+> schema has the shape it has, and that has not changed. Read them for the argument, not
+> for a file to run.
 
 #### `007_codes.sql` — the dropdowns
 
@@ -967,20 +975,18 @@ offline against a throwaway database:
 docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
-for f in 001_extensions 002_tables 003_indexes 004_rollup 005_code_sequences 006_bootstrap \
-         007_codes 008_admin 009_selfservice 010_currency 011_job_types 012_job_pricing \
-         013_dashboard_menus 014_fx_rates 015_payment 016_project_fields; do
+for f in 001_schemas 002_initial_seeding; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
 docker exec -e PGPASSWORD=pw neotms-sqlcheck \
-  psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/004_verify_search.sql
+  psql -U postgres -d postgres -v ON_ERROR_STOP=1 -f /db/verify_search.sql
 docker rm -f neotms-sqlcheck
 ```
 
 This is not a formality either. Doing it found three defects that the unit tests could not see and
 that would each have stopped a real bootstrap dead: the unqualified operator classes described above,
-an `E'…'` string continuation in `004_verify_search.sql` that PostgreSQL rejects (only the *first*
+an `E'…'` string continuation in `verify_search.sql` that PostgreSQL rejects (only the *first*
 literal of an implicit concatenation may carry the `E` prefix), and a `:business_date` placeholder in
 the rollup recompute that `004_rollup.sql` used to define (the recompute is gone, but the rule it
 taught is the one restated at the top of that file and pointed at from `006`, `008` and `009`). The
@@ -1062,10 +1068,10 @@ Two landmines in this area, both of which fail **silently**:
   reads as "PGroonga is broken" and says nothing about `search_path`. All 21 index definitions
   qualify the class, and a test enforces it.
 
-### After `003`: run `004_verify_search.sql`
+### After `003`: run `verify_search.sql`
 
 ```bash
-PGPASSWORD=$NEOTMS_DB_PASSWORD psql … -v ON_ERROR_STOP=1 -f db/004_verify_search.sql
+PGPASSWORD=$NEOTMS_DB_PASSWORD psql … -v ON_ERROR_STOP=1 -f db/verify_search.sql
 ```
 
 **Do not skip this, and do not treat a failure as a formality.** The whole search design rests on one
@@ -1188,7 +1194,7 @@ no browser, so the properties most worth protecting here are not reachable by ex
   assert the house rules that make that work — no `:name` placeholders (that is this application's
   own query-layer convention, and `psql` answers `42601 syntax error at or near ":"`), no
   `\`-prefixed meta-commands, no `BEGIN`/`COMMIT`, and `SET search_path` pinned on every function.
-  `004_verify_search.sql` is the one deliberate exception and is named as such in that test.
+  `verify_search.sql` is the one deliberate exception and is named as such in that test.
 - **Security properties that are true by *absence*.** `staff_self_register` is safe because it has no
   parameter that could carry a role and no branch that adopts a row by email; `SelfProfileSchema` is
   safe because it has no field named `roleId`, `viewScope`, `active` or `lpxSub`. A test can check

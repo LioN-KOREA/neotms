@@ -65,10 +65,20 @@ export const HANDOVER_LAYOUTS = ["보기좋게", "표 병기", "DTP"] as const;
 export type HandoverFormat = (typeof HANDOVER_FORMATS)[number];
 export type HandoverLayout = (typeof HANDOVER_LAYOUTS)[number];
 
-/** What the user picked in the dialog. Neither list can be empty - the schema refuses that. */
+/** What the user picked and typed in the dialog. */
 export type HandoverChoices = {
+  /** Neither list can be empty - the schema refuses that. */
   formats: readonly HandoverFormat[];
   layouts: readonly HandoverLayout[];
+  /**
+   * The remarks cell, typed by the sales manager when they send.
+   *
+   * MAY BE EMPTY, and empty is not a failure: most handovers have nothing to add beyond the
+   * form. An empty string renders the cell blank rather than omitting the row, because the row
+   * is part of the official form - a reader who finds it missing cannot tell whether nothing
+   * was asked for or whether the template is broken.
+   */
+  note: string;
 };
 
 /** One mail, ready to send. */
@@ -189,102 +199,80 @@ function subjectLanguage(groups: readonly LanguageGroup[]): string {
     .join(", ");
 }
 
-/* -------------------------------------------------------------------------- */
-/* Deadlines                                                                  */
-/* -------------------------------------------------------------------------- */
-
-/** What goes in the delivery-date cell: the date line(s), and the half only when it is uniform. */
-type Deadline = { lines: string[]; half: string | null };
-
-/**
- * Folds the jobs' deadlines into one cell.
- *
- * Three shapes come out. All identical gives a single date line, which is the common case. Dates
- * differing splits into one line per language. Halves differing on top of that appends each line's
- * own half in brackets. Those are the document's three steps.
- *
- * ## Why per LANGUAGE rather than per job
- *
- * The document says "a deadline per language", and language is what actually splits a deadline in
- * practice - three documents in the same language ship together, while English and Vietnamese do
- * not. So identical (language, date, time) triples collapse into one line. Without that, a project
- * holding five documents would show five identical deadline lines.
- *
- * Jobs with no language (MICE, IMC) are labelled with the job name instead. With no name either,
- * the line keeps the date and loses the label - and the date is still correct.
- */
-export function deadlines(
-  jobs: readonly HandoverJob[],
-  project: Pick<ProjectRow, "prjEday" | "prjEdayTime">,
-): Deadline {
-  const entries: { label: string; eday: string; time: string | null }[] = [];
-  for (const job of jobs) {
-    const eday = (job.jobEday ?? "").trim();
-    if (!eday) continue;
-    const label = isLinguistic(job.jobType)
-      ? [job.jobSlang, job.jobElang].filter(Boolean).join(" → ")
-      : (job.jobName ?? "").trim();
-    const time = job.jobEdayTime ?? null;
-    if (entries.some((e) => e.label === label && e.eday === eday && e.time === time)) continue;
-    entries.push({ label, eday, time });
-  }
-
-  /*
-   * With no job carrying a deadline, fall back to the project's. The document's own form takes its
-   * defaults "from the project information", so this is the outer ring of one rule rather than a
-   * substitute for it.
-   */
-  if (entries.length === 0) {
-    const eday = (project.prjEday ?? "").trim();
-    return eday
-      ? { lines: [shortDate(eday)], half: halfOfDay(project.prjEdayTime) }
-      : { lines: [], half: null };
-  }
-
-  const sameDate = entries.every((e) => e.eday === entries[0]!.eday);
-  const sameTime = entries.every((e) => e.time === entries[0]!.time);
-  if (sameDate && sameTime) {
-    return { lines: [shortDate(entries[0]!.eday)], half: halfOfDay(entries[0]!.time) };
-  }
-
-  const lines = entries.map((e) => {
-    const half = sameTime ? null : halfOfDay(e.time);
-    const date = `${shortDate(e.eday)}${half ? `(${half})` : ""}`;
-    return e.label ? `${e.label}: ${date}` : date;
-  });
-  return { lines, half: sameTime ? halfOfDay(entries[0]!.time) : null };
-}
 
 /* -------------------------------------------------------------------------- */
 /* The form                                                                   */
 /* -------------------------------------------------------------------------- */
 
 /*
+ * The company's official handover form, transcribed from the HTML the sales team uses.
+ *
  * Every style is inline. Mail clients routinely strip a `<style>` block - Gmail rewrites the body -
  * and once it is gone the cell borders go with it and the form reads as a run of prose. That is not
  * merely ugly: without the rules, nothing says which value belongs to which label.
+ *
+ * ## Two deliberate departures from the pasted source
+ *
+ * The original is a Word export. Its cells carry `border-color: windowtext` and sides switched off
+ * individually (`border-style: none solid solid none`) so that adjacent borders do not double up.
+ * Neither survives contact with a mail client: `windowtext` is not a colour any renderer outside
+ * Word resolves, and the per-side juggling only works if every cell agrees. A uniform border with
+ * `border-collapse: collapse` draws the identical grid and cannot come apart one cell at a time.
+ *
+ * Everything else is kept as it was given: the column widths, the 맑은 고딕 10pt face, the centred
+ * cells, the grey header fill, the green highlight, the blank spacer rows between groups, and the
+ * narrow last column the Word export leaves on every row.
  */
-const CELL = "border:1px solid #c9ccd4;padding:6px 10px;font-size:13px;vertical-align:middle";
-const HEAD = `${CELL};background:#eef0f5;font-weight:700;white-space:nowrap`;
-/**
- * A chosen cell - the document's "coloured". The text colour changes too, so the distinction
- * survives a black-and-white print.
- */
-const PICKED = `${CELL};background:#3b57c4;color:#ffffff;font-weight:700;text-align:center`;
-const UNPICKED = `${CELL};color:#9aa0ad;text-align:center`;
 
-/** One row of options: print them all, colour the chosen ones. */
+/** The seven column widths of the official form, including its 1px trailing spacer. */
+const COLS = [70, 70, 74, 73, 72, 73, 1];
+
+const BORDER = "1px solid #000000";
+const BASE =
+  `border:${BORDER};padding:1px 6.6px 0;font-family:'맑은 고딕',Malgun Gothic,sans-serif;` +
+  "font-size:10pt;color:#000000;text-align:center;word-break:keep-all";
+/** A label cell. Grey, bold - the form's left column and its sub-headings. */
+const HEAD = `${BASE};background:#f2f2f2;font-weight:700`;
+/** A value cell. */
+const CELL = `${BASE};font-weight:700`;
+/** A chosen option. The green the official form uses to mark a selection. */
+const PICKED = `${BASE};background:#92d050;font-weight:700`;
+/** An option that was offered and not chosen. White, so the grid still reads as a set. */
+const UNPICKED = `${BASE};background:#ffffff;font-weight:700`;
+/** The spacer cell every row ends with, and the blank rows between groups. */
+const SPACER = "border:0;padding:0";
+
+/** The narrow empty cell that closes every row in the official form. */
+const tail = `<td style="${SPACER}"></td>`;
+
+/** A full-width blank row. The form uses them to separate its four groups. */
+const gap = `<tr><td style="${BASE}" colspan="6">&nbsp;</td>${tail}</tr>`;
+
+/** One row of options: print them all, fill in the chosen ones. */
 const choiceCells = (all: readonly string[], picked: readonly string[]): string =>
   all
-    .map((option) =>
-      picked.includes(option)
-        ? `<td style="${PICKED}">${esc(option)}</td>`
-        : `<td style="${UNPICKED}">${esc(option)}</td>`,
+    .map(
+      (option) =>
+        `<td style="${picked.includes(option) ? PICKED : UNPICKED}">${esc(option)}</td>`,
     )
     .join("");
 
 /**
- * One mail. Page 3 of the handover spec is this function's specification.
+ * `15:00:00` on a twelve-hour clock, without the meridiem - `3:00`.
+ *
+ * The meridiem is NOT part of this string: the form carries 오전 and 오후 as two cells of their
+ * own, and one of them is filled in. Printing it in both places would be the only thing on the
+ * form that says the same thing twice, and the two could then disagree.
+ */
+function twelveHour(time: string | null): string | null {
+  const match = /^(\d{2}):(\d{2})/.exec(time ?? "");
+  if (!match) return null;
+  const hour = Number(match[1]) % 12;
+  return `${hour === 0 ? 12 : hour}:${match[2]}`;
+}
+
+/**
+ * One mail, on the company's official handover form.
  *
  * It goes to a single operating PM, from the sales manager's own Hiworks account - which is why
  * there is no signature and no sender block in the body. The mail client already shows both.
@@ -295,13 +283,12 @@ export function composeHandoverMail(
   choices: HandoverChoices,
 ): HandoverMail {
   const groups = languageGroups(jobs);
-  const due = deadlines(jobs, project);
 
   /*
    * The PM cell collects the jobs' own PMs, and falls back to the project's PM only when no job
-   * names one. That is what the document means by "the PM names from the selected items": a
-   * handover happens per job, so the people actually receiving the work are more use here than the
-   * single PM on the project header.
+   * names one. That is what the spec means by "the PM names from the selected items": a handover
+   * happens per job, so the people actually receiving the work are more use here than the single
+   * PM on the project header.
    */
   const jobPms = [...new Set(jobs.map((j) => (j.jobPmName ?? "").trim()).filter(Boolean))];
   const pmNames = jobPms.length > 0 ? jobPms : [(project.prjPmName ?? "").trim()].filter(Boolean);
@@ -324,60 +311,85 @@ export function composeHandoverMail(
     (project.prjName ?? "").trim() ||
     project.prjCode;
 
-  const dueLines = due.lines.length > 0 ? due.lines.map(esc).join("<br>") : "-";
-  const half = due.half;
-
   /*
-   * The table is SIX COLUMNS wide. The widest row is the editing-format one (label + sub-heading +
-   * four options), and every other row adds colspan to match. Rows whose column counts disagree
-   * make the client guess widths, and the form comes out as a staircase - borders present,
-   * verticals not lining up.
+   * The delivery deadline is the PROJECT's, as the official form asks for - not the per-language
+   * deadlines the earlier template worked out from the jobs. The form has one date cell and two
+   * meridiem cells, so one date is what fits in it, and the project header is where a reader of
+   * this mail would go to check it.
    */
-  const html = `<div style="font-family:'Malgun Gothic',AppleSDGothicNeo-Regular,sans-serif;color:#1b1d22">
-<p style="font-size:13px;margin:0 0 12px">아래 프로젝트를 인계합니다.</p>
-<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;min-width:520px">
+  const eday = (project.prjEday ?? "").trim();
+  const clock = twelveHour(project.prjEdayTime);
+  const due = eday ? `${shortDate(eday)}${clock ? ` ${clock}` : ""}` : "-";
+  const half = halfOfDay(project.prjEdayTime);
+
+  const colgroup = COLS.map((w) => `<col style="width:${w}px">`).join("");
+
+  const html = `<div style="font-family:'맑은 고딕',Malgun Gothic,sans-serif;font-size:16px;line-height:1.6">
+<p style="margin:0 0 12px;font-size:13.5pt;color:#000000">아래와 같이 인계합니다.</p>
+<table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:433px">
+<colgroup>${colgroup}</colgroup>
+<tbody>
 <tr>
-  <td style="${HEAD}">거래처 / 담당자</td>
-  <td style="${CELL}" colspan="3">${esc((project.cusCodeName ?? "").trim()) || "-"}</td>
-  <td style="${CELL}" colspan="2">${esc(clientContact)}</td>
+  <td style="${HEAD}" colspan="2">거래처 / 담당자</td>
+  <td style="${CELL}" colspan="2">${esc((project.cusCodeName ?? "").trim()) || "&nbsp;"}</td>
+  <td style="${CELL}" colspan="2">${esc(clientContact) || "&nbsp;"}</td>
+  ${tail}
 </tr>
 <tr>
-  <td style="${HEAD}">담당영업 / 담당PM</td>
-  <td style="${CELL}" colspan="3">${esc((project.prjMgrName ?? "").trim()) || "-"}</td>
-  <td style="${CELL}" colspan="2">${esc(pmNames.join(", ")) || "-"}</td>
+  <td style="${HEAD}" colspan="2">담당영업 / 담당PM</td>
+  <td style="${CELL}" colspan="2">${esc((project.prjMgrName ?? "").trim()) || "&nbsp;"}</td>
+  <td style="${CELL}" colspan="2">${esc(pmNames.join(", ")) || "&nbsp;"}</td>
+  ${tail}
+</tr>
+${gap}
+<tr>
+  <td style="${HEAD}" colspan="2">프로젝트코드</td>
+  <td style="${CELL}" colspan="4">${esc(project.prjCode)}</td>
+  ${tail}
 </tr>
 <tr>
-  <td style="${HEAD}">프로젝트코드</td>
-  <td style="${CELL}" colspan="5">${esc(project.prjCode)}</td>
+  <td style="${HEAD}" colspan="2">언어</td>
+  <td style="${CELL}" colspan="4">${bodyLanguage(groups)}</td>
+  ${tail}
 </tr>
 <tr>
-  <td style="${HEAD}">언어</td>
-  <td style="${CELL}" colspan="5">${bodyLanguage(groups)}</td>
+  <td style="${HEAD}" colspan="2">경로</td>
+  <td style="${CELL}" colspan="4">${escLines((project.prjContent ?? "").trim()) || "&nbsp;"}</td>
+  ${tail}
 </tr>
+${gap}
 <tr>
-  <td style="${HEAD}">경로</td>
-  <td style="${CELL}" colspan="5"></td>
-</tr>
-<tr>
-  <td style="${HEAD}">납품요청일</td>
-  <td style="${CELL}" colspan="3">${dueLines}</td>
+  <td style="${HEAD}" colspan="2" rowspan="2">납품요청일</td>
+  <td style="${CELL}" colspan="3" rowspan="2">${esc(due)}</td>
   <td style="${half === "오전" ? PICKED : UNPICKED}">오전</td>
-  <td style="${half === "오후" ? PICKED : UNPICKED}">오후</td>
+  ${tail}
 </tr>
 <tr>
-  <td style="${HEAD}" rowspan="2">납품형태</td>
+  <td style="${half === "오후" ? PICKED : UNPICKED}">오후</td>
+  ${tail}
+</tr>
+${gap}
+<tr>
+  <td style="${HEAD}">납품</td>
   <td style="${HEAD}">편집포맷</td>
   ${choiceCells(HANDOVER_FORMATS, choices.formats)}
+  ${tail}
 </tr>
 <tr>
+  <td style="${HEAD}">형태</td>
   <td style="${HEAD}">레이아웃</td>
   ${choiceCells(HANDOVER_LAYOUTS, choices.layouts)}
-  <td style="${CELL}"></td>
+  <td style="${CELL}">&nbsp;</td>
+  ${tail}
 </tr>
+${gap}
 <tr>
-  <td style="${HEAD}">기타요청</td>
-  <td style="${CELL}" colspan="5">${escLines((project.prjContent ?? "").trim()) || "-"}</td>
+  <td style="${HEAD}" colspan="2" rowspan="2">기타요청</td>
+  <td style="${BASE};text-align:left;font-weight:700" colspan="4" rowspan="2">${escLines(choices.note.trim()) || "&nbsp;"}</td>
+  ${tail}
 </tr>
+<tr>${tail}</tr>
+</tbody>
 </table>
 </div>`;
 

@@ -67,6 +67,12 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
   const [formats, setFormats] = useState<HandoverFormat[]>(['WORD'])
   const [layouts, setLayouts] = useState<HandoverLayout[]>([])
   const [recipient, setRecipient] = useState('')
+  /*
+   * 기타요청. Deliberately NOT part of `complete` - the official form has this row whether or
+   * not anything was asked for, and most handovers have nothing to add. Requiring it would
+   * teach people to type a full stop to get past the button.
+   */
+  const [note, setNote] = useState('')
   const [hiworksId, setHiworksId] = useState('')
   const [hiworksPassword, setHiworksPassword] = useState('')
 
@@ -95,6 +101,7 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
         formats,
         layouts,
         recipient: recipient.trim(),
+        note: note.trim(),
         hiworksId: hiworksId.trim(),
         hiworksPassword,
       },
@@ -112,7 +119,7 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
        * putting a confirm dialog in front of something that costs two clicks to redo is how people
        * learn to dismiss confirm dialogs without reading them.
        */
-      isDirty={hiworksPassword.length > 0}
+      isDirty={hiworksPassword.length > 0 || note.trim().length > 0}
       width={560}
       footer={
         <>
@@ -133,14 +140,14 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
       <ErrorNotice error={sendMail.error} />
 
       <p className={ui.hint}>
-        <strong>{project.prjCode}</strong> {project.prjName || '(이름 없음)'} — 거래처·담당영업·
-        담당PM·언어·납품요청일과 프로젝트 <strong>내용</strong>이 기타요청 칸에 담겨 나갑니다.
-        거래처 담당자와 경로 칸은 비워 둔 채로 보냅니다.
+        <strong>{project.prjCode}</strong> {project.prjName || '(이름 없음)'} — 회사 인계 양식으로
+        거래처·담당영업·담당PM·프로젝트코드·언어·납품요청일이 나가고, <strong>경로</strong> 칸에는
+        프로젝트 <strong>내용</strong>이 들어갑니다. 거래처 담당자 칸은 비워 둔 채로 보냅니다.
       </p>
 
       <div className={ui.field}>
-        <label className={ui.label}>
-          편집포맷 <span className={ui.required}>*</span>
+        <label className={`${ui.label} ${ui.required}`}>
+          편집포맷
         </label>
         {/* Multiple choice - the document's "click to toggle colour, several allowed". Only the
             chosen ones are coloured in the mail. */}
@@ -162,8 +169,8 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
       </div>
 
       <div className={ui.field}>
-        <label className={ui.label}>
-          레이아웃 <span className={ui.required}>*</span>
+        <label className={`${ui.label} ${ui.required}`}>
+          레이아웃
         </label>
         <div className={ui.checkGrid}>
           {HANDOVER_LAYOUTS.map((option) => (
@@ -183,8 +190,8 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
       </div>
 
       <div className={ui.field}>
-        <label className={ui.label} htmlFor="hm-to">
-          PM 이메일 <span className={ui.required}>*</span>
+        <label className={`${ui.label} ${ui.required}`} htmlFor="hm-to">
+          PM 이메일
         </label>
         <input
           id="hm-to"
@@ -200,6 +207,26 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
         ) : null}
       </div>
 
+      <div className={ui.field}>
+        <label className={ui.label} htmlFor="hm-note">
+          기타요청
+        </label>
+        {/*
+         * No `ui.required`: the form's remarks row is rendered blank when nothing is typed. The
+         * placeholder says so, because an empty box with no hint reads as a field somebody
+         * forgot to fill in.
+         */}
+        <textarea
+          id="hm-note"
+          className={ui.textarea}
+          rows={3}
+          placeholder="PM에게 따로 전할 내용이 있으면 적어 주세요. 비워 두면 메일의 기타요청 칸이 빈 칸으로 나갑니다."
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          disabled={sendMail.isPending}
+        />
+      </div>
+
       {/*
        * The Hiworks credentials. They are kept apart from the other fields and sit under their own
        * note on purpose: a field asking for a password needs the reason beside it, and without one
@@ -212,8 +239,8 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
 
       <div className={ui.datePair}>
         <div className={ui.field}>
-          <label className={ui.label} htmlFor="hm-id">
-            하이웍스 ID <span className={ui.required}>*</span>
+          <label className={`${ui.label} ${ui.required}`} htmlFor="hm-id">
+            하이웍스 ID
           </label>
           <input
             id="hm-id"
@@ -225,8 +252,8 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
           />
         </div>
         <div className={ui.field}>
-          <label className={ui.label} htmlFor="hm-pw">
-            하이웍스 비밀번호 <span className={ui.required}>*</span>
+          <label className={`${ui.label} ${ui.required}`} htmlFor="hm-pw">
+            하이웍스 비밀번호
           </label>
           <input
             id="hm-pw"

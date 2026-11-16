@@ -119,8 +119,8 @@ export function CodeFormModal({ code, defaultParent, domains, onClose, onSaved }
 
       <div className={ui.formGrid}>
         <div className={ui.fieldWide}>
-          <label className={ui.label} htmlFor="code-code">
-            코드값 {isEdit ? null : <span className={ui.required}>*</span>}
+          <label className={`${ui.label} ${isEdit ? '' : ui.required}`} htmlFor="code-code">
+            코드값
           </label>
           {isEdit ? (
             <>

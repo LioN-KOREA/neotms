@@ -69,6 +69,7 @@ export async function sendHandoverMail(
     const mail = composeHandoverMail(project, jobs, {
       formats: input.formats,
       layouts: input.layouts,
+      note: input.note,
     });
 
     const login = await hiworksLogin(input.hiworksId, input.hiworksPassword);
@@ -84,11 +85,11 @@ export async function sendHandoverMail(
       return credentialProblem
         ? {
             status: 400,
-            body: "하이웍스 로그인에 실패했습니다. ID 와 비밀번호를 확인해 주세요.",
+            body: "Failed to log into Hiworks. Please check your credentials, and try again",
           }
         : {
             status: 502,
-            body: "하이웍스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+            body: "Unable to connect to the Hiworks APIs. Please try again later",
           };
     }
 
@@ -106,7 +107,7 @@ export async function sendHandoverMail(
       // back empty" from a refusal of the message itself.
       return {
         status: 502,
-        body: `하이웍스가 메일 전송을 거절했습니다 (HTTP ${sent.status}). 하이웍스에서 직접 보내 주세요.`,
+        body: `The E-mail send request was rejected by Hiworks server (HTTP ${sent.status}).`,
       };
     }
 

@@ -8,6 +8,7 @@ import {
   usePurchaseOrders,
 } from '@/apis/queries/neotms.query'
 import {
+  useApprovePurchaseOrder,
   useCreateJob,
   useCreatePurchaseOrder,
   useDeleteJob,
@@ -30,11 +31,16 @@ import {
   InlineTextCell,
 } from '@/shared/ui/InlineEditCell'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
-import { StatusChip } from '@/shared/ui/StatusChip'
+import { ApprovalChip, StatusChip } from '@/shared/ui/StatusChip'
 import { describeBulk, runSequential } from '@/shared/utils/bulk'
 import { formatDate, formatDateTime, isOverdue } from '@/shared/utils/format'
 import { decimalPercent, decimalSubtract, decimalSum, krwToShow } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
+import {
+  ALL_ALREADY_APPROVED,
+  approvalPrompt,
+  unapprovedOf,
+} from '@/features/payment/poBulkApprove'
 import { duplicateJobInput } from '@/features/jobs/jobDuplicate'
 import { JobFormModal } from '@/features/jobs/JobFormModal'
 import { JobTypeSwapModal, jobTypeSummary } from '@/features/jobs/JobTypeSwapModal'
@@ -103,6 +109,7 @@ export function ProjectDetailView() {
 
   const deleteJob = useDeleteJob()
   const deletePo = useDeletePurchaseOrder()
+  const approvePo = useApprovePurchaseOrder()
   const createJob = useCreateJob()
   const createPo = useCreatePurchaseOrder()
   const updateJob = useUpdateJob()
@@ -204,6 +211,13 @@ export function ProjectDetailView() {
   const mayCreatePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'create')
   const mayUpdatePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'update')
   const mayDeletePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')
+  /*
+   * Approving a PO's amount is PAYMENT:update, not a purchase-order right - the same split the
+   * route table makes and the same one the payment screen checks. Someone who may raise and edit
+   * POs here is not thereby someone who may sign off what they cost; that is the whole point of
+   * the approval gate, and it would be defeated by reading `mayUpdatePo` instead.
+   */
+  const mayApprovePo = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')
 
   /*
    * 삭제 두 개. 문구는 각 목록 화면의 것과 **같은 문장**이다(JobsView·PurchaseOrdersView) —
@@ -297,6 +311,30 @@ export function ProjectDetailView() {
       (row) => createJob.mutateAsync(duplicateJobInput(row)),
     )
 
+  /*
+   * Bulk approval, through the same confirm-then-run helper as the other four. The one thing it
+   * does first is narrow the selection: already-approved POs are dropped, so the count in the
+   * prompt, the count run and the count reported are all the same number.
+   *
+   * The rule and the wording live in `poBulkApprove`, shared with the payment desk - the same act
+   * on the same rows should not be described two different ways depending on which screen it was
+   * started from.
+   */
+  const onBulkApprovePos = () => {
+    const pending = unapprovedOf(poSel.selected)
+    if (poSel.selected.length > 0 && pending.length === 0) {
+      setNotice(ALL_ALREADY_APPROVED)
+      return
+    }
+    return runBulk(
+      pending,
+      approvalPrompt(pending, poSel.selected.length),
+      '승인',
+      poSel.clear,
+      (row) => approvePo.mutateAsync({ id: row.id, input: { approved: true } }),
+    )
+  }
+
   const onBulkCopyPos = () =>
     runBulk(
       poSel.selected,
@@ -326,7 +364,8 @@ export function ProjectDetailView() {
    * 다른 이유를 설명할 방법이 없다.
    */
   const jobBusy = deleteJob.isPending || createJob.isPending || updateJob.isPending
-  const poBusy = deletePo.isPending || createPo.isPending || updatePo.isPending
+  const poBusy =
+    deletePo.isPending || createPo.isPending || updatePo.isPending || approvePo.isPending
 
   /** 이 프로젝트를 `JobFormModal` 에 넘길 형태로. 작업 등록 시 프로젝트는 고정이다. */
   const projectOption: PickerOption | null = project
@@ -664,7 +703,7 @@ export function ProjectDetailView() {
                     error={jobsQuery.error}
                     isEmpty={jobs.length === 0}
                     emptyText="이 프로젝트에는 작업이 없습니다. 작업을 추가하면 매출이 잡힙니다."
-                    colSpan={10}
+                    colSpan={11}
                   />
                   {jobs.map((job) => {
                     const poCount = poCountByJob.get(job.id) ?? 0
@@ -856,6 +895,16 @@ export function ProjectDetailView() {
               PO 추가
             </button>
           ) : null}
+          {poSel.selected.length > 0 && mayApprovePo ? (
+            <button
+              type="button"
+              className={`${ui.btn} ${ui.btnPrimary} ${ui.btnSm}`}
+              onClick={() => void onBulkApprovePos()}
+              disabled={poBusy}
+            >
+              선택 승인
+            </button>
+          ) : null}
           {poSel.selected.length > 0 && mayCreatePo ? (
             <button
               type="button"
@@ -907,6 +956,13 @@ export function ProjectDetailView() {
                     <th>원가(원화)</th>
                     <th>납기</th>
                     <th>진행</th>
+                    {/*
+                     * The approval column exists because the 선택 승인 button above it does. Bulk
+                     * approving without it would be blind in both directions: no way to see which
+                     * of the selected rows the action will actually change, and no way to see
+                     * afterwards that it changed them. The payment screen shows the same chip.
+                     */}
+                    <th>승인</th>
                     <th>지급</th>
                     <th />
                   </tr>
@@ -980,6 +1036,20 @@ export function ProjectDetailView() {
                           ariaLabel={`${po.poCode} 진행 상태`}
                           onCommit={(poState) => patchPo(po, { poState })}
                         />
+                        <td>
+                          <ApprovalChip approved={po.poApproved} />
+                          {/*
+                           * Who approved it and when. Approval is the act of accepting
+                           * responsibility for an amount, so the record of it belongs on screen -
+                           * the same reasoning, and the same two lines, as the payment screen.
+                           */}
+                          {po.poApproved && po.poApprovedAt ? (
+                            <div className={ui.cellMuted}>
+                              {formatDateTime(po.poApprovedAt)}
+                              {po.poApprovedBy ? ` · ${po.poApprovedBy}` : ''}
+                            </div>
+                          ) : null}
+                        </td>
                         {/*
                          * 지급 상태는 **제자리 수정 대상이 아니다.** 셋 중 하나만 평범한 칸으로
                          * 남은 것이 의도다.

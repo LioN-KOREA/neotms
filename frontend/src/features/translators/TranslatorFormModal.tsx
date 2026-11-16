@@ -147,8 +147,8 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
 
       <div className={ui.formGrid}>
         <div className={ui.fieldWide}>
-          <label className={ui.label} htmlFor="tran-name">
-            번역가명 <span className={ui.required}>*</span>
+          <label className={`${ui.label} ${ui.required}`} htmlFor="tran-name">
+            번역가명
           </label>
           <input
             id="tran-name"

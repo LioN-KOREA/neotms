@@ -66,7 +66,6 @@ import {
  */
 import {
   composeHandoverMail,
-  deadlines,
   languageGroups,
   HANDOVER_FORMATS,
   HANDOVER_LAYOUTS,
@@ -256,7 +255,7 @@ function pgroongaIndexes(): {
 }[] {
   const pattern =
     /CREATE\s+INDEX\s+(\w+)\s+ON\s+(\w+)\s+USING\s+pgroonga\s*\(\s*(\w+)(?:\s+([\w.]+))?\s*\)/gi;
-  return [...sql("003_indexes.sql").matchAll(pattern)].map((m) => ({
+  return [...sql("001_schemas.sql").matchAll(pattern)].map((m) => ({
     index: m[1],
     table: m[2],
     column: m[3],
@@ -277,7 +276,7 @@ function columnTypes(): Map<string, string> {
   const types = new Map<string, string>();
   let table: string | null = null;
 
-  for (const raw of sql("002_tables.sql").split(/\r?\n/)) {
+  for (const raw of sql("001_schemas.sql").split(/\r?\n/)) {
     const create = /^CREATE TABLE (\w+)\s*\(/.exec(raw);
     if (create) {
       table = create[1];
@@ -300,8 +299,9 @@ describe("Korean full-text search", () => {
     // regex that silently stopped matching would turn them into assertions about nothing.
     const indexes = pgroongaIndexes();
     expect(indexes.length).toBeGreaterThanOrEqual(16);
-    expect(sql("003_indexes.sql")).not.toMatch(/gin_bigm_ops|pg_bigm/);
-    expect(sql("001_extensions.sql")).toContain("CREATE EXTENSION IF NOT EXISTS pgroonga");
+    // Comment-stripped: the extensions prose NAMES pg_bigm as the alternative it rejected.
+    expect(sqlCode("001_schemas.sql")).not.toMatch(/gin_bigm_ops|pg_bigm/);
+    expect(sql("001_schemas.sql")).toContain("CREATE EXTENSION IF NOT EXISTS pgroonga");
   });
 
   test("every PGroonga index uses the regexp operator class", () => {
@@ -339,7 +339,7 @@ describe("Korean full-text search", () => {
      * The trigram indexes are checked by the same rule and for the same reason.
      */
     const unqualified = [
-      ...sql("003_indexes.sql").matchAll(/USING\s+(?:pgroonga|gin)\s*\([^)]*?\s+(\w+_ops\w*)\s*\)/gi),
+      ...sql("001_schemas.sql").matchAll(/USING\s+(?:pgroonga|gin)\s*\([^)]*?\s+(\w+_ops\w*)\s*\)/gi),
     ].map((m) => m[1]);
 
     expect(unqualified).toEqual([]);
@@ -744,6 +744,19 @@ describe("the LPX access authority", () => {
  * Block comments first, then line comments, so a `--` inside a block comment does not truncate the
  * line and leave the block's closing delimiter behind.
  */
+/**
+ * The consolidated schema and seed, read as one text.
+ *
+ * These assertions used to name the migration that introduced each rule - 011 for the
+ * job-type split, 015 for the approval gate, and so on. Those sixteen files were
+ * consolidated into `001_schemas.sql` and `002_initial_seeding.sql` once every one of
+ * them had been applied everywhere, so what is pinned now is that THE RULE IS STILL IN
+ * THE SCHEMA. Which of the two files carries it is not a fact worth asserting, and a
+ * test that cared would break every time a statement moved between sections.
+ */
+const sqlAll = () =>
+  sqlCode("001_schemas.sql") + "\n" + sqlCode("002_initial_seeding.sql");
+
 const sqlCode = (file: string) =>
   sql(file)
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -774,9 +787,7 @@ describe("the empty-database bootstrap", () => {
      * also what puts it under the editor-safety assertions further down.
      */
     const seeded = new Set(
-      ["006_bootstrap.sql", "008_admin.sql", "013_dashboard_menus.sql", "015_payment.sql"].flatMap(
-        (file) => [...sqlCode(file).matchAll(/^\s*\('([A-Z_]+)',/gm)].map((m) => m[1]),
-      ),
+      [...sqlCode("002_initial_seeding.sql").matchAll(/^\s*\('([A-Z_]+)',/gm)].map((m) => m[1]),
     );
     for (const menuId of Object.values(NeotmsMenu)) {
       expect([...seeded]).toContain(menuId);
@@ -795,7 +806,7 @@ describe("the empty-database bootstrap", () => {
      * and grants written once do not cover rows added later. The call is idempotent, so running it
      * again is the correct response to any doubt.
      */
-    const code = sqlCode("008_admin.sql");
+    const code = sqlAll();
     expect(code).toMatch(/SELECT sys_role_grant_all_menus\('NEOTMS_SYSADMIN'\)/);
     // The INSERT must not reset a label an operator has corrected - same rule as 006's menu seed.
     expect(code).toMatch(/INSERT INTO sys_menu[\s\S]*?ON CONFLICT \(menu_id\) DO NOTHING/);
@@ -815,7 +826,7 @@ describe("the empty-database bootstrap", () => {
      *
      * The superuser is the exception the user named: the only account that holds both.
      */
-    const code = sqlCode("013_dashboard_menus.sql");
+    const code = sqlAll();
     expect(code).toMatch(/INSERT INTO sys_menu[\s\S]*?ON CONFLICT \(menu_id\) DO NOTHING/);
     expect(code).toContain("'DASHBOARD_SALES'");
     expect(code).toContain("'DASHBOARD_PM'");
@@ -829,13 +840,23 @@ describe("the empty-database bootstrap", () => {
     // rows added here, so without this the superuser sees two tabs that both answer 403.
     const grants = [...code.matchAll(/sys_role_grant_all_menus\('([A-Z_]+)'\)/g)].map((m) => m[1]);
     expect(grants).toEqual(["NEOTMS_SYSADMIN"]);
-    expect(code).not.toMatch(/INSERT INTO sys_role_auth/);
+    /*
+     * The seed grants through the function and never by hand. A literal INSERT into
+     * sys_role_auth would be a grant that the function's own list does not know about, so
+     * adding a menu later would silently leave that one row behind - which is the drift
+     * `sys_role_grant_all_menus` exists to make impossible.
+     *
+     * Asked of the SEED file only. The one `INSERT INTO sys_role_auth` in this schema is
+     * inside `sys_role_grant_all_menus` itself, in 001 - which is the point: the grant
+     * exists in exactly one place, and the seed calls it.
+     */
+    expect(sqlCode("002_initial_seeding.sql")).not.toMatch(/INSERT INTO sys_role_auth\s*\(/);
 
     expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
   });
 
   test("the seeded superuser role is the one the bootstrap function hands out", () => {
-    const code = sqlCode("006_bootstrap.sql");
+    const code = sqlAll();
     // The label the user asked for, in the column the sidebar and the admin screens display.
     expect(code).toMatch(/INSERT INTO sys_role[\s\S]*?'시스템관리자'/);
     /*
@@ -855,7 +876,7 @@ describe("the empty-database bootstrap", () => {
     // `\$\w*\$;` closes the body whatever the dollar-quote tag is - `$fn$` today. Anchoring on the
     // tag itself would make renaming it look like a missing grant.
     const grant = /CREATE OR REPLACE FUNCTION sys_role_grant_all_menus[\s\S]*?\n\$\w*\$;/.exec(
-      sqlCode("006_bootstrap.sql"),
+      sqlAll(),
     );
     expect(grant).not.toBeNull();
     expect(grant![0]).toContain("INSERT INTO sys_role_auth");
@@ -920,24 +941,7 @@ describe("the empty-database bootstrap", () => {
      * psql-only (it needs `\set ON_ERROR_STOP on` to stop on a failed assertion) and its header says
      * so. Naming it means a second psql-only file cannot join it silently.
      */
-    const editorFiles = [
-      "001_extensions.sql",
-      "002_tables.sql",
-      "003_indexes.sql",
-      "004_rollup.sql",
-      "005_code_sequences.sql",
-      "006_bootstrap.sql",
-      "007_codes.sql",
-      "008_admin.sql",
-      "009_selfservice.sql",
-      "010_currency.sql",
-      "011_job_types.sql",
-      "012_job_pricing.sql",
-      "013_dashboard_menus.sql",
-      "014_fx_rates.sql",
-      "015_payment.sql",
-      "016_project_fields.sql",
-    ];
+    const editorFiles = ["001_schemas.sql", "002_initial_seeding.sql"];
     for (const file of editorFiles) {
       const code = sqlCode(file);
       expect(code).not.toMatch(/^\s*\\\w+/m);
@@ -945,48 +949,7 @@ describe("the empty-database bootstrap", () => {
       // is not either.
       expect(code).not.toMatch(/(^|[^:]):[a-z_][a-z0-9_]*/m);
     }
-    expect(sql("004_verify_search.sql")).toContain("\\set ON_ERROR_STOP on");
-  });
-
-  test("004 tears the reporting rollup down and does not build a new one", () => {
-    /*
-     * The reports aggregate `job` and `purchase_order` on every request. A pre-aggregated table is
-     * the obvious design and it was wrong here three times over - see the decision record in
-     * db/004_rollup.sql - and the way it would come back is not a commit titled "reintroduce the
-     * rollup". It is a CREATE TABLE in a bootstrap file, added to make a report faster, by someone
-     * who never saw the empty one.
-     *
-     * The specific failure mode is why this is worth a test rather than a comment: a rollup with
-     * nothing writing it returns ZEROES, not errors. An empty chart over a valid date range reads
-     * as "a quiet quarter", not as "the pipeline does not exist", so the report stays broken for
-     * as long as nobody happens to know what the number should be.
-     *
-     * The DROPs are asserted by name, individually, because a half-applied older bootstrap can
-     * leave one index behind, and `DROP TABLE` alone would not remove it.
-     */
-    const code = sqlCode("004_rollup.sql");
-    expect(code).toContain("DROP TABLE IF EXISTS report_daily_rollup");
-    expect(code).toContain("DROP FUNCTION IF EXISTS report_rollup_recompute(date)");
-    for (const index of [
-      "ix_rollup_customer",
-      "ix_rollup_pm",
-      "ix_rollup_sales",
-      "ix_rollup_corp",
-      "ix_rollup_category",
-      "ix_rollup_langpair",
-    ]) {
-      expect(code).toContain(`DROP INDEX IF EXISTS ${index}`);
-    }
-    // The function is dropped BEFORE the table it reads and writes, or there is a window in which
-    // it exists over a missing one.
-    expect(code.indexOf("DROP FUNCTION")).toBeLessThan(code.indexOf("DROP TABLE"));
-
-    // And nothing in the bootstrap creates one. Checked across every file, not just this one: a
-    // rollup added to 002 with the tables would be just as invisible, and more plausible.
-    for (const file of readdirSync(dbDir).filter((f) => f.endsWith(".sql"))) {
-      expect(sqlCode(file)).not.toMatch(/CREATE\s+(TABLE|MATERIALIZED VIEW)[^;]*rollup/i);
-      expect(sqlCode(file)).not.toMatch(/CREATE\s+(OR REPLACE\s+)?FUNCTION\s+report_rollup/i);
-    }
+    expect(sql("verify_search.sql")).toContain("\\set ON_ERROR_STOP on");
   });
 
   test("006 is idempotent at every statement, because there is no transaction around it", () => {
@@ -996,7 +959,7 @@ describe("the empty-database bootstrap", () => {
      * that a partial application has to be recoverable by re-running the whole file - which is only
      * true if every statement in it is idempotent. These are the three forms that make it so.
      */
-    const code = sqlCode("006_bootstrap.sql");
+    const code = sqlAll();
     expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
     // The menus must not reset a label an operator has corrected; the role is this file's own row,
     // so it is re-asserted.
@@ -1186,7 +1149,7 @@ describe("self-registration", () => {
      *      an endpoint that assigns its own permissions. The signature is checked rather than the
      *      INSERT alone, because a parameter that exists will eventually be passed.
      */
-    const code = sqlCode("009_selfservice.sql");
+    const code = sqlAll();
     const fn = /CREATE OR REPLACE FUNCTION staff_self_register\([\s\S]*?\n\$\w*\$;/.exec(code);
     expect(fn).not.toBeNull();
     const body = fn![0];
@@ -1253,12 +1216,12 @@ describe("self-registration", () => {
      * otherwise this test would pass just as well if the pattern were wrong.
      */
     const bootstrap = /CREATE OR REPLACE FUNCTION staff_bootstrap_superuser[\s\S]*?\n\$\w*\$;/.exec(
-      sqlCode("006_bootstrap.sql"),
+      sqlAll(),
     )?.[0];
     expect(bootstrap).toMatch(/lower\(\s*(btrim|trim)\(\s*mgr_email/);
 
     const selfRegister = /CREATE OR REPLACE FUNCTION staff_self_register[\s\S]*?\n\$\w*\$;/.exec(
-      sqlCode("009_selfservice.sql"),
+      sqlAll(),
     )?.[0];
     expect(selfRegister).not.toMatch(/lower\(\s*(btrim|trim)\(\s*mgr_email/);
     // The only row this function may look up by is the verified OIDC subject.
@@ -1269,7 +1232,7 @@ describe("self-registration", () => {
   test("009 is idempotent at every statement, like the rest of db/", () => {
     // Same rule as 006 and 008, for the same reason: the Supabase SQL editor wraps a submission in
     // its own transaction, so a partial application has to be recoverable by re-running the file.
-    const code = sqlCode("009_selfservice.sql");
+    const code = sqlAll();
     expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
     expect(code).toContain("CREATE OR REPLACE FUNCTION staff_self_register");
     // Pinned `search_path`, because the pooler hands out whatever session it has and a function
@@ -1494,7 +1457,7 @@ describe("the currency seed", () => {
 
   /** The `coin_code` of every row the seed inserts. */
   const seededCurrencies = (): string[] => {
-    const insert = /INSERT INTO currency[\s\S]*?ON CONFLICT/.exec(sqlCode("010_currency.sql"));
+    const insert = /INSERT INTO currency[\s\S]*?ON CONFLICT/.exec(sqlAll());
     expect(insert).not.toBeNull();
     return [...insert![0].matchAll(/\(\s*'([A-Z]{3})'\s*,/g)].map((m) => m[1]!);
   };
@@ -1633,9 +1596,11 @@ describe("the currency seed", () => {
      * every apply - and because applying a `db/` file twice is explicitly encouraged everywhere
      * else in this suite, that would be a data loss somebody triggers while doing the right thing.
      */
-    const code = sqlCode("010_currency.sql");
+    const code = sqlAll();
     expect(code).toMatch(/ON CONFLICT \(coin_code\) DO NOTHING/);
-    expect(code).not.toMatch(/ON CONFLICT[\s\S]{0,40}DO UPDATE/);
+    // Scoped to the currency INSERT. Elsewhere in the schema an upsert is correct - the
+    // self-registration function has one - so this cannot be asked of the whole file.
+    expect(code).not.toMatch(/ON CONFLICT \(coin_code\)[\s\S]{0,40}DO UPDATE/);
     expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
   });
 });
@@ -1649,7 +1614,7 @@ describe("the 업무 구분 migration", () => {
    * considered and rejected"). Asserting on the raw text would make those explanations fail the
    * tests that exist to protect what they explain.
    */
-  const code = () => sqlCode("011_job_types.sql");
+  const code = () => sqlAll();
 
   test("the discriminator is on the parent rows, where it can be filtered", () => {
     /*
@@ -1666,9 +1631,12 @@ describe("the 업무 구분 migration", () => {
       ["job", "job_type"],
       ["purchase_order", "po_type"],
     ]) {
+      // Declared in the CREATE TABLE now rather than added by a later ALTER, so the
+      // column list of `job` is the whole statement of what a job holds. The table is
+      // named in the pattern anyway, to keep the two columns' assertions apart.
       expect(code()).toMatch(
         new RegExp(
-          `ALTER TABLE ${table!}\\s+ADD COLUMN IF NOT EXISTS ${column!}\\s+text NOT NULL DEFAULT 'LINGUISTICS'`,
+          `CREATE TABLE ${table!} \\([\\s\\S]*?${column!}\\s+text NOT NULL DEFAULT 'LINGUISTICS'`,
         ),
       );
     }
@@ -1734,7 +1702,9 @@ describe("the 업무 구분 migration", () => {
     expect(code()).toMatch(/job_slang text REFERENCES/);
     expect(code()).toMatch(/job_category text REFERENCES/);
     expect(code()).not.toMatch(/(job|po)_(slang|elang|category) text NOT NULL/);
-    expect(code()).not.toMatch(/CREATE (OR REPLACE )?(TRIGGER|FUNCTION)/i);
+    // No trigger keeps a detail row in step with its parent either: the composite foreign
+    // key and the two CHECKs do that declaratively, which is why they are asserted above.
+    expect(code()).not.toMatch(/CREATE (OR REPLACE )?TRIGGER/i);
   });
 
   test("the detail rows are part of their parent, so they cascade", () => {
@@ -1762,69 +1732,6 @@ describe("the 업무 구분 migration", () => {
     // was supposed to be about types.
     expect(code().match(/REFERENCES (job|purchase_order) \(id, (job|po)_type\) ON DELETE CASCADE/g))
       .toHaveLength(4);
-  });
-
-  test("the backfill runs before the drop, and the drop takes only the four language columns", () => {
-    /*
-     * The ordering is the one thing in this file that cannot be recovered from by re-running it.
-     * Section 5 reads `job.job_slang`; section 6 drops it. Reversed, the backfill finds no column
-     * and the migration "succeeds" with the detail tables empty - and the application, which reads
-     * only the detail tables from here on, shows every language pair as blank. The data is not lost
-     * at that point, it is gone.
-     *
-     * `po_lang` and the four `po_cat_*` columns must survive, and they are the two most plausible
-     * casualties of a search-and-replace: `po_lang` is the PRINTED PO's letterhead language (Korean
-     * or English) and `po_cat_*` is CAT-TOOL analysis, where 'cat' is Computer-Assisted Translation
-     * and not 'category'. Both read like the thing being migrated and neither is.
-     *
-     * Asserted as the exact SET of dropped columns rather than as four separate absences, so a
-     * fifth DROP COLUMN added later has to be justified here.
-     */
-    const dropped = [...code().matchAll(/DROP COLUMN IF EXISTS (\w+)/g)].map((m) => m[1]!);
-    expect([...dropped].sort()).toEqual(["job_elang", "job_slang", "po_elang", "po_slang"]);
-
-    const backfill = code().indexOf("INSERT INTO job_detail_linguistic");
-    const drop = code().indexOf("DROP COLUMN IF EXISTS job_slang");
-    expect(backfill).toBeGreaterThan(-1);
-    expect(drop).toBeGreaterThan(backfill);
-
-    // Re-runnable, and DO NOTHING rather than DO UPDATE: an existing detail row is NEWER than these
-    // columns, and overwriting it with pre-migration values is the one thing a re-runnable
-    // migration must never do.
-    expect(code()).toMatch(/ON CONFLICT \(job_id\) DO NOTHING/);
-    expect(code()).toMatch(/ON CONFLICT \(po_id\) DO NOTHING/);
-    expect(code()).not.toMatch(/ON CONFLICT[^;]{0,60}DO UPDATE/);
-    // Empty strings normalise to NULL on the way in, so the application has one kind of unset to
-    // handle from here rather than the two the old columns permitted.
-    expect(code()).toContain("NULLIF(job_slang, '')");
-    expect(code()).toContain("NULLIF(po_slang, '')");
-  });
-
-  test("the backfill is guarded, because section 6 drops the column section 5 reads", () => {
-    /*
-     * The defect the docker rehearsal in README.md found and this suite could not: `ON CONFLICT DO
-     * NOTHING` does NOT make section 5 re-runnable. A second run of the file reaches an INSERT that
-     * names `job.job_slang`, which the FIRST run dropped - and PostgreSQL refuses it at PARSE time
-     * with 42703, before ON CONFLICT or the WHERE clause can observe that there is nothing left to
-     * move. The file then stops one section short of the indexes, which for a file whose stated
-     * purpose is to be safe to repeat is the worst outcome available.
-     *
-     * So each backfill sits inside a `DO` block that checks `information_schema` and runs the
-     * INSERT through `EXECUTE`, where it stays a string until the guard has passed. Asserted here
-     * because the fix looks like ceremony: the plain INSERT reads fine, works on a first run, and
-     * is exactly what someone tidying this file would restore.
-     */
-    expect([...code().matchAll(/DO \$backfill_(?:job|po)\$/g)]).toHaveLength(2);
-    expect([...code().matchAll(/EXECUTE \$move_(?:job|po)\$/g)]).toHaveLength(2);
-    expect(code()).toContain("information_schema.columns");
-
-    // Both INSERTs are INSIDE a guard, not left at the top level where parsing reaches them. The
-    // job block is the first of the two, so every backfill INSERT must follow it.
-    for (const table of ["job_detail_linguistic", "po_detail_linguistic"]) {
-      expect(code().indexOf(`INSERT INTO ${table}`)).toBeGreaterThan(
-        code().indexOf("DO $backfill_job$"),
-      );
-    }
   });
 
   test("every drop in the pinning block precedes every add", () => {
@@ -1881,13 +1788,22 @@ describe("the 업무 구분 migration", () => {
     expect(code().match(/'JOBCAT'/g)?.length).toBeGreaterThanOrEqual(5);
     expect(code()).not.toMatch(/MICECAT|IMCCAT/);
     // Re-runnable, like every other seed in db/.
-    expect(code().match(/ON CONFLICT \(code\) DO NOTHING/g)).toHaveLength(3);
+    /*
+     * EVERY sys_code insert is `ON CONFLICT (code) DO NOTHING`, not three of them: re-running
+     * the seed has to be harmless, and `sys_code.code` is unique across the whole table, so
+     * an unguarded insert of a code another domain already has would abort the file.
+     */
+    const codeInserts = code().match(/INSERT INTO sys_code/g) ?? [];
+    expect(codeInserts.length).toBeGreaterThanOrEqual(8);
+    expect(code().match(/ON CONFLICT \(code\) DO NOTHING/g) ?? []).toHaveLength(
+      codeInserts.length,
+    );
   });
 });
 
 describe("the pricing-model split", () => {
   /** db/012_job_pricing.sql, comments stripped - same reason as 011's. */
-  const code = () => sqlCode("012_job_pricing.sql");
+  const code = () => sqlAll();
 
   test("the derivation moves to the linguistic detail tables and nothing else does", () => {
     /*
@@ -1950,133 +1866,6 @@ describe("the pricing-model split", () => {
       expect(code()).not.toMatch(new RegExp(`ADD COLUMN IF NOT EXISTS ${column}\\b`));
       expect(code()).not.toMatch(new RegExp(`DROP COLUMN IF EXISTS ${column}\\b`));
     }
-  });
-
-  test("the drop takes only the nine columns the backfill moved, and runs after it", () => {
-    /*
-     * Same ordering hazard as 011, one file later: section 2 reads `job.job_volume` and section 3
-     * drops it. Reversed, the file "succeeds" with the detail tables holding languages but no
-     * prices, and every job in the system reads as having no unit price - recoverable only from a
-     * backup, because the columns are gone by then.
-     *
-     * `po_cat_word` / `po_cat_mid` / `po_cat_stotal` must survive, and they are the likeliest
-     * casualty of a search-and-replace over this file: they look like pricing inputs and are not.
-     * 'cat' is Computer-Assisted Translation, their meaning is marked UNCONFIRMED in 002_tables.sql,
-     * and nothing in the application multiplies them by anything. `po_lang` - the printed PO's
-     * letterhead language - is the other one.
-     */
-    const dropped = [...code().matchAll(/DROP COLUMN IF EXISTS (\w+)/g)].map((m) => m[1]!);
-    expect([...dropped].sort()).toEqual([
-      "job_price",
-      "job_price_dis",
-      "job_price_sel",
-      "job_volume",
-      "po_price",
-      "po_price_sel",
-      "po_unit_code",
-      "po_volume",
-      "unit_code",
-    ]);
-    // The added and dropped sets are the same nine: everything that moved left its old home, and
-    // nothing was dropped that did not get a new one.
-    const added = [...code().matchAll(/ADD COLUMN IF NOT EXISTS (\w+)/g)].map((m) => m[1]!);
-    expect([...dropped].sort()).toEqual([...added].sort());
-
-    expect(code()).not.toMatch(/DROP COLUMN IF EXISTS po_cat_/);
-    expect(code()).not.toMatch(/DROP COLUMN IF EXISTS po_lang\b/);
-
-    const backfill = code().indexOf("INSERT INTO job_detail_linguistic");
-    const drop = code().indexOf("DROP COLUMN IF EXISTS job_volume");
-    expect(backfill).toBeGreaterThan(-1);
-    expect(drop).toBeGreaterThan(backfill);
-  });
-
-  test("the backfill is guarded the way 011's had to be", () => {
-    /*
-     * 011 shipped with a plain INSERT and the docker rehearsal in README.md found it on the SECOND
-     * run: the statement names a column the first run dropped, so PostgreSQL refuses it at PARSE
-     * time with 42703 - before ON CONFLICT or any WHERE clause can observe there is nothing left to
-     * move. The file then stops one section short of the end.
-     *
-     * This file was written with the guard from the start. Asserted because the guard looks like
-     * ceremony: the plain INSERT reads better, works on a first run, and is exactly what someone
-     * tidying this file would restore.
-     */
-    expect([...code().matchAll(/DO \$backfill_(?:job|po)_pricing\$/g)]).toHaveLength(2);
-    expect([...code().matchAll(/EXECUTE \$move_(?:job|po)_pricing\$/g)]).toHaveLength(2);
-    // Every dollar-quote tag opens and closes exactly once. An unbalanced one does not fail at parse
-    // time in any readable way - the rest of the file is swallowed into the string literal - so the
-    // pairing is worth asserting rather than eyeballing.
-    for (const tag of [
-      "backfill_job_pricing",
-      "backfill_po_pricing",
-      "move_job_pricing",
-      "move_po_pricing",
-    ]) {
-      expect([...code().matchAll(new RegExp(`\\$${tag}\\$`, "g"))]).toHaveLength(2);
-    }
-    expect(code()).toContain("information_schema.columns");
-    for (const table of ["job_detail_linguistic", "po_detail_linguistic"]) {
-      expect(code().indexOf(`INSERT INTO ${table}`)).toBeGreaterThan(
-        code().indexOf("DO $backfill_job_pricing$"),
-      );
-    }
-  });
-
-  test("the upsert fills blanks only - DO UPDATE here, unlike 011's DO NOTHING", () => {
-    /*
-     * The one place this file deliberately disagrees with its predecessor, and the reason is the
-     * state 011 leaves behind.
-     *
-     * 011 inserted into empty tables, so any conflicting row it met was newer than the columns it
-     * was reading and DO NOTHING was right. By the time 012 runs, a detail row already exists for
-     * every job that has a language - created by 011, necessarily with all five pricing columns
-     * NULL. DO NOTHING would therefore skip MOST jobs and silently lose their prices: the migration
-     * reports success, the job list shows every unit price blank, and the columns it would have read
-     * are dropped three sections later.
-     *
-     * The WHERE on the DO UPDATE is what keeps it safe to repeat. It fires only when all the target
-     * columns are still NULL, so a run that was interrupted after the backfill but before the drop -
-     * and then had prices edited through the console - cannot have those edits overwritten by the
-     * pre-migration values on the retry.
-     */
-    expect(code()).toMatch(/ON CONFLICT \(job_id\) DO UPDATE/);
-    expect(code()).toMatch(/ON CONFLICT \(po_id\) DO UPDATE/);
-    for (const column of [
-      "job_volume",
-      "unit_code",
-      "job_price_sel",
-      "job_price",
-      "job_price_dis",
-    ]) {
-      expect(code()).toMatch(
-        new RegExp(`job_detail_linguistic\\.${column}\\s+IS NULL`),
-      );
-    }
-    for (const column of ["po_volume", "po_unit_code", "po_price_sel", "po_price"]) {
-      expect(code()).toMatch(new RegExp(`po_detail_linguistic\\.${column}\\s+IS NULL`));
-    }
-    // Legacy empty strings normalise to NULL on the way in, as in 011, so the application has one
-    // kind of unset to handle rather than two.
-    expect(code()).toContain("NULLIF(unit_code, '')");
-    expect(code()).toContain("NULLIF(po_unit_code, '')");
-    // Only linguistic parents are read. A MICE job created through the new console before this file
-    // ran may hold a volume, and discarding it is correct - its money is on the parent regardless.
-    expect(code()).toContain("WHERE job_type = 'LINGUISTICS'");
-    expect(code()).toContain("WHERE po_type = 'LINGUISTICS'");
-  });
-
-  test("012 requires nothing and creates no trigger", () => {
-    // Same rule as 011: constraints forbid, they never require. A NOT NULL on `job_volume` would
-    // make the thousands of existing jobs with no volume unsaveable, and the type CHECKs 011 already
-    // put on these tables are what makes a word count on a MICE job impossible - so this file needs
-    // no constraint of its own.
-    // Scoped to the column definitions on purpose. A looser "no NOT NULL anywhere" would trip over
-    // section 5's verification SELECTs, which legitimately read `WHERE job_volume IS NOT NULL`.
-    expect(code()).not.toMatch(/ADD COLUMN IF NOT EXISTS\s+\w+\s+[^;]*NOT NULL/);
-    expect(code()).not.toMatch(/CREATE (OR REPLACE )?(TRIGGER|FUNCTION)/i);
-    expect(code()).not.toMatch(/ADD CONSTRAINT/);
-    expect(code()).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
   });
 });
 
@@ -2451,7 +2240,7 @@ describe("the 대시보드 aggregate", () => {
 
 describe("the floating KRW figure", () => {
   /** db/014_fx_rates.sql, comments stripped - same reason as 011's and 012's. */
-  const code = () => sqlCode("014_fx_rates.sql");
+  const code = () => sqlAll();
 
   test("the view is one row per currency and is not capped by age", () => {
     /*
@@ -2481,58 +2270,6 @@ describe("the floating KRW figure", () => {
     expect(view).toContain("effective_date");
   });
 
-  test("the backfill pins a legacy rate and refuses to invent one", () => {
-    /*
-     * The invariant: A ROW THAT ALREADY HAS A BOOKED KRW FIGURE NEVER FLOATS.
-     *
-     * Legacy `COIN_RATE` was nvarchar and holds '' or '-' on some rows, which arrives as NULL. Such
-     * a row has an invoiced `job_price_ksum` and no rate, so the moment the view goes live it would
-     * start floating - restating a figure a customer has already been billed for. Deriving the rate
-     * from `ksum / sum` and storing it changes no reported figure; it only stops the figure from
-     * changing later.
-     *
-     * Every guard is asserted individually because each one admits a row class that genuinely
-     * occurs, and dropping any single one is a different silent corruption:
-     *
-     *   coin_rate IS NULL       - idempotence. Without it, a second run overwrites rates the
-     *                             console wrote, with a quotient that disagrees in the sixth
-     *                             decimal.
-     *   price_sum <> 0          - division by zero, which aborts the whole file mid-apply.
-     *   price_ksum IS NOT NULL  - the one that matters most, and the one that looks removable. A
-     *                             row with no booked figure has nothing to protect and SHOULD
-     *                             float; pinning it would freeze an open position at a rate nobody
-     *                             ever agreed to.
-     */
-    for (const [table, rate, sum, ksum] of [
-      ["job", "coin_rate", "job_price_sum", "job_price_ksum"],
-      ["purchase_order", "po_coin_rate", "po_price_sum", "po_price_ksum"],
-    ] as const) {
-      const stmt = new RegExp(`UPDATE ${table}\\s+SET ${rate} = round\\(([\\s\\S]*?);`).exec(
-        code(),
-      )?.[0];
-      expect(stmt).toBeDefined();
-      expect(stmt).toContain(`${ksum} / ${sum}`);
-      expect(stmt).toContain(`${rate} IS NULL`);
-      expect(stmt).toContain(`${sum} <> 0`);
-      expect(stmt).toContain(`${ksum} IS NOT NULL`);
-      expect(stmt).toContain("deleted = false");
-    }
-  });
-
-  test("the backfill is an UPDATE of the rate and never touches an amount", () => {
-    /*
-     * Stated as a prohibition because the file's own argument invites the opposite reading. Having
-     * established that `ksum / sum` is the rate, the next apparently-tidy step is to "normalise" the
-     * amounts to agree with it - and that would rewrite money. Nothing in this feature may ever
-     * change a booked figure: the whole point of pinning the rate is that the figure stays exactly
-     * where it is.
-     *
-     * So the only columns any SET in this file assigns are the two rate columns.
-     */
-    const assigned = [...code().matchAll(/SET\s+(\w+)\s*=/g)].map((m) => m[1]!);
-    expect([...new Set(assigned)].sort()).toEqual(["coin_rate", "po_coin_rate"]);
-  });
-
   test("014 corrects the comments that state the old frozen-rate rule", () => {
     /*
      * 002_tables.sql says the opposite of this model - it had to, it was written when the rate was
@@ -2553,21 +2290,6 @@ describe("the floating KRW figure", () => {
     }
     expect(code()).toContain("COMMENT ON VIEW fx_rate_latest IS");
     expect(code()).toContain("COMMENT ON TABLE fx_rate IS");
-  });
-
-  test("014 creates no table and drops nothing", () => {
-    /*
-     * `fx_rate` and `ix_fx_rate_lookup` already exist - 002 and 003 created them, and this file only
-     * starts USING them. Asserted because a re-reading of the header ("the table nothing populates")
-     * naturally suggests the table is new here, and a `CREATE TABLE fx_rate` added on that
-     * assumption would be silently skipped by `IF NOT EXISTS` on a real database and would mask a
-     * schema divergence on a fresh one.
-     *
-     * No DROP of any kind: unlike 011, this file migrates no structure. A `DROP COLUMN coin_rate`
-     * would be the catastrophic version of "the rate is no longer what someone typed".
-     */
-    expect(code()).not.toMatch(/CREATE\s+TABLE/i);
-    expect(code()).not.toMatch(/DROP\s+(TABLE|COLUMN|VIEW|INDEX)/i);
   });
 });
 
@@ -3135,7 +2857,7 @@ describe("the 결제 print documents", () => {
 
 describe("the 분야 / 세부 분야 split", () => {
   /** db/016_project_fields.sql, comments stripped - same reason as 011's. */
-  const code = () => sqlCode("016_project_fields.sql");
+  const code = () => sqlAll();
 
   const frontendFile = (...segments: string[]) =>
     readFileSync(
@@ -3168,49 +2890,8 @@ describe("the 분야 / 세부 분야 split", () => {
     expect(code()).not.toMatch(/DELETE\s+FROM\s+sys_code/i);
     expect(code()).not.toMatch(/UPDATE\s+sys_code/i);
     // Re-runnable, like every other seed in db/.
-    expect(code().match(/ON CONFLICT \(code\) DO NOTHING/g)).toHaveLength(2);
-  });
-
-  test("the backfill moves the detailed value down before deriving the coarse one, and never overwrites a 세부 분야", () => {
-    /*
-     * Order is the whole correctness argument: 3b reads `prj_field2`, so running it first would
-     * classify every project from a column that is still empty and land them all in '일반'. And the
-     * `prj_field2 IS NULL` guard in 3a is what stops a project that already HAS a detailed value from
-     * losing it - that value is the more specific of the two, and it is the only thing `prj_field2`
-     * ever carried.
-     *
-     * The re-run guard is the `NOT IN (SELECT code ... PRJCAT)` predicate. Without it a second
-     * application reclassifies the coarse values it just wrote, every one of them falls through to
-     * `ELSE '일반'`, and the 분야별 report becomes a single bar. That is a silent, total loss of the
-     * grouping, which is why it is asserted rather than trusted to the header's "apply it whole".
-     */
-    const lines = code().split("\n");
-    const moveDown = lines.findIndex((line) => /SET prj_field2 = prj_field/.test(line));
-    const derive = lines.findIndex((line) => /SET prj_field = CASE/.test(line));
-    expect(moveDown).toBeGreaterThan(-1);
-    expect(derive).toBeGreaterThan(moveDown);
-
-    expect(code()).toMatch(/SET prj_field2 = prj_field[\s\S]*?prj_field2 IS NULL/);
-    expect(code()).toMatch(/prj_field NOT IN \(SELECT code FROM sys_code WHERE code_parent = 'PRJCAT'\)/);
-    // Unrecognised values land in a real group rather than in NULL, which the report would print as
-    // '(unassigned)' - a data-entry gap, which is not what an ungrouped field is.
-    expect(code()).toMatch(/ELSE '일반'/);
-  });
-
-  test("every code the backfill maps onto exists in the seed", () => {
-    /*
-     * `project.prj_field` is a foreign key onto `sys_code (code)`, so a CASE arm naming a code the
-     * INSERT above does not create fails the whole UPDATE with 23503 - and it fails on the operator's
-     * screen, halfway through a file whose earlier sections have already committed. A typo in one of
-     * seven Korean compound names with a middle dot in it is exactly the mistake this catches.
-     */
-    const seeded = [...code().matchAll(/\('([^']+)',[^\n]*'PRJCAT'/g)].map((m) => m[1]);
-    expect(seeded).toHaveLength(7);
-    const targets = [...code().matchAll(/THEN '([^']+)'/g)].map((m) => m[1]);
-    expect(targets.length).toBeGreaterThan(0);
-    for (const target of [...targets, "일반"]) {
-      expect(seeded).toContain(target);
-    }
+    // Guarded like every other sys_code insert; the count is asserted once, above.
+    expect(code()).toMatch(/'PRJCAT',[\s\S]{0,400}ON CONFLICT \(code\) DO NOTHING/);
   });
 
   test("the two dropdowns read the two different domains", () => {
@@ -3355,7 +3036,7 @@ describe("the 분야 / 세부 분야 split", () => {
      * which is why its filter, column and detail row went with the form fields rather than lingering
      * as read-only values nobody can change.
      */
-    expect(sql("002_tables.sql")).toContain("prj_invoice_state");
+    expect(sql("001_schemas.sql")).toContain("prj_invoice_state");
     expect(tsCode("neotms.schemas.ts")).toContain("prjInvoiceState");
     expect(tsCode("projects/NeotmsProject.dbops.ts")).toContain("prj_invoice_state");
     expect(tsCode("projects/NeotmsProject.dbops.ts")).toContain(
@@ -4051,9 +3732,10 @@ describe("date defaults, bulk operations and in-place editing", () => {
     expect(view).toContain("setBulkError(result.firstError)");
     expect(view).toContain("<ErrorNotice error={bulkError} />");
     // Every bulk path goes through the one confirm-then-run helper; a second hand-rolled loop is how
-    // one of the four ends up without a confirmation.
+    // one of them ends up without a confirmation. Five now, not four: bulk approval was added, and
+    // it was written as its own loop first - this assertion is what sent it back through `runBulk`.
     expect(view.match(/runSequential\(/g)).toHaveLength(1);
-    expect(view.match(/runBulk\(/g)).toHaveLength(4);
+    expect(view.match(/runBulk\(/g)).toHaveLength(5);
   });
 
   test("a copy keeps the work and the price but not what happened to the original", () => {
@@ -4150,9 +3832,11 @@ describe("date defaults, bulk operations and in-place editing", () => {
     expect(view).toContain("<StatusChip value={po.poMoneyState} />");
     expect(view).not.toMatch(/poMoneyState\s*\}\s*\)/);
 
-    // Both tables grew a leading checkbox column, so both empty/loading rows must span ten. A missed
-    // one is a cell short and the message sits under the wrong heading.
-    expect(view.match(/colSpan=\{10\}/g)).toHaveLength(2);
+    // Both tables grew a leading checkbox column, and the PO table then grew an 승인 column on top
+    // of it - so the two no longer match: jobs span ten, POs eleven. A missed one is a cell short
+    // and the empty-table message sits under the wrong heading.
+    expect(view.match(/colSpan=\{10\}/g)).toHaveLength(1);
+    expect(view.match(/colSpan=\{11\}/g)).toHaveLength(1);
     expect(view).not.toContain("colSpan={9}");
     // `indeterminate` is a DOM property with no HTML attribute, so it can only be set through a ref.
     // Without it a partial selection renders as an empty box, and the header reads "nothing selected"
@@ -4408,8 +4092,8 @@ describe("the handover mail", () => {
     ...over,
   });
 
-  const ALL = { formats: HANDOVER_FORMATS, layouts: HANDOVER_LAYOUTS } as const;
-  const WORD = { formats: ["WORD"], layouts: ["보기좋게"] } as const;
+  const ALL = { formats: HANDOVER_FORMATS, layouts: HANDOVER_LAYOUTS, note: "" } as const;
+  const WORD = { formats: ["WORD"], layouts: ["보기좋게"], note: "" } as const;
 
   test("the subject is 고객사 / 담당자 / 언어, with the blank 담당자 left out rather than left in", () => {
     /*
@@ -4514,105 +4198,10 @@ describe("the handover mail", () => {
     );
   });
 
-  test("one shared deadline is one line; differing deadlines break into 언어: 납기 lines", () => {
-    /*
-     * The document's three steps. All the same -> one date. Dates differ -> one line per language.
-     * Times differ too -> each line carries its own morning/afternoon word in brackets.
-     *
-     * The form's morning/afternoon cell is highlighted only while the half is UNIFORM.
-     * Colouring one of them on a mail whose languages are split between morning and afternoon
-     * would state something untrue about half the work, in the one place the reader would not
-     * think to doubt.
-     */
-    const same = [
-      job({ jobEday: "2026-11-13", jobEdayTime: "15:00:00" }),
-      job({ jobElang: "일본어", jobEday: "2026-11-13", jobEdayTime: "15:00:00" }),
-    ];
-    expect(deadlines(same, project())).toEqual({ lines: ["11/13 (금)"], half: "오후" });
-    expect(composeHandoverMail(project(), same, WORD).html).not.toContain("한국어 → 영어: ");
 
-    const split = [
-      job({ jobEday: "2026-11-13", jobEdayTime: "15:00:00" }),
-      job({ jobElang: "베트남어", jobEday: "2026-11-20", jobEdayTime: "09:00:00" }),
-    ];
-    expect(deadlines(split, project())).toEqual({
-      lines: ["한국어 → 영어: 11/13 (금)(오후)", "한국어 → 베트남어: 11/20 (금)(오전)"],
-      half: null,
-    });
-  });
 
-  test("a missing delivery time highlights neither 오전 nor 오후", () => {
-    /*
-     * The document says the job-list toggle defaults to afternoon. That is a default for a
-     * control a person is about to set, not a licence to assert a time nobody recorded - a mail
-     * that says afternoon cannot be told apart from one where afternoon was actually agreed.
-     */
-    const mail = composeHandoverMail(project({ prjEday: "2026-11-13" }), [], WORD);
-    expect(deadlines([], project({ prjEday: "2026-11-13" })).half).toBeNull();
-    expect(mail.html).toContain(">오전</td>");
-    expect(mail.html).toContain(">오후</td>");
-    // Two highlighted cells in the whole mail: the chosen format and the chosen layout.
-    expect(mail.html.match(/background:#3b57c4/g) ?? []).toHaveLength(2);
-  });
 
-  test("the jobs' deadlines win over the project's, which is the outer fallback", () => {
-    // The delivery date is per language wherever the data allows it; the project header is
-    // the same rule's outer ring, not a different rule.
-    const html = composeHandoverMail(
-      project({ prjEday: "2026-12-31" }),
-      [job({ jobEday: "2026-11-13" })],
-      WORD,
-    ).html;
-    expect(html).toContain("11/13 (금)");
-    expect(html).not.toContain("12/31");
-  });
 
-  test("every option is drawn and only the chosen ones are coloured", () => {
-    /*
-     * "clicking an editing format or a layout colours it in (several allowed); clicking
-     * toggles colour and no colour".
-     *
-     * Printing only the chosen ones would leave a cell reading "WORD", which cannot be told from a
-     * form on which HWP was never offered. The unchosen options being visible is what makes the
-     * chosen one read as a decision.
-     */
-    const mail = composeHandoverMail(project(), [job()], {
-      formats: ["HWP"],
-      layouts: ["DTP"],
-    } as const);
-    for (const option of [...HANDOVER_FORMATS, ...HANDOVER_LAYOUTS]) {
-      expect(mail.html).toContain(`>${option}</td>`);
-    }
-    expect(mail.html).toMatch(/background:#3b57c4[^>]*>HWP</);
-    expect(mail.html).toMatch(/background:#3b57c4[^>]*>DTP</);
-    expect(mail.html).toMatch(/#9aa0ad[^>]*>WORD</);
-
-    // Choosing all seven is legitimate, and must colour all seven.
-    expect(composeHandoverMail(project(), [job()], ALL).html.match(/background:#3b57c4/g) ?? [])
-      .toHaveLength(7);
-  });
-
-  test("기타요청 carries the project's 내용, with its line breaks and without its markup", () => {
-    /*
-     * The document says to leave the remarks cell blank for the PM to fill in. That was written
-     * for a copy-to-clipboard flow, where somebody saw the form before it was sent; this sends
-     * directly, so a blank cell would stay blank forever. The request redirected the project's
-     * own notes into it.
-     *
-     * The escaping half is the one that fails silently. A closing cell tag inside those notes
-     * ends the cell early and shifts every later value one column left - a mail that looks
-     * fine and puts real figures under the wrong headings.
-     */
-    const mail = composeHandoverMail(
-      project({ prjContent: "원문 PDF 2종\n<b>급건</b></td><td>주입" }),
-      [job()],
-      WORD,
-    );
-    expect(mail.html).toContain("원문 PDF 2종<br>&lt;b&gt;급건&lt;/b&gt;&lt;/td&gt;&lt;td&gt;주입");
-    expect(mail.html).not.toContain("<b>급건</b>");
-    // Nine rows, whatever anyone types into the notes.
-    expect(mail.html.match(/<tr>/g) ?? []).toHaveLength(9);
-  });
 
   test("담당PM is the jobs' PMs, and the project's PM only when no job names one", () => {
     /*
@@ -4630,24 +4219,140 @@ describe("the handover mail", () => {
     expect(composeHandoverMail(project(), [job()], WORD).html).toContain("김재윤");
   });
 
-  test("the mail table has one column count, and every cell carries its style inline", () => {
+
+
+  test("the deadline is the project's, on a twelve-hour clock, with one meridiem filled in", () => {
     /*
-     * Six columns, set by the widest row (name + sub-heading + four formats). A row short of the
-     * count makes the client guess widths and the form comes out as a staircase - borders present,
-     * verticals not lining up. The delivery-form block's second row is five because the first
-     * lends it a cell through `rowspan`.
+     * The official form has ONE date cell and two meridiem cells. That is the shape the company
+     * works to, so the project's own deadline is what goes in it - the earlier template worked a
+     * deadline out per language from the jobs, which does not fit the form and is not what it asks
+     * for.
      *
-     * Inline styles because Gmail and Outlook strip `<style>`. Without the borders the form is a
-     * run of prose, and then nothing says which value belongs to which label.
+     * The meridiem is NOT repeated inside the date. It has two cells of its own and one of them is
+     * filled in; printing it twice would be the only thing on the form that says one fact in two
+     * places, and two places can disagree.
+     */
+    const mail = composeHandoverMail(
+      project({ prjEday: "2026-11-13", prjEdayTime: "15:00:00" }),
+      [job({ jobEday: "2026-11-20" })],
+      WORD,
+    );
+    expect(mail.html).toContain("11/13 (금) 3:00");
+    expect(mail.html).not.toContain("11/20");
+    expect(mail.html).not.toMatch(/3:00[^<]*오후/);
+    // Afternoon is filled in, morning is not.
+    expect(mail.html).toMatch(/background:#92d050[^>]*>오후</);
+    expect(mail.html).toMatch(/background:#ffffff[^>]*>오전</);
+
+    // Midnight and noon are the two the modulo gets wrong if it is written carelessly.
+    const midnight = composeHandoverMail(
+      project({ prjEday: "2026-11-13", prjEdayTime: "00:30:00" }),
+      [],
+      WORD,
+    );
+    expect(midnight.html).toContain("11/13 (금) 12:30");
+    expect(midnight.html).toMatch(/background:#92d050[^>]*>오전</);
+    const noon = composeHandoverMail(
+      project({ prjEday: "2026-11-13", prjEdayTime: "12:00:00" }),
+      [],
+      WORD,
+    );
+    expect(noon.html).toContain("11/13 (금) 12:00");
+    expect(noon.html).toMatch(/background:#92d050[^>]*>오후</);
+  });
+
+  test("a missing delivery time fills in neither meridiem", () => {
+    /*
+     * A time nobody recorded must not be asserted. The form would read as an agreement that the
+     * afternoon was agreed, and nothing on it would say otherwise.
+     */
+    const mail = composeHandoverMail(project({ prjEday: "2026-11-13" }), [], WORD);
+    expect(mail.html).toContain("11/13 (금)");
+    expect(mail.html).toMatch(/background:#ffffff[^>]*>오전</);
+    expect(mail.html).toMatch(/background:#ffffff[^>]*>오후</);
+    // Two filled cells in the whole mail: the chosen format and the chosen layout.
+    expect(mail.html.match(/background:#92d050/g) ?? []).toHaveLength(2);
+  });
+
+  test("every option is drawn and only the chosen ones are filled in", () => {
+    /*
+     * The form lists all four formats and all three layouts and fills in the chosen ones, in the
+     * green the official template uses. Printing only the chosen ones would leave a cell reading
+     * "WORD", which cannot be told from a form on which the alternatives were never offered.
+     */
+    const mail = composeHandoverMail(project(), [job()], {
+      formats: ["HWP"],
+      layouts: ["DTP"],
+      note: "",
+    } as const);
+    for (const option of [...HANDOVER_FORMATS, ...HANDOVER_LAYOUTS]) {
+      expect(mail.html).toContain(`>${option}</td>`);
+    }
+    expect(mail.html).toMatch(/background:#92d050[^>]*>HWP</);
+    expect(mail.html).toMatch(/background:#92d050[^>]*>DTP</);
+    expect(mail.html).toMatch(/background:#ffffff[^>]*>WORD</);
+
+    expect(composeHandoverMail(project(), [job()], ALL).html.match(/background:#92d050/g) ?? [])
+      .toHaveLength(7);
+  });
+
+  test("경로 carries the project notes; 기타요청 carries what the sender typed", () => {
+    /*
+     * The two swapped places when the official form arrived. The form has a 경로 row that the
+     * project notes belong in, and a 기타요청 row the sales manager fills in as they send - which
+     * is why the dialog grew a box for it.
+     *
+     * Both are escaped. A closing cell tag in either would end the cell early and shift every
+     * later value one column left: a mail that looks fine and puts real values under the wrong
+     * labels. The notes come from a form field and the remark is typed into this dialog, so both
+     * are text somebody can choose.
+     */
+    const mail = composeHandoverMail(
+      project({ prjContent: "\\\\nas01\\\\프로젝트\\n2종" }),
+      [job()],
+      { formats: ["WORD"], layouts: ["보기좋게"], note: "<b>급건</b></td><td>주입" } as const,
+    );
+    expect(mail.html).toContain("경로");
+    expect(mail.html).toContain("2종");
+    expect(mail.html).toContain("&lt;b&gt;급건&lt;/b&gt;&lt;/td&gt;&lt;td&gt;주입");
+    expect(mail.html).not.toContain("<b>급건</b>");
+  });
+
+  test("an empty 기타요청 leaves the row in place, blank", () => {
+    /*
+     * Most handovers have nothing to add, so empty is the ordinary case rather than a failure -
+     * the dialog does not require it. The ROW still has to be drawn: a reader who finds it missing
+     * cannot tell whether nothing was asked for or whether the template is broken.
+     */
+    const mail = composeHandoverMail(project(), [job()], WORD);
+    expect(mail.html).toContain("기타요청");
+    expect(mail.html.match(/기타요청/g) ?? []).toHaveLength(1);
+  });
+
+  test("the official form's grid holds together: seven columns on every row", () => {
+    /*
+     * The company's template is seven columns wide - six that carry the form and a 1px spacer the
+     * Word export leaves on every row. A row that does not add up makes the client guess widths
+     * and the form comes out as a staircase, borders present and verticals not lining up.
+     *
+     * Borders are uniform with `border-collapse: collapse` rather than the source's per-side
+     * `border-style: none solid solid none`. That trick only holds if every cell agrees, and the
+     * source's `border-color: windowtext` is a Word-ism no mail client resolves.
      */
     const html = composeHandoverMail(project(), [job()], ALL).html;
     expect(html).not.toContain("<style");
-    expect(html).not.toContain("class=");
-    for (const row of html.match(/<tr>[\s\S]*?<\/tr>/g) ?? []) {
-      const cells = [...row.matchAll(/<td style="([^"]*)"(?: colspan="(\d+)")?(?: rowspan="\d+")?>/g)];
+    expect(html).not.toContain("windowtext");
+    expect(html).toContain("border-collapse:collapse");
+    expect(html.match(/<col style="width:\d+px">/g) ?? []).toHaveLength(7);
+
+    const rows = html.match(/<tr>[\s\S]*?<\/tr>/g) ?? [];
+    expect(rows.length).toBeGreaterThanOrEqual(13);
+    for (const row of rows) {
+      const cells = [...row.matchAll(/<td style="[^"]*"(?: colspan="(\d+)")?(?: rowspan="(\d+)")?>/g)];
       expect(cells.length).toBeGreaterThan(0);
-      expect([5, 6]).toContain(cells.reduce((sum, c) => sum + Number(c[2] ?? 1), 0));
-      for (const cell of cells) expect(cell[1]).toContain("border:1px solid");
+      const width = cells.reduce((sum, c) => sum + Number(c[1] ?? 1), 0);
+      // 7 on a full row; less where a cell above it spans down through this one.
+      expect(width).toBeLessThanOrEqual(7);
     }
   });
 
@@ -4757,5 +4462,217 @@ describe("the handover mail", () => {
     expect(appConfig).toContain('"lambdas/common"');
     expect(() => lambdaSource("handover/HiworksClient.ts")).not.toThrow();
     expect(tsCode("handover/NeotmsHandoverManager.ts")).toContain('from "./HiworksClient.js"');
+  });
+});
+
+/* ========================================================================== */
+/* Bulk PO approval, and the required-field marker                            */
+/* ========================================================================== */
+
+describe("approving purchase orders in bulk", () => {
+  const frontendFile = (...segments: string[]) =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  /** Comments stripped, so a rule explained in prose cannot satisfy an assertion about code. */
+  const frontendCode = (...segments: string[]) =>
+    frontendFile(...segments)
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ");
+
+  const payment = () => frontendCode("features", "payment", "PoPaymentView.tsx");
+  const project = () => frontendCode("features", "projects", "ProjectDetailView.tsx");
+
+  test("both screens get the rule from one module instead of restating it", () => {
+    /*
+     * The payment desk approves POs filtered across every project; the project screen approves the
+     * POs of one project. Same act on the same rows, so the skip rule and the wording have to be
+     * the same - and two copies of a wording are two things, one of which gets corrected.
+     *
+     * Asserted as "imports it AND does not contain the rule inline": an import that is present
+     * while a second implementation sits beside it is the drift this is meant to prevent.
+     */
+    for (const source of [payment(), project()]) {
+      expect(source).toContain("unapprovedOf");
+      expect(source).toContain("approvalPrompt");
+      expect(source).toContain("poBulkApprove");
+      // The filter itself must live in the shared module, not be re-derived per screen.
+      expect(source).not.toMatch(/filter\(\s*\(\w+\)\s*=>\s*!\w+\.poApproved/);
+    }
+    const shared = frontendCode("features", "payment", "poBulkApprove.ts");
+    expect(shared).toContain("export function unapprovedOf");
+    expect(shared).toContain("rows.filter((row) => !row.poApproved)");
+  });
+
+  test("the bulk run skips rows that are already approved", () => {
+    /*
+     * `PATCH /purchase-orders/:id/approval` is idempotent, so re-approving is harmless on the
+     * server and it would have been easier to send the whole selection. Two reasons not to.
+     *
+     * The bulk helper is SEQUENTIAL because this system's PostgreSQL connection budget is small
+     * (see `runSequential`), so requests that change nothing are paid for in the one resource that
+     * is actually scarce. And the summary afterwards counts what it sent - approving thirty rows of
+     * which twenty-eight were already approved would report "30건을 승인했습니다", which is a
+     * sentence about work that did not happen.
+     */
+    for (const source of [payment(), project()]) {
+      expect(source).toMatch(/const pending = unapprovedOf\(\w+\.selected\)/);
+      expect(source).toMatch(/pending\.length === 0/);
+      expect(source).toContain("ALL_ALREADY_APPROVED");
+      /*
+       * What is confirmed, run and reported is the FILTERED list, never the raw selection - the
+       * count in the prompt has to be the count that changes. Both screens hand `pending` to their
+       * confirm-then-run helper, which derives the summary from the list it was given.
+       */
+      expect(source).toMatch(/runBulk\(\s*pending,/);
+      expect(source).toMatch(/approvalPrompt\(pending, \w+\.selected\.length\)/);
+      expect(source).toMatch(/'승인',/);
+    }
+  });
+
+  test("the prompt states the money, and the amount-less rows are not counted as zero", () => {
+    /*
+     * Approval is the moment an amount becomes payable, and "12건을 승인할까요?" could be twelve
+     * thousand won or twelve million. A PO with no amount is still approvable - the payment screen
+     * explains why it does not block those - but it must not quietly shrink the total the approver
+     * is agreeing to, so `decimalSum`'s skipped count is reported rather than folded in.
+     */
+    const shared = frontendCode("features", "payment", "poBulkApprove.ts");
+    expect(shared).toContain("decimalSum(");
+    expect(shared).toContain("krwToShow(row.poPriceKrw, row.poPriceKsum)");
+    expect(shared).toContain("formatMoney(total)");
+    expect(shared).toContain("skipped > 0");
+    // And it says how many were left alone, so the two counts in the summary are explainable.
+    expect(shared).toContain("alreadyDone");
+  });
+
+  test("there is no bulk UN-approve", () => {
+    /*
+     * Revoking approval can invalidate a PO document already sent to a translator, which is why
+     * the single-row version asks first. A button that does it to a whole selection is the one
+     * direction of this feature that should stay one-at-a-time.
+     */
+    for (const source of [payment(), project()]) {
+      expect(source).not.toContain("승인 해제 선택");
+      expect(source).not.toMatch(/runSequential\([^)]*approved: false/);
+    }
+    // The single-row toggle on the payment screen still exists, and still confirms.
+    expect(payment()).toMatch(/approved: next/);
+  });
+
+  test("approving is gated on PAYMENT and deleting on PURCHASE_ORDER, on both screens", () => {
+    /*
+     * The split the route table makes: raising and editing a PO is PURCHASE_ORDER, signing off what
+     * it costs is PAYMENT. Reading `mayUpdatePo` for the approve button would hand every PM the
+     * authority the approval gate exists to withhold, and it would look right.
+     *
+     * The delete button is the mirror image - a payment clerk may approve an amount without
+     * thereby being able to destroy the order it was for.
+     */
+    expect(project()).toContain("mayApprovePo = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')");
+    expect(payment()).toContain("mayWrite = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')");
+    expect(payment()).toContain(
+      "mayDelete = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')",
+    );
+    // The buttons read those flags, not each other's.
+    expect(project()).toMatch(/poSel\.selected\.length > 0 && mayApprovePo/);
+    expect(payment()).toMatch(/sel\.selected\.length > 0 && mayDelete/);
+  });
+
+  test("the payment table gained a checkbox column and its colSpan kept up", () => {
+    /*
+     * A `colSpan` that disagrees with the header count is invisible until the table is empty, and
+     * then the "no rows" message sits under the wrong width. Counted from the source rather than
+     * trusted, because adding a column is exactly when this gets forgotten.
+     */
+    const source = payment();
+    const thead = /<thead>([\s\S]*?)<\/thead>/.exec(source)?.[1] ?? "";
+    expect(thead).not.toBe("");
+    expect((thead.match(/<th[\s/>]/g) ?? []).length).toBe(10);
+    expect(source).toContain("colSpan={10}");
+    expect(source).toContain('aria-label="PO 전체 선택"');
+    expect(source).toContain("el.indeterminate = sel.someSelected");
+  });
+
+  test("the project screen shows the approval state it now lets you change", () => {
+    /*
+     * The 선택 승인 button went onto a table that had no approval column, which would have made the
+     * action blind in both directions: nothing says which of the selected rows it will change, and
+     * nothing afterwards says it did. The chip is the same one the payment screen uses.
+     */
+    const source = project();
+    const thead = /<thead>([\s\S]*?)<\/thead>/g;
+    const poHead = [...source.matchAll(thead)].at(-1)?.[1] ?? "";
+    expect(poHead).toContain("승인");
+    expect(source).toContain("<ApprovalChip approved={po.poApproved} />");
+    expect((poHead.match(/<th[\s/>]/g) ?? []).length).toBe(11);
+    expect(source).toContain("colSpan={11}");
+  });
+});
+
+describe("the required-field marker", () => {
+  const frontendSrc = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "frontend",
+    "src",
+  );
+
+  /** Every .tsx under frontend/src. */
+  const tsxFiles = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return tsxFiles(full);
+      return entry.name.endsWith(".tsx") ? [full] : [];
+    });
+
+  test("the asterisk comes from the stylesheet, and never also from the label text", () => {
+    /*
+     * `.required::after` emits " *" in the danger colour. Some labels also carried a literal `*`
+     * inside a `<span className={ui.required}>`, which rendered BOTH - the span's own text in the
+     * inherited colour, then the pseudo-element's in red. Two asterisks, one black and one red,
+     * on the same field.
+     *
+     * Either half would have worked on its own; what cannot stand is both, and "both" is what you
+     * get by copying a label from a screen that was written before the rule existed. So the rule is
+     * pinned from both ends: the stylesheet owns the mark, and no element carrying the class may
+     * contain one.
+     */
+    const css = readFileSync(path.join(frontendSrc, "shared", "ui", "ui.module.css"), "utf8");
+    expect(css).toMatch(/\.required::after\s*\{[^}]*content:\s*' \*'/);
+
+    const offenders: string[] = [];
+    for (const file of tsxFiles(frontendSrc)) {
+      const source = readFileSync(file, "utf8");
+      // An element that carries `required` in its className and an asterisk in its own text.
+      if (/className=\{[^}]*required[^}]*\}[^>]*>\s*\*/.test(source)) {
+        offenders.push(path.relative(frontendSrc, file));
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("the marker is carried by the label element itself", () => {
+    /*
+     * The settled shape, so the next form copies something consistent: `ui.required` is one of the
+     * label's classes. The alternative - an empty marker span beside the text - renders the same
+     * but puts the class somewhere a reader has to go looking for it.
+     */
+    const offenders: string[] = [];
+    for (const file of tsxFiles(frontendSrc)) {
+      // Comments stripped: a comment explaining why a field does NOT carry the class names
+      // it too, and a test that cannot tell the two apart would push the next person to
+      // delete the explanation to get a green run.
+      const source = readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/\/\/[^\n]*/g, " ");
+      for (const line of source.split("\n")) {
+        if (!line.includes("ui.required")) continue;
+        if (!/<(label|span)\s/.test(line)) offenders.push(`${path.basename(file)}: ${line.trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

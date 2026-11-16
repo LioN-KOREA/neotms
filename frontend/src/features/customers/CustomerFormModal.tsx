@@ -132,8 +132,8 @@ export function CustomerFormModal({ customer, onClose, onSaved }: Props) {
 
       <div className={ui.formGrid}>
         <div className={ui.fieldWide}>
-          <label className={ui.label} htmlFor="cus-name">
-            고객사명 <span className={ui.required}>*</span>
+          <label className={`${ui.label} ${ui.required}`} htmlFor="cus-name">
+            고객사명
           </label>
           <input
             id="cus-name"

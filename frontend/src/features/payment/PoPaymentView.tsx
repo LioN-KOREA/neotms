@@ -1,18 +1,24 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
 import { useProfile, usePurchaseOrders } from '@/apis/queries/neotms.query'
-import { useApprovePurchaseOrder } from '@/apis/queries/neotms.mutation'
+import {
+  useApprovePurchaseOrder,
+  useDeletePurchaseOrder,
+} from '@/apis/queries/neotms.mutation'
 import { codeOptions, MONEY_STATES, PO_STATES } from '@/apis/neotms.codes'
 import type { PurchaseOrderRow } from '@/apis/neotms.types'
 import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { useRowSelection } from '@/shared/hooks/useRowSelection'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
 import { mayDo } from '@/shared/permissions'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { ApprovalChip, StatusChip } from '@/shared/ui/StatusChip'
+import { describeBulk, runSequential } from '@/shared/utils/bulk'
 import { dateKstOffsetDays, formatDate, formatDateTime } from '@/shared/utils/format'
 import { decimalSum, krwToShow } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
+import { ALL_ALREADY_APPROVED, approvalPrompt, unapprovedOf } from './poBulkApprove'
 import { PoDocButtons, type PoPrintRequest } from './print/PoDocButtons'
 import { PoPrintModal } from './print/PoPrintModal'
 import { SettlementModal } from './SettlementModal'
@@ -116,6 +122,14 @@ export function PoPaymentView() {
    * 보는 동작은 `update` 하나다 — PO 승인과 입금 기록이 그것이다.
    */
   const mayWrite = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')
+  /*
+   * Deleting a PO is PURCHASE_ORDER:delete, NOT a payment right, and the two are deliberately
+   * different people. Approving money is this screen's own authority; destroying the record of
+   * what was ordered is the PO owner's, and it is the same grant the project screen checks for
+   * the same button. A payment clerk who may sign off an amount does not thereby get to remove
+   * the order it was for.
+   */
+  const mayDelete = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')
 
   /**
    * 주소에 조건이 하나도 없으면 기본값으로 조회한다 — 머리글의 '기본값' 절 참고. 하나라도 있으면
@@ -149,6 +163,13 @@ export function PoPaymentView() {
   /** 지금 뽑으려는 PO 문서와 그 서식. 위 주석 참고 — 승인된 PO만 여기 들어온다. */
   const [printing, setPrinting] = useState<PoPrintRequest | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  /*
+   * Bulk failures are kept apart from `approve.error`. A bulk run is allowed to fail partway
+   * (see `runSequential`), so its error has to survive the mutation hook resetting itself on the
+   * next call - otherwise the one sentence explaining why three of thirty did not go through
+   * disappears the moment anything else is clicked.
+   */
+  const [bulkError, setBulkError] = useState<unknown>(null)
 
   /**
    * 뒤집힌 기간은 **막지 않고 알린다.** 서버는 `from > to` 를 빈 목록으로 돌려주고, 빈 목록은
@@ -168,8 +189,18 @@ export function PoPaymentView() {
     paidTo: onPaid ? chosen.to || undefined : undefined,
   })
   const approve = useApprovePurchaseOrder()
+  const deletePo = useDeletePurchaseOrder()
 
   const rows = useMemo(() => posQuery.data?.pages.flatMap((p) => p.items) ?? [], [posQuery.data])
+
+  /*
+   * Row selection. Stored as ids and intersected with the current rows on read - the reasoning
+   * is in `useRowSelection`, and it matters here more than anywhere: this screen's rows move
+   * under the selection constantly, because approving a PO while the filter says 'awaiting
+   * approval' removes it from the list.
+   */
+  const sel = useRowSelection(rows)
+  const busy = approve.isPending || deletePo.isPending
 
   /** 화면에 올라온 PO의 원가 합계. 승인 대기만 걸러 보면 "지금 결재를 기다리는 돈" 이 된다. */
   const cost = useMemo(
@@ -213,6 +244,69 @@ export function PoPaymentView() {
     )
   }
 
+  /*
+   * The two bulk actions, both through one confirm-then-run path.
+   *
+   * The shape is the project screen's `runBulk`, kept local to each screen rather than shared: if a
+   * third screen grows bulk actions it should move to `shared/utils/bulk.ts`, but two copies of
+   * fourteen lines is a smaller cost than a parameter object nobody can read. What matters is that
+   * within this file there is ONE route to a bulk write - a second hand-rolled loop is how one of
+   * them ends up without its confirmation.
+   *
+   * The rules it follows are `runSequential`'s: sequential because the connection budget is small,
+   * partial failure allowed because a refusal mid-run is normal, selection cleared afterwards so a
+   * stale id cannot be acted on twice, and a summary that counts what actually happened.
+   */
+  const runBulk = async <T,>(
+    chosen: readonly T[],
+    confirmText: string,
+    verb: string,
+    run: (row: T) => Promise<unknown>,
+  ) => {
+    if (chosen.length === 0) return
+    if (!window.confirm(confirmText)) return
+    setBulkError(null)
+    const result = await runSequential(chosen, run)
+    setBulkError(result.firstError)
+    setNotice(describeBulk(result, chosen.length, verb))
+    sel.clear()
+  }
+
+  /*
+   * Approval narrows the selection first - already-approved rows are dropped, so the number in the
+   * prompt is the number that will change. `poBulkApprove` holds that rule and the wording, shared
+   * with the project screen.
+   *
+   * There is deliberately no bulk UN-approve. Revoking can invalidate a PO document already sent to
+   * a translator, which is why the single-row version asks before doing it; a button that does that
+   * to thirty POs at once is the one direction of this feature that should stay one at a time.
+   */
+  const onBulkApprove = () => {
+    const pending = unapprovedOf(sel.selected)
+    if (sel.selected.length > 0 && pending.length === 0) {
+      setNotice(ALL_ALREADY_APPROVED)
+      return
+    }
+    return runBulk(
+      pending,
+      approvalPrompt(pending, sel.selected.length),
+      '승인',
+      (row) => approve.mutateAsync({ id: row.id, input: { approved: true } }),
+    )
+  }
+
+  const onBulkDelete = () =>
+    runBulk(
+      sel.selected,
+      `선택한 PO ${sel.selected.length}건을 삭제할까요?
+
+` +
+        '이 PO들의 원가가 집계에서 빠지고, 그만큼 마진이 올라갑니다. ' +
+        '이미 정산된 PO를 지우면 지급 기록도 함께 사라집니다.',
+      '삭제',
+      (row) => deletePo.mutateAsync(row.id),
+    )
+
   return (
     <div className={ui.page}>
       {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
@@ -225,10 +319,40 @@ export function PoPaymentView() {
 
       {notice ? <SuccessNotice>{notice}</SuccessNotice> : null}
       <ErrorNotice error={approve.error} />
+      {/* Separate from the one above - see the comment on `bulkError`. */}
+      <ErrorNotice error={bulkError} />
 
       <div className={ui.card}>
         <div className={ui.cardHeader}>
           <span>{rows.length}건 표시</span>
+          {/*
+           * The selected count, for the reason the project screen gives: with only checkboxes, a
+           * person scrolled halfway down a long list cannot tell how many they have picked, and
+           * both of these actions are hard to undo.
+           */}
+          {sel.selected.length > 0 ? (
+            <span className={ui.badge}>{sel.selected.length}건 선택</span>
+          ) : null}
+          {sel.selected.length > 0 && mayWrite ? (
+            <button
+              type="button"
+              className={`${ui.btn} ${ui.btnPrimary} ${ui.btnSm}`}
+              onClick={() => void onBulkApprove()}
+              disabled={busy}
+            >
+              선택 승인
+            </button>
+          ) : null}
+          {sel.selected.length > 0 && mayDelete ? (
+            <button
+              type="button"
+              className={`${ui.btn} ${ui.btnDanger} ${ui.btnSm}`}
+              onClick={() => void onBulkDelete()}
+              disabled={busy}
+            >
+              선택 삭제
+            </button>
+          ) : null}
           <span className={ui.spacer} />
           <span className={ui.hint}>
             표시된 {cost.counted}건 원가 합계 <Amount value={cost.total} kind="cost" />
@@ -378,6 +502,22 @@ export function PoPaymentView() {
           <table className={ui.table}>
             <thead>
               <tr>
+                {/*
+                 * The header checkbox carries `indeterminate` as well as `checked`, so a partial
+                 * selection looks partial. Without it a half-selected list shows an empty box and
+                 * there is no telling whether clicking it will select all or clear all.
+                 */}
+                <th className={ui.cellCheck}>
+                  <input
+                    type="checkbox"
+                    aria-label="PO 전체 선택"
+                    checked={sel.allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = sel.someSelected
+                    }}
+                    onChange={sel.toggleAll}
+                  />
+                </th>
                 <th>코드</th>
                 <th>PO명 · 작업</th>
                 <th>번역가</th>
@@ -405,10 +545,18 @@ export function PoPaymentView() {
                     ? '마감일이 오늘 ±30일인 승인된 PO가 없습니다. 기간이나 승인 여부를 바꿔 보세요.'
                     : '조건에 맞는 PO가 없습니다.'
                 }
-                colSpan={9}
+                colSpan={10}
               />
               {rows.map((row) => (
-                <tr key={row.id}>
+                <tr key={row.id} className={sel.isSelected(row.id) ? ui.rowSelected : ''}>
+                  <td className={ui.cellCheck}>
+                    <input
+                      type="checkbox"
+                      aria-label={`${row.poCode} 선택`}
+                      checked={sel.isSelected(row.id)}
+                      onChange={() => sel.toggle(row.id)}
+                    />
+                  </td>
                   <td className={ui.cellMono}>{row.poCode}</td>
                   <td>
                     <div>{row.poName || '(이름 없음)'}</div>

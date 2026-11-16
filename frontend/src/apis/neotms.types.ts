@@ -522,6 +522,13 @@ export interface HandoverMailInput {
   /** The recipient: the operating PM. */
   recipient: string
   /**
+   * 기타요청 - whatever the sales manager wants to add when sending.
+   *
+   * The one optional field here, and optional means an EMPTY STRING rather than an absent key:
+   * the row is part of the official form and is rendered blank when nothing was asked for.
+   */
+  note: string
+  /**
    * The caller's OWN Hiworks account. The mail goes out FROM THIS ACCOUNT.
    *
    * The server signs in once with these and discards them - never stored, never logged. The
