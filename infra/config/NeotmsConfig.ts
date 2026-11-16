@@ -7,8 +7,8 @@
 // enforce:
 //
 //   1. Nothing that is a secret appears here. The OIDC client is public (PKCE, no client secret -
-//      see 연동 안내서 §2), the database password is held in Secrets Manager and never in this repo,
-//      and the Mailgun key is read at cold start from Secrets Manager by name.
+//      see the account-system integration guide §2), the database password is held in and the
+//      Mailgun key is read at cold start from Secrets Manager by name.
 //   2. No wildcard CORS origin, not even in development. An over-broad origin on a cookie-bearing
 //      API is a session-theft primitive, and "we will tighten it later" never happens.
 
@@ -92,10 +92,10 @@ export interface NeotmsAuthConfig {
   /**
    * Where the browser lands after signing out. Must be registered on the client as a logout URL.
    *
-   * Also a frontend route (`/auth/logout`), and deliberately not `/`. Landing on the app root after
-   * a logout means the app immediately tries to bootstrap a session, fails, and shows the sign-in
-   * screen - which on a shared office machine is indistinguishable from "the logout did not work".
-   * A dedicated route can say "you are signed out" and nothing else.
+   * Also a frontend route (`/auth/logout`), and deliberately not `/`. Landing on the app root
+   * after a logout means the app immediately tries to bootstrap a session, fails, and shows the
+   * sign-in screen - which on a shared office machine is indistinguishable from "the logout did not
+   * work". A dedicated route can say "you are signed out" and nothing else.
    */
   readonly oidcPostLogoutRedirectUri: string;
   /**
@@ -110,12 +110,12 @@ export interface NeotmsAuthConfig {
    *
    * NEOTMS ships with an empty database, and an empty database cannot be signed into: the guard
    * refuses an identity that has no `staff` row, and no API route creates one. This authority is
-   * the way in - a holder gets a staff row minted with the 시스템관리자 (NEOTMS_SYSADMIN) role on
-   * first sign-in. See db/006_bootstrap.sql.
+   * the way in - a holder gets a staff row minted with the NEOTMS_SYSADMIN role on first sign-in.
+   * See db/006_bootstrap.sql.
    *
    * SET IT TO `""` TO REMOVE THE BACK DOOR once real administrators exist. Empty is a supported
-   * value, not a missing one: the Lambda's `isAuthConfigComplete()` does not check this field, so
-   * a blank disables the bootstrap without taking the API down. That is the whole reason it is a
+   * value, not a missing one: the Lambda's `isAuthConfigComplete()` does not check this field, so a
+   * blank disables the bootstrap without taking the API down. That is the whole reason it is a
    * configured value at all rather than a constant in the Lambda.
    */
   readonly bootstrapAuthorityId: string;
@@ -186,8 +186,8 @@ export interface NeotmsStageConfig {
   readonly logRetentionDays: number;
   readonly logGlacierAfterDays: number;
   /**
-   * Whether `RemovalPolicy.RETAIN` plus deletion protection apply. Off in development so a stack can
-   * be torn down; on in production so a bad `cdk destroy` cannot take the database with it.
+   * Whether `RemovalPolicy.RETAIN` plus deletion protection apply. Off in development so a stack
+   * can be torn down; on in production so a bad `cdk destroy` cannot take the database with it.
    */
   readonly protectData: boolean;
 }
@@ -213,8 +213,8 @@ const TMS_ACCESS_AUTHORITY_ID = "527c4c39-be80-4f70-8f3e-a334b809ce10";
  * LPX's own global administrator authority - the account that may bootstrap NEOTMS.
  *
  * A literal string rather than a UUID, unlike the authority above, and the difference is not
- * stylistic. LPX distinguishes SYSTEM authorities, which its own source code has to compare
- * against and which therefore carry stable hand-written ids in the `lpx.` namespace, from TENANT
+ * stylistic. LPX distinguishes SYSTEM authorities, which its own source code has to compare against
+ * and which therefore carry stable hand-written ids in the `lpx.` namespace, from TENANT
  * authorities created through its admin API, which get a server-generated UUID precisely so that
  * nothing can hardcode one. `lpx.admin.access` is the first kind.
  *
@@ -222,9 +222,9 @@ const TMS_ACCESS_AUTHORITY_ID = "527c4c39-be80-4f70-8f3e-a334b809ce10";
  * lambdas/common/layers/nodejs/configs/LpxAuthorities.ts. That file is LPX base code that NEOTMS
  * vendors but does not own: tsconfig.app.json excludes `lambdas/common` from the typecheck
  * entirely, because it imports Cognito and KMS SDK packages this project does not install. An
- * import here would therefore either fail to compile or drag those dependencies into a CDK app
- * that has no use for them. The duplication is three words long and the two files reference each
- * other, which is the cheaper trade.
+ * import here would therefore either fail to compile or drag those dependencies into a CDK app that
+ * has no use for them. The duplication is three words long and the two files reference each other,
+ * which is the cheaper trade.
  */
 const LPX_ADMIN_ACCESS_AUTHORITY_ID = "lpx.admin.access";
 
@@ -283,9 +283,9 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
      *
      * An FX rate is a fact about a currency, not about a deployment - there is no "development
      * exchange rate" - and the key is read-only against a public government API, so a development
-     * stack reading it cannot affect production. The alternative, a second KEXIM registration, means
-     * either the development stack has no rates at all (and the convert-to-KRW button cannot be
-     * tested) or somebody maintains two keys for one public data feed.
+     * stack reading it cannot affect production. The alternative, a second KEXIM registration,
+     * means either the development stack has no rates at all (and the convert-to-KRW button cannot
+     * be tested) or somebody maintains two keys for one public data feed.
      */
     fx: { secretName: "neotms/erapikey", scheduleMinutes: 5 },
     logRetentionDays: 30,
@@ -330,8 +330,8 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
        * On in production too, which deserves a sentence rather than being noticed in review.
        *
        * The argument for leaving it off here is that production is where a back door costs the
-       * most. The argument that wins is that production is also where the empty-database lockout
-       * is unrecoverable: there is no API route and no screen that writes a `staff` row, so a
+       * most. The argument that wins is that production is also where the empty-database lockout is
+       * unrecoverable: there is no API route and no screen that writes a `staff` row, so a
        * production stack deployed against a fresh Supabase project with this blank can only be
        * opened by someone with the database password and a psql client. That is not a safety
        * property, it is a different and worse failure.
@@ -366,10 +366,10 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
  * The auth settings that may be overridden at synth time with `-c key=value`.
  *
  * These five are exactly the values that are REGISTERED SOMEWHERE ELSE - on the LPX server - rather
- * than chosen here. That is the criterion for being on this list, and it is why the pooler port, log
- * retention and bucket names are not: those are decisions this repo owns, so changing them should be
- * a reviewed commit, not a flag somebody typed once. (The Supabase project ref and pooler host meet
- * the same criterion and have their own list below.)
+ * than chosen here. That is the criterion for being on this list, and it is why the pooler port,
+ * log retention and bucket names are not: those are decisions this repo owns, so changing them
+ * should be a reviewed commit, not a flag somebody typed once. (The Supabase project ref and pooler
+ * host meet the same criterion and have their own list below.)
  *
  * The practical case is a production deploy. Production deliberately ships `authClientId` and both
  * URIs empty, because they depend on a hostname that is not decided yet; without an override the
@@ -382,12 +382,12 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
  *
  * `bootstrapAuthorityId` is NOT on this list, even though it is also an id LPX owns, and the reason
  * is in `readStringOverride` below: it REJECTS a blank value, on the stated grounds that every
- * setting on these lists disables the API when blank. `bootstrapAuthorityId` is the one auth setting
- * where blank is a supported mode - it means "no back door" - so `-c bootstrapAuthorityId=` could
- * never be how the bootstrap gets turned off, and a list entry that cannot express the only
- * operation anybody would reach for is worse than no entry. Closing the door is an edit to the stage
- * value above, which is the reviewed commit we want for removing an administrative bypass anyway.
- * db/006_bootstrap.sql section 5 tells the operator the same thing.
+ * setting on these lists disables the API when blank. `bootstrapAuthorityId` is the one auth
+ * setting where blank is a supported mode - it means "no back door" - so `-c bootstrapAuthorityId=`
+ * could never be how the bootstrap gets turned off, and a list entry that cannot express the only
+ * operation anybody would reach for is worse than no entry. Closing the door is an edit to the
+ * stage value above, which is the reviewed commit we want for removing an administrative bypass
+ * anyway. db/006_bootstrap.sql section 5 tells the operator the same thing.
  */
 export const NEOTMS_AUTH_CONTEXT_KEYS = [
   "authClientId",
@@ -430,8 +430,8 @@ export interface NeotmsContextLookup {
 /**
  * One context value, or `undefined` to keep the stage default.
  *
- * Context reaches a CDK app from four places, only one of which is a command line: `-c` flags,
- * the `context` block in cdk.json, cdk.context.json, and `CDK_CONTEXT_JSON`. The cdk.json block is
+ * Context reaches a CDK app from four places, only one of which is a command line: `-c` flags, the
+ * `context` block in cdk.json, cdk.context.json, and `CDK_CONTEXT_JSON`. The cdk.json block is
  * where the type check earns its keep - it is a wall of feature flags whose values are all `true`,
  * so a key added there by analogy with its neighbours is a realistic mistake. Written into the
  * Lambda's environment a boolean arrives as the string `"true"`, which is non-empty, so
@@ -470,13 +470,12 @@ function readStringOverride(
 /**
  * The config for a stage, with any `-c` overrides applied to the auth block.
  *
- *   cdk deploy -c supabaseProjectRef=abcdefghijklmnopqrst \     dev, pointed at a Supabase project
+ *   cdk deploy -c supabaseProjectRef=abcdefghijklmnopqrst \ dev, pointed at a Supabase project
  *     -c supabasePoolerHost=aws-0-ap-northeast-2.pooler.supabase.com
- *   cdk deploy -c stage=prod \                      production, auth supplied at deploy time
- *     -c authClientId=... \
- *     -c oidcRedirectUri=https://tms.example/auth/callback \
- *     -c oidcPostLogoutRedirectUri=https://tms.example/auth/logout \
- *     -c supabaseProjectRef=... -c supabasePoolerHost=...
+ *   cdk deploy -c stage=prod \ production, auth supplied at deploy time
+ *     -c authClientId=... \ -c oidcRedirectUri=https://tms.example/auth/callback \ -c
+ *     oidcPostLogoutRedirectUri=https://tms.example/auth/logout \ -c supabaseProjectRef=... -c
+ *     supabasePoolerHost=...
  *
  * Returns a COPY, two levels deep. `NEOTMS_CONFIGS` is module state shared by every caller
  * including the tests, so applying overrides in place would make one synth leak into the next - and

@@ -2,22 +2,23 @@
 //
 // Sign-in, refresh and sign-out against the account system's OpenID Connect provider.
 //
-// The shape follows 연동 안내서 §2-§4: authorization code + PKCE, with the code exchange and every
-// refresh done HERE, on the backend. The refresh token is a 24-hour credential, so it never reaches
-// the browser - the browser gets a short-lived access token (kept in memory) and an HttpOnly session
-// cookie, and comes back to /api/auth/refresh for the next access token.
+// The shape follows §2-§4 of the account-system integration guide: authorization code + PKCE, with
+// the code exchange and every refresh done HERE, on the backend. The refresh token is a 24-hour
+// credential, so it never reaches the browser - the browser gets a short-lived access token (kept
+// in memory) and an HttpOnly session cookie, and comes back to /api/auth/refresh for the next
+// access token.
 //
 // The protocol itself is left to openid-client (discovery, PKCE, state/nonce checks, the token
 // endpoint). What is written out here is what a library cannot know: where this app keeps the
 // verifier and the session, and how refreshes are serialised.
 //
-//   GET  /api/auth/login    -> 302 to /authorize; the PKCE verifier, state and nonce go into a
+//   GET /api/auth/login -> 302 to /authorize; the PKCE verifier, state and nonce go into a
 //                              short-lived HttpOnly cookie.
-//   POST /api/auth/session  -> the callback. The browser lands on the registered redirect URI and
+//   POST /api/auth/session -> the callback. The browser lands on the registered redirect URI and
 //                              posts the query it received; the code is exchanged with the verifier
 //                              from the cookie, and a session is created.
-//   POST /api/auth/refresh  -> the current access token for this session, rotating if needed.
-//   POST /api/auth/logout   -> revoke and forget the session; answers with the /logout URL the
+//   POST /api/auth/refresh -> the current access token for this session, rotating if needed. POST
+//   /api/auth/logout -> revoke and forget the session; answers with the /logout URL the
 //                              browser must navigate to, so the SSO session ends too.
 //
 // Deliberately absent from the session response: the staff profile, the role and the menu matrix.

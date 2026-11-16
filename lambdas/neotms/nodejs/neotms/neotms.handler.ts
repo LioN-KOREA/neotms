@@ -4,8 +4,8 @@
 //
 // One function serves the whole API (see NeotmsApi.ts for why), so this file is where the request
 // stops being HTTP and becomes a domain call. Three concerns are centralised here rather than
-// repeated in each handler, and in each case the reason is that the repeated version WILL eventually
-// be forgotten on one route - and a forgotten check is invisible until it is exploited:
+// repeated in each handler, and in each case the reason is that the repeated version WILL
+// eventually be forgotten on one route - and a forgotten check is invisible until it is exploited:
 //
 //   1. **CORS.** Every answer gets the headers, including refusals. A 401 without them reads to the
 //      browser as a network failure, so the UI cannot tell "sign in again" from "the API is down".
@@ -135,10 +135,10 @@ const ALLOWED_CORS_METHODS = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"];
 /*
  * `Retry-After` is exposed so the UI can honour it.
  *
- * The cluster pauses when idle, so the first request of the morning can legitimately answer 503 with
- * a retry hint. A header the browser hides from the page is a header the retry logic cannot read,
- * and the fallback - a fixed retry delay guessed in the client - is how a two-second wake-up becomes
- * a thirty-second one.
+ * The cluster pauses when idle, so the first request of the morning can legitimately answer 503
+ * with a retry hint. A header the browser hides from the page is a header the retry logic cannot
+ * read, and the fallback - a fixed retry delay guessed in the client - is how a two-second wake-up
+ * becomes a thirty-second one.
  */
 const EXPOSED_CORS_HEADERS = ["Retry-After"];
 
@@ -152,10 +152,10 @@ export const CALLER_CONTEXT_KEY = "caller";
 /**
  * The caller the guard resolved for this request.
  *
- * Throws rather than returning null. A handler on an authenticated path cannot run without a caller,
- * so a missing one is a routing bug - a route placed outside the guarded prefix - and it has to fail
- * loudly in a test rather than quietly become an unauthenticated code path. The throw is caught in
- * `index.ts` and answered as a 500.
+ * Throws rather than returning null. A handler on an authenticated path cannot run without a
+ * caller, so a missing one is a routing bug - a route placed outside the guarded prefix - and it
+ * has to fail loudly in a test rather than quietly become an unauthenticated code path. The throw
+ * is caught in `index.ts` and answered as a 500.
  */
 export function callerOf(request: RequestData): NeotmsCaller {
   const caller = request.context.get(CALLER_CONTEXT_KEY);
@@ -199,10 +199,9 @@ const writeContext = (request: RequestData): WriteContext => ({
  * The record id from the path, or null if it is not one.
  *
  * Ids are bigints and reach PostgreSQL on a placeholder cast to `bigint`, so a path of
- * `/customers/abc`
- * would otherwise fail inside PostgreSQL and surface as a 500 - an invalid URL reported as a server
- * fault. Checked here instead, as a shape check only: whether the row exists, and whether this
- * caller may see it, are questions for the query.
+ * `/customers/abc` would otherwise fail inside PostgreSQL and surface as a 500 - an invalid URL
+ * reported as a server fault. Checked here instead, as a shape check only: whether the row exists,
+ * and whether this caller may see it, are questions for the query.
  */
 const recordId = (request: RequestData): string | null => {
   const raw = (request.pathParams["id"] ?? "").trim();
@@ -234,8 +233,8 @@ const handleGetProfile: RRHandler = async (request) => getProfile(identityOf(req
  * The sign-up form. The other account-only route, and the only write in this table with no actor.
  *
  * `clientInet(request.headers)` rather than `writeContext(request)`: a `WriteContext` carries the
- * caller's `mgrId` for `created_by`, and there is no caller here - `writeContext` would throw inside
- * `callerOf`. `staff_self_register()` writes `created_by` itself, as the literal marker
+ * caller's `mgrId` for `created_by`, and there is no caller here - `writeContext` would throw
+ * inside `callerOf`. `staff_self_register()` writes `created_by` itself, as the literal marker
  * 'self-registration'.
  */
 const handleRegisterSelf: RRHandler = async (request) => {
@@ -245,7 +244,7 @@ const handleRegisterSelf: RRHandler = async (request) => {
     : parsed.response;
 };
 
-/* 고객사 - customers. Not row-scoped: the customer master is shared company-wide. */
+/* Customers. Not row-scoped: the customer master is shared company-wide. */
 const handleListCustomers: RRHandler = async (request) => listCustomers(request);
 
 const handleGetCustomer: RRHandler = async (request) => {
@@ -270,7 +269,7 @@ const handleDeleteCustomer: RRHandler = async (request) => {
   return id ? deleteCustomer(id, writeContext(request)) : NOT_A_RECORD_ID;
 };
 
-/* 번역가 - translators. Also shared: a vendor belongs to the company, not to a PM. */
+/* Translators. Also shared: a vendor belongs to the company, not to a PM. */
 const handleListTranslators: RRHandler = async (request) => listTranslators(request);
 
 const handleGetTranslator: RRHandler = async (request) => {
@@ -296,11 +295,12 @@ const handleDeleteTranslator: RRHandler = async (request) => {
 };
 
 /*
- * 프로젝트 / 작업 / 발주 - the revenue and cost chain, and the row-scoped part of the API.
+ * Projects, jobs and purchase orders - the revenue and cost chain, and the row-scoped part of the
+ * API.
  *
- * Every one of these takes the caller, because the caller decides which rows the query can see. That
- * is the LKTMS defect being closed: there, the detail screens took an id and returned the row to
- * anyone who asked.
+ * Every one of these takes the caller, because the caller decides which rows the query can see.
+ * That is the LKTMS defect being closed: there, the detail screens took an id and returned the row
+ * to anyone who asked.
  */
 const handleListProjects: RRHandler = async (request) => listProjects(callerOf(request), request);
 
@@ -331,10 +331,10 @@ const handleDeleteProject: RRHandler = async (request) => {
 };
 
 /*
- * 인계메일 - hand a project over to its operating PM by mail.
+ * Handover mail - hand a project over to its operating PM by mail.
  *
  * No `writeContext`. Nothing in this database changes: the handler reads a project and its jobs,
- * folds them into the form on page 3 of 인계 기능_261111.docx, and posts it through the CALLER'S OWN
+ * folds them into the form on page 3 of the handover spec, and posts it through the CALLER'S OWN
  * Hiworks account with credentials that live only in this request. There is no row to stamp a
  * `created_by` on, and inventing one would claim a record exists that does not.
  *
@@ -408,12 +408,12 @@ const handleDeletePurchaseOrder: RRHandler = async (request) => {
 };
 
 /*
- * 결제 - the translator invoice, PO approval, and PO settlement.
+ * Payment - the translator invoice, PO approval, and PO settlement.
  *
- * All six are gated on `PAYMENT` rather than on `PURCHASE_ORDER`, and the two PO ones are the reason
- * the menu exists: `PATCH /purchase-orders/:id` cannot touch `po_approved` (no `PO_FIELDS` spec) and
- * cannot record money (not in `PoSettlementSchema`'s six columns under that gate), so raising a PO
- * and signing off its amount are two grants. NeotmsMenus.PAYMENT argues it at length.
+ * All six are gated on `PAYMENT` rather than on `PURCHASE_ORDER`, and the two PO ones are the
+ * reason the menu exists: `PATCH /purchase-orders/:id` cannot touch `po_approved` (no `PO_FIELDS`
+ * spec) and cannot record money (not in `PoSettlementSchema`'s six columns under that gate), so
+ * raising a PO and signing off its amount are two grants. NeotmsMenus.PAYMENT argues it at length.
  *
  * Note the paths. Approval and settlement are static trailing segments on the PO resource
  * (`/purchase-orders/:id/approval`) rather than routes of their own under `/payment/`, because they
@@ -472,17 +472,18 @@ const handleSettlePurchaseOrder: RRHandler = async (request) => {
     : parsed.response;
 };
 
-/* 보고서 - the reports. Gated on their own menu, not on the menus they aggregate. */
+/* Reports. Gated on their own menu, not on the menus they aggregate. */
 const handleRunReport: RRHandler = async (request) => runReport(callerOf(request), request);
 const handleGetWorkload: RRHandler = async (request) => getWorkload(callerOf(request), request);
 
 /*
- * 대시보드 - the caller's own book, 영업 or PM.
+ * Dashboard - the caller's own book, sales or PM.
  *
- * **Two handlers rather than one reading `?as=`.** Each carries its role as a literal, which is what
- * lets the two routes below declare a menu each: this API declares authorization only in the route
- * table and only per path, so a gate that varied by query parameter could not be declared there at
- * all. The role being un-forgeable is the second benefit - see NeotmsDashboardManager's header.
+ * **Two handlers rather than one reading `?as=`.** Each carries its role as a literal, which is
+ * what lets the two routes below declare a menu each: this API declares authorization only in the
+ * route table and only per path, so a gate that varied by query parameter could not be declared
+ * there at all. The role being un-forgeable is the second benefit - see NeotmsDashboardManager's
+ * header.
  *
  * Gated on DASHBOARD_SALES / DASHBOARD_PM rather than on REPORT, which is the opposite of the two
  * routes above. The reasoning is in NeotmsMenus: a report aggregates other people's work within the
@@ -494,21 +495,21 @@ const handleGetSalesDashboard: RRHandler = async (request) =>
 const handleGetPmDashboard: RRHandler = async (request) => getDashboard(callerOf(request), "pm");
 
 /*
- * 코드 - the code tables, in two halves.
+ * Codes - the code tables, in two halves.
  *
  * The read is `anyStaff` and the writes are MAINTENANCE, which is the whole reason there are two
  * listings instead of one with a flag: 22 columns across the schema FK to `sys_code`, so every form
  * in the application needs this list to render its dropdowns, while deciding what the company's
- * 분야 taxonomy IS belongs to whoever runs the system.
+ * subject-field taxonomy IS belongs to whoever runs the system.
  *
  * None of these take the caller. There is nothing row-scoped about a code table - a PM and a
- * director see the same 분야 list - so there is no WHERE clause for a scope to narrow.
+ * director see the same subject-field list - so there is no WHERE clause for a scope to narrow.
  */
 const handleListCodes: RRHandler = async () => listCodes();
 const handleListCodesForAdmin: RRHandler = async () => listCodesForAdmin();
 
 /*
- * 환율 - the current rate per currency.
+ * FX rates - the current rate per currency.
  *
  * Takes no caller for the same reason the code listings do not: a rate is a fact about a currency,
  * the same one for everybody, with no row-level scope to apply.
@@ -533,7 +534,7 @@ const handleDeleteCode: RRHandler = async (request) => {
 };
 
 /*
- * 사용자 관리 - the staff directory and role assignment.
+ * Staff administration - the staff directory and role assignment.
  *
  * The two reads take no caller, for the reason given in NeotmsStaffAdminManager: a staff directory
  * is not row-scoped, and an administrator who could not see a pending request could not approve it.
@@ -572,17 +573,17 @@ export type NeotmsRoute = {
   /**
    * Every signed-in staff member may call this, whatever their role grants.
    *
-   * Two routes carry it, and the test each had to pass is the same: a form in the application cannot
-   * render without it, and what it discloses is not worth gating.
+   * Two routes carry it, and the test each had to pass is the same: a form in the application
+   * cannot render without it, and what it discloses is not worth gating.
    *
-   *   * `GET /api/v0/codes` - the code tables. 분야, 작업 종류, 단가 단위 and 언어 fill dropdowns on
-   *     every form, so gating this on 유지보수 would leave a PM with the right to create a customer
-   *     looking at empty dropdowns. Reading a list of category names is not a privilege; deciding
-   *     what is IN the list is, and that is the `/admin/codes` half.
+   *   * `GET /api/v0/codes` - the code tables. Subject fields, work types, pricing units and
+   *     languages fill dropdowns on every form, so gating this on MAINTENANCE would leave a PM with
+   *     the right to create a customer looking at empty dropdowns. Reading a list of category names
+   *     is not a privilege; deciding what is IN the list is, and that is the `/admin/codes` half.
    *   * `GET /api/v0/fx-rates` - the current rate per currency. The job and PO forms convert a
-   *     foreign-currency total to KRW on the client, so without this the 원화로 환산 button cannot
-   *     show the figure it is about to commit. An exchange rate published daily by a state bank is
-   *     not company information, so there is nothing here to protect.
+   *     foreign-currency total to KRW on the client, so without this the convert-to-KRW button
+   *     cannot show the figure it is about to commit. An exchange rate published daily by a state
+   *     bank is not company information, so there is nothing here to protect.
    *
    * It has to exist as an explicit flag rather than as "no menu declared", because "no menu
    * declared" is also what a route whose author forgot looks like - and those two must not be the
@@ -615,34 +616,35 @@ const PROJECTS = "/api/v0/projects";
 const JOBS = "/api/v0/jobs";
 const PURCHASE_ORDERS = "/api/v0/purchase-orders";
 /*
- * 결제 - the translator invoices.
+ * Payment - the translator invoices.
  *
- * `/invoices` rather than `/payment/invoices`, even though the menu is 결제. The path names the
+ * `/invoices` rather than `/payment/invoices`, even though the menu is PAYMENT. The path names the
  * RESOURCE and the route's `menu` names the authority, and conflating them would make the URL a
- * second, undeclared statement of who may call it - which is the shape that goes stale. The PO's own
- * two money actions stay on `/purchase-orders/:id/...` for the same reason: they act on a PO.
+ * second, undeclared statement of who may call it - which is the shape that goes stale. The PO's
+ * own two money actions stay on `/purchase-orders/:id/...` for the same reason: they act on a PO.
  *
  * `/invoices` and not `/translator-invoices`, because the customer side of the chain
  * (`invoice_customer`) has no endpoints and is not planned to get any under this menu - it is
  * receivables, a different screen and a different authority. If it ever does, this becomes
- * `/invoices/translator` and `/invoices/customer`, and the rename is a one-line change here plus the
- * client's base path.
+ * `/invoices/translator` and `/invoices/customer`, and the rename is a one-line change here plus
+ * the client's base path.
  */
 const INVOICES = "/api/v0/invoices";
 /*
  * The code tables under two paths, deliberately.
  *
- * `/api/v0/codes` is the dropdown feed and `/api/v0/admin/codes` is the 유지보수 screen, and they
- * are two paths rather than one path with five methods because the authorization differs by HTTP
- * verb otherwise - which is a shape this routing table can express but a reader cannot audit at a
- * glance. With the split, "which endpoints need 유지보수" is answered by reading one prefix.
+ * `/api/v0/codes` is the dropdown feed and `/api/v0/admin/codes` is the maintenance screen, and
+ * they are two paths rather than one path with five methods because the authorization differs by
+ * HTTP verb otherwise - which is a shape this routing table can express but a reader cannot audit
+ * at a glance. With the split, "which endpoints need MAINTENANCE" is answered by reading one
+ * prefix.
  */
 const CODES = "/api/v0/codes";
 const ADMIN_CODES = "/api/v0/admin/codes";
 /*
  * The rate table. Read-only, and the second route on the `anyStaff` tier.
  *
- * There is deliberately no `/api/v0/admin/fx-rates` to go with it. The 유지보수 screen edits the
+ * There is deliberately no `/api/v0/admin/fx-rates` to go with it. The maintenance screen edits the
  * company's own taxonomy; an exchange rate is an upstream fact, and the one legitimate reason to
  * write one by hand - correcting a day the fetcher got wrong - moves every open position's reported
  * worth at once. That belongs in SQL, where it is deliberate, not behind a form.
@@ -652,11 +654,11 @@ const FX_RATES = "/api/v0/fx-rates";
  * Both under `/admin/`, both gated on STAFF, including the role listing.
  *
  * `/admin/roles` could have been `anyStaff` - a role's name is not a secret, and the sidebar
- * already tells the caller their own role. It is gated anyway because nothing except the 사용자 관리
- * screen reads it: an endpoint whose only consumer is an admin screen should be reachable only from
- * that screen, so that "who can enumerate the company's privilege tiers" stays a question with a
- * short answer. If a future screen needs role names for a non-admin audience, that is the moment to
- * split it the way `/codes` and `/admin/codes` are split - not before.
+ * already tells the caller their own role. It is gated anyway because nothing except the staff
+ * administration screen reads it: an endpoint whose only consumer is an admin screen should be
+ * reachable only from that screen, so that "who can enumerate the company's privilege tiers" stays
+ * a question with a short answer. If a future screen needs role names for a non-admin audience,
+ * that is the moment to split it the way `/codes` and `/admin/codes` are split - not before.
  */
 const ADMIN_STAFF = "/api/v0/admin/staff";
 const ADMIN_ROLES = "/api/v0/admin/roles";
@@ -677,60 +679,62 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: "/api/v0/me", method: "GET", handler: handleGetProfile, account: true },
   { path: "/api/v0/registration", method: "POST", handler: handleRegisterSelf, account: true },
 
-  // -- 코드 (dropdowns; authenticated, no menu) ------------------------------
+  // -- Codes (dropdowns; authenticated, no menu) ----------------------------
   { path: CODES, method: "GET", handler: handleListCodes, anyStaff: true },
 
-  // -- 환율 (the job and PO forms' conversion button; authenticated, no menu) -
+  // -- FX rates (the job and PO forms' conversion button) -------------------
   //
   // The second and last `anyStaff` route. A PM entitled to create a job must be able to price it in
-  // USD, so this is in the same category as the dropdown feed: something no form can render without.
+  // USD, so this is in the same category as the dropdown feed: something no form can render
+  // without.
   { path: FX_RATES, method: "GET", handler: handleListFxRates, anyStaff: true },
 
-  // -- 고객사 ---------------------------------------------------------------
+  // -- Customers ------------------------------------------------------------
   { path: CUSTOMERS, method: "GET", handler: handleListCustomers, menu: NeotmsMenu.CUSTOMER, action: "read" },
   { path: CUSTOMERS, method: "POST", handler: handleCreateCustomer, menu: NeotmsMenu.CUSTOMER, action: "create" },
   { path: `${CUSTOMERS}/:id`, method: "GET", handler: handleGetCustomer, menu: NeotmsMenu.CUSTOMER, action: "read" },
   { path: `${CUSTOMERS}/:id`, method: "PATCH", handler: handleUpdateCustomer, menu: NeotmsMenu.CUSTOMER, action: "update" },
   { path: `${CUSTOMERS}/:id`, method: "DELETE", handler: handleDeleteCustomer, menu: NeotmsMenu.CUSTOMER, action: "delete" },
 
-  // -- 번역가 ---------------------------------------------------------------
+  // -- Translators ----------------------------------------------------------
   { path: TRANSLATORS, method: "GET", handler: handleListTranslators, menu: NeotmsMenu.TRANSLATOR, action: "read" },
   { path: TRANSLATORS, method: "POST", handler: handleCreateTranslator, menu: NeotmsMenu.TRANSLATOR, action: "create" },
   { path: `${TRANSLATORS}/:id`, method: "GET", handler: handleGetTranslator, menu: NeotmsMenu.TRANSLATOR, action: "read" },
   { path: `${TRANSLATORS}/:id`, method: "PATCH", handler: handleUpdateTranslator, menu: NeotmsMenu.TRANSLATOR, action: "update" },
   { path: `${TRANSLATORS}/:id`, method: "DELETE", handler: handleDeleteTranslator, menu: NeotmsMenu.TRANSLATOR, action: "delete" },
 
-  // -- 프로젝트 -------------------------------------------------------------
+  // -- Projects -------------------------------------------------------------
   { path: PROJECTS, method: "GET", handler: handleListProjects, menu: NeotmsMenu.PROJECT, action: "read" },
   { path: PROJECTS, method: "POST", handler: handleCreateProject, menu: NeotmsMenu.PROJECT, action: "create" },
   { path: `${PROJECTS}/:id`, method: "GET", handler: handleGetProject, menu: NeotmsMenu.PROJECT, action: "read" },
   { path: `${PROJECTS}/:id`, method: "PATCH", handler: handleUpdateProject, menu: NeotmsMenu.PROJECT, action: "update" },
   { path: `${PROJECTS}/:id`, method: "DELETE", handler: handleDeleteProject, menu: NeotmsMenu.PROJECT, action: "delete" },
-  // 인계메일. A static trailing segment on the project resource, like `/purchase-orders/:id/approval`
-  // above - the id in the path says which project is being handed over. POST rather than PATCH
-  // because it changes nothing here; it performs an act whose result is a mail, not a row.
+  // Handover mail. A static trailing segment on the project resource, like
+  // `/purchase-orders/:id/approval` above - the id in the path says which project is being handed
+  // over. POST rather than PATCH because it changes nothing here; it performs an act whose result
+  // is a mail, not a row.
   { path: `${PROJECTS}/:id/handover-mail`, method: "POST", handler: handleSendHandoverMail, menu: NeotmsMenu.PROJECT, action: "read" },
 
-  // -- 작업 (revenue) -------------------------------------------------------
+  // -- Jobs (revenue) -------------------------------------------------------
   { path: JOBS, method: "GET", handler: handleListJobs, menu: NeotmsMenu.JOB, action: "read" },
   { path: JOBS, method: "POST", handler: handleCreateJob, menu: NeotmsMenu.JOB, action: "create" },
   { path: `${JOBS}/:id`, method: "GET", handler: handleGetJob, menu: NeotmsMenu.JOB, action: "read" },
   { path: `${JOBS}/:id`, method: "PATCH", handler: handleUpdateJob, menu: NeotmsMenu.JOB, action: "update" },
   { path: `${JOBS}/:id`, method: "DELETE", handler: handleDeleteJob, menu: NeotmsMenu.JOB, action: "delete" },
 
-  // -- 발주 (cost) ----------------------------------------------------------
+  // -- Purchase orders (cost) -----------------------------------------------
   { path: PURCHASE_ORDERS, method: "GET", handler: handleListPurchaseOrders, menu: NeotmsMenu.PURCHASE_ORDER, action: "read" },
   { path: PURCHASE_ORDERS, method: "POST", handler: handleCreatePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "create" },
   { path: `${PURCHASE_ORDERS}/:id`, method: "GET", handler: handleGetPurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "read" },
   { path: `${PURCHASE_ORDERS}/:id`, method: "PATCH", handler: handleUpdatePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "update" },
   { path: `${PURCHASE_ORDERS}/:id`, method: "DELETE", handler: handleDeletePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "delete" },
 
-  // -- 결제 (approval, settlement, translator invoices) ----------------------
+  // -- Payment (approval, settlement, translator invoices) ------------------
   //
   // Every row here is PAYMENT, and the two on the PO resource are why. A PO's amounts are edited on
   // PURCHASE_ORDER:update above; approving that amount and recording the money that left are this
-  // menu's `update`. Same resource, same id, different grant - which is only expressible as separate
-  // routes, because this table declares authorization per path.
+  // menu's `update`. Same resource, same id, different grant - which is only expressible as
+  // separate routes, because this table declares authorization per path.
   //
   // The action mapping is the one NeotmsMenus.PAYMENT documents: `read` sees the screens and the
   // printable documents, `update` approves and settles, `create` issues an invoice, `delete` voids
@@ -743,14 +747,14 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: `${INVOICES}/:id`, method: "PATCH", handler: handleUpdateInvoice, menu: NeotmsMenu.PAYMENT, action: "update" },
   { path: `${INVOICES}/:id`, method: "DELETE", handler: handleDeleteInvoice, menu: NeotmsMenu.PAYMENT, action: "delete" },
 
-  // -- 보고서 ---------------------------------------------------------------
+  // -- Reports --------------------------------------------------------------
   //
   // Both are GETs with their parameters in the query string, so a report a manager cares about can
   // be bookmarked and mailed to a colleague - which is what people currently do with screenshots.
   { path: "/api/v0/reports/summary", method: "GET", handler: handleRunReport, menu: NeotmsMenu.REPORT, action: "read" },
   { path: "/api/v0/reports/workload", method: "GET", handler: handleGetWorkload, menu: NeotmsMenu.REPORT, action: "read" },
 
-  // -- 대시보드 -------------------------------------------------------------
+  // -- Dashboards -----------------------------------------------------------
   //
   // A path and a menu per role, not one path with `?as=sales|pm`. This is the only table in which
   // this API says who may call what, and it says it per path - so "a person sees the dashboard that
@@ -763,7 +767,7 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: "/api/v0/dashboard/sales", method: "GET", handler: handleGetSalesDashboard, menu: NeotmsMenu.DASHBOARD_SALES, action: "read" },
   { path: "/api/v0/dashboard/pm", method: "GET", handler: handleGetPmDashboard, menu: NeotmsMenu.DASHBOARD_PM, action: "read" },
 
-  // -- 유지보수 (the code tables) --------------------------------------------
+  // -- Maintenance (the code tables) ----------------------------------------
   //
   // There is no `/admin/codes/:id` GET. The listing returns every code including the inactive ones
   // and the whole table is about sixty short rows, so a per-row read would only ever be used to
@@ -773,14 +777,14 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: `${ADMIN_CODES}/:id`, method: "PATCH", handler: handleUpdateCode, menu: NeotmsMenu.MAINTENANCE, action: "update" },
   { path: `${ADMIN_CODES}/:id`, method: "DELETE", handler: handleDeleteCode, menu: NeotmsMenu.MAINTENANCE, action: "delete" },
 
-  // -- 사용자 관리 (staff and roles) -----------------------------------------
+  // -- Staff administration (staff and roles) -------------------------------
   //
   // There is no POST and no DELETE here, and both absences are deliberate.
   //
   // No POST: an administrator cannot create a staff row. A staff row needs an `lpx_sub` to be
   // usable, so an admin-side INSERT would have to invent one - and a row with a made-up or absent
-  // subject is either dead weight or claimable by whoever next signs in with a matching email.
-  // Rows arrive from the legacy ETL or from `staff_self_register()`; the admin's job is to APPROVE,
+  // subject is either dead weight or claimable by whoever next signs in with a matching email. Rows
+  // arrive from the legacy ETL or from `staff_self_register()`; the admin's job is to APPROVE,
   // which is the PATCH.
   //
   // No DELETE: every historical project, job and purchase order carries this person's `mgr_id` in

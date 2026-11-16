@@ -4413,10 +4413,10 @@ describe("the handover mail", () => {
 
   test("the subject is 고객사 / 담당자 / 언어, with the blank 담당자 left out rather than left in", () => {
     /*
-     * 인계 기능_261111.docx: "고객사 / 담당자 / 언어로 정보 넣어져야". The 담당자 is deliberately
-     * blank for now (the request said so), and joining three parts with " / " regardless would
-     * produce `메타바이오메드 /  / 한국어-영어` - which reads as a subject with a word missing
-     * rather than as a field left empty on purpose.
+     * The handover spec: "the customer, the contact and the languages go in". The contact is
+     * deliberately blank for now (the request said so), and joining three parts with " / "
+     * regardless would produce `Acme /  / ko-en` - which reads as a subject with a word
+     * missing rather than as a field left empty on purpose.
      *
      * The subject separates the pair with `-` and the body with ` → `. That is not an
      * inconsistency waiting to be tidied: the document specifies the two separators separately,
@@ -4425,7 +4425,7 @@ describe("the handover mail", () => {
     const mail = composeHandoverMail(project(), [job()], WORD);
     expect(mail.subject).toBe("메타바이오메드 / 한국어-영어");
     expect(mail.subject).not.toContain(" /  / ");
-    // The 담당자 cell still exists in the body, empty. "Not recorded" and "this project has no
+    // The contact cell still exists in the body, empty. "Not recorded" and "this project has no
     // contact" are different statements, and only the empty cell makes the first one.
     expect(mail.html).toContain("거래처 / 담당자");
     expect(mail.html).not.toContain("이성준");
@@ -4444,11 +4444,12 @@ describe("the handover mail", () => {
 
   test("four or more target languages collapse to 다국어 in the subject but not in the body", () => {
     /*
-     * "타깃언어가 4개국어 이상일 경우 도착어는 '다국어'로 처리" - and that bullet sits under the
-     * 메일 제목 heading, which is why the body keeps the full list. The subject is for finding the
-     * mail later; the body is for doing the work, and nobody can plan from '다국어'.
+     * "when there are four or more target languages, write the target as multilingual" - and
+     * that bullet sits under the SUBJECT LINE heading, which is why the body keeps the full
+     * list. The subject is for finding the mail later; the body is for doing the work, and
+     * nobody can plan from one collapsed word.
      *
-     * Both sides of the boundary are pinned. Reading '4개국어 이상' as "more than four" is the
+     * Both sides of the boundary are pinned. Reading "four or more" as "more than four" is the
      * off-by-one this catches, and it would only ever be noticed by someone counting languages in
      * a sent mail.
      */
@@ -4465,8 +4466,9 @@ describe("the handover mail", () => {
 
   test("the language list is deduplicated and skips the jobs that have no language at all", () => {
     /*
-     * Five documents translated 한국어 → 영어 is one language pair, not five. A project shaped
-     * like that is ordinary, and listing the pair five times makes the subject unreadable.
+     * Five documents translated from one language into another is one language pair, not five.
+     * A project shaped like that is ordinary, and listing the pair five times makes the
+     * subject unreadable.
      *
      * MICE and IMC jobs are skipped outright. They have no `job_detail_linguistic` row, so both
      * columns are null; counting them would add an empty pair and the language cell would start
@@ -4515,11 +4517,12 @@ describe("the handover mail", () => {
   test("one shared deadline is one line; differing deadlines break into 언어: 납기 lines", () => {
     /*
      * The document's three steps. All the same -> one date. Dates differ -> one line per language.
-     * Times differ too -> each line carries its own (오전)/(오후).
+     * Times differ too -> each line carries its own morning/afternoon word in brackets.
      *
-     * The form's 오전/오후 cell is highlighted only while the half is UNIFORM. Colouring one of
-     * them on a mail whose languages are split between morning and afternoon would state something
-     * untrue about half the work, in the one place the reader would not think to doubt.
+     * The form's morning/afternoon cell is highlighted only while the half is UNIFORM.
+     * Colouring one of them on a mail whose languages are split between morning and afternoon
+     * would state something untrue about half the work, in the one place the reader would not
+     * think to doubt.
      */
     const same = [
       job({ jobEday: "2026-11-13", jobEdayTime: "15:00:00" }),
@@ -4540,9 +4543,9 @@ describe("the handover mail", () => {
 
   test("a missing delivery time highlights neither 오전 nor 오후", () => {
     /*
-     * The document says the job-list toggle defaults to 오후. That is a default for a control a
-     * person is about to set, not a licence to assert a time nobody recorded - a mail that says
-     * 오후 cannot be told apart from one where 오후 was actually agreed.
+     * The document says the job-list toggle defaults to afternoon. That is a default for a
+     * control a person is about to set, not a licence to assert a time nobody recorded - a mail
+     * that says afternoon cannot be told apart from one where afternoon was actually agreed.
      */
     const mail = composeHandoverMail(project({ prjEday: "2026-11-13" }), [], WORD);
     expect(deadlines([], project({ prjEday: "2026-11-13" })).half).toBeNull();
@@ -4553,8 +4556,8 @@ describe("the handover mail", () => {
   });
 
   test("the jobs' deadlines win over the project's, which is the outer fallback", () => {
-    // 납품요청일 is per language wherever the data allows it; the project header is the same rule's
-    // outer ring, not a different rule.
+    // The delivery date is per language wherever the data allows it; the project header is
+    // the same rule's outer ring, not a different rule.
     const html = composeHandoverMail(
       project({ prjEday: "2026-12-31" }),
       [job({ jobEday: "2026-11-13" })],
@@ -4566,7 +4569,8 @@ describe("the handover mail", () => {
 
   test("every option is drawn and only the chosen ones are coloured", () => {
     /*
-     * "편집포맷과 레이아웃은 항목 클릭하면 색칠 되도록(다수 가능) / 클릭으로 색/색없음 토글".
+     * "clicking an editing format or a layout colours it in (several allowed); clicking
+     * toggles colour and no colour".
      *
      * Printing only the chosen ones would leave a cell reading "WORD", which cannot be told from a
      * form on which HWP was never offered. The unchosen options being visible is what makes the
@@ -4590,13 +4594,14 @@ describe("the handover mail", () => {
 
   test("기타요청 carries the project's 내용, with its line breaks and without its markup", () => {
     /*
-     * The document says to leave 기타요청 blank for the PM to fill in. That was written for a
-     * copy-to-clipboard flow, where somebody saw the form before it was sent; this sends directly,
-     * so a blank cell would stay blank forever. The request redirected it to the project's 내용.
+     * The document says to leave the remarks cell blank for the PM to fill in. That was written
+     * for a copy-to-clipboard flow, where somebody saw the form before it was sent; this sends
+     * directly, so a blank cell would stay blank forever. The request redirected the project's
+     * own notes into it.
      *
-     * The escaping half is the one that fails silently. `</td><td>` inside 내용 closes the cell
-     * early and shifts every later value one column left - a mail that looks fine and puts real
-     * figures under the wrong headings.
+     * The escaping half is the one that fails silently. A closing cell tag inside those notes
+     * ends the cell early and shifts every later value one column left - a mail that looks
+     * fine and puts real figures under the wrong headings.
      */
     const mail = composeHandoverMail(
       project({ prjContent: "원문 PDF 2종\n<b>급건</b></td><td>주입" }),
@@ -4605,15 +4610,15 @@ describe("the handover mail", () => {
     );
     expect(mail.html).toContain("원문 PDF 2종<br>&lt;b&gt;급건&lt;/b&gt;&lt;/td&gt;&lt;td&gt;주입");
     expect(mail.html).not.toContain("<b>급건</b>");
-    // Nine rows, whatever anyone types into 내용.
+    // Nine rows, whatever anyone types into the notes.
     expect(mail.html.match(/<tr>/g) ?? []).toHaveLength(9);
   });
 
   test("담당PM is the jobs' PMs, and the project's PM only when no job names one", () => {
     /*
-     * "담당PM: 상세 프로젝트 선택한 건에서 해당 되는 PM명을 ', '로 구분해서 입력". A handover
-     * happens per job, so the people receiving the work are the job PMs; the project header's
-     * single PM answers a different question - who owns the project.
+     * "for the PM cell, list the PM names from the selected items, separated by commas". A
+     * handover happens per job, so the people receiving the work are the job PMs; the project
+     * header's single PM answers a different question - who owns the project.
      */
     const assigned = composeHandoverMail(
       project(),
@@ -4629,8 +4634,8 @@ describe("the handover mail", () => {
     /*
      * Six columns, set by the widest row (name + sub-heading + four formats). A row short of the
      * count makes the client guess widths and the form comes out as a staircase - borders present,
-     * verticals not lining up. The 납품형태 block's second row is five because the first lends it a
-     * cell through `rowspan`.
+     * verticals not lining up. The delivery-form block's second row is five because the first
+     * lends it a cell through `rowspan`.
      *
      * Inline styles because Gmail and Outlook strip `<style>`. Without the borders the form is a
      * run of prose, and then nothing says which value belongs to which label.

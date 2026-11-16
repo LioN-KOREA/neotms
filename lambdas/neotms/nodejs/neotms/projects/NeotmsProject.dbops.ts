@@ -20,8 +20,8 @@
 //
 // `cus_code_name`, `prj_mgr_name`, `prj_pm_name` and `cus_mgr_name` are maintained copies of values
 // this database already holds, kept so the list screen does not join four tables per row. None of
-// them is accepted from the request; each is written by a scalar subquery against the id the request
-// did send. See `DerivedSpec` in NeotmsWrite for why.
+// them is accepted from the request; each is written by a scalar subquery against the id the
+// request did send. See `DerivedSpec` in NeotmsWrite for why.
 
 import {
   param,
@@ -175,10 +175,10 @@ export type ProjectSortKey = keyof typeof PROJECT_SORTS;
 /**
  * Columns the free-text search covers. Every one of them has a PGroonga index (003_indexes.sql).
  *
- * The denormalised name columns earn their keep here: searching "삼성" finds the project through
- * `cus_code_name` without a join to `customer`, and searching a PM's name finds everything they are
- * on. That is the actual reason the copies exist - an index serves a column, not a join, so a
- * search that had to reach `customer.cus_name` through `prj_cus_id` could not use one at all.
+ * The denormalised name columns earn their keep here: searching a customer's name finds the project
+ * through `cus_code_name` without a join to `customer`, and searching a PM's name finds everything
+ * they are on. That is the actual reason the copies exist - an index serves a column, not a join,
+ * so a search that had to reach `customer.cus_name` through `prj_cus_id` could not use one at all.
  */
 const PROJECT_SEARCH_COLUMNS = [
   "p.prj_name",
@@ -207,14 +207,14 @@ export type ProjectFilters = Partial<Record<keyof typeof PROJECT_FILTERS, string
   /**
    * Inclusive start-date range, orthogonal to the deadline range above.
    *
-   * Two separate pairs rather than one pair plus a "which column?" flag, because the two readings of
-   * "find projects in this period" are different questions and both are legitimate. A flag can only
-   * express one of them at a time; two pairs express both, and the caller decides.
+   * Two separate pairs rather than one pair plus a "which column?" flag, because the two readings
+   * of "find projects in this period" are different questions and both are legitimate. A flag can
+   * only express one of them at a time; two pairs express both, and the caller decides.
    *
-   *   - Sending only `startFrom`/`startTo` asks "which projects *began* in March?" - the question a
-   *     sales manager asks when reviewing what was won that month.
-   *   - Sending only `dueFrom`/`dueTo` asks "which projects are *due* in March?" - the question a PM
-   *     asks when planning capacity.
+   *   - Sending only `startFrom`/ `startTo` asks "which projects *began* in March?" - the question
+   *     a sales manager asks when reviewing what was won that month.
+   *   - Sending only `dueFrom`/ `dueTo` asks "which projects are *due* in March?" - the question a
+   *     PM asks when planning capacity.
    *   - Sending both narrows to projects that started AND are due inside the window, i.e. the ones
    *     wholly contained in it. That is an AND because `mergeClauses` joins with AND, and it is the
    *     right default: a project that started in January and is due in June is not a March project
@@ -223,8 +223,8 @@ export type ProjectFilters = Partial<Record<keyof typeof PROJECT_FILTERS, string
    * What this deliberately does NOT express is the interval-overlap test ("touches March at all",
    * i.e. `prj_sday <= to AND prj_eday >= from`). That needs the two endpoints crossed over between
    * columns, which no combination of two independent ranges can produce. It is omitted because no
-   * screen asks for it today; if one ever does, it belongs here as a third, explicitly named pair
-   * (`overlapsFrom`/`overlapsTo`) rather than as a reinterpretation of these, so that an existing
+   * screen asks for it today; if one ever does, it belongs here as a third, explicitly named pair (
+   * `overlapsFrom`/ `overlapsTo`) rather than as a reinterpretation of these, so that an existing
    * caller's saved URL never silently changes meaning.
    */
   startFrom?: string;
@@ -280,8 +280,8 @@ export const ProjectListOps: (
  * One project, if this caller may see it.
  *
  * The scope predicate is here as well as on the list, and that is the whole point: a row-level rule
- * enforced only on the list endpoint is defeated by typing an id into the URL. The manager reports a
- * miss as 404 rather than 403, so this endpoint cannot be used to discover which ids exist.
+ * enforced only on the list endpoint is defeated by typing an id into the URL. The manager reports
+ * a miss as 404 rather than 403, so this endpoint cannot be used to discover which ids exist.
  */
 export const ProjectGetOps: (caller: NeotmsCaller, id: string) => SqlOps<ProjectRow | null> = (
   caller,
@@ -421,8 +421,8 @@ const PROJECT_FIELDS: readonly FieldSpec<ProjectUpdate>[] = [
  *
  * `deleted = false` on the customer subquery is not belt-and-braces. The foreign key only requires
  * that the customer row exists, and a soft-deleted customer still exists - so the FK would accept a
- * project against a customer nobody can see. The subquery returning NULL is the visible symptom; the
- * manager checks the customer up front so the client gets a sentence instead.
+ * project against a customer nobody can see. The subquery returning NULL is the visible symptom;
+ * the manager checks the customer up front so the client gets a sentence instead.
  *
  * `staff` is matched without an `active` filter: a project may legitimately be assigned to someone
  * on leave, and an inactive staff member's name is still the right name to print.
@@ -480,10 +480,10 @@ export const ProjectCreateOps: (
 /**
  * Edit a project, if this caller may see it.
  *
- * The scope predicate is in the UPDATE itself rather than checked beforehand. A check followed by an
- * unscoped write is a race, and more practically it is two places the rule has to be right; putting
- * it in the statement means a project outside the caller's scope matches no row and the edit comes
- * back as a 404, which is the same answer a read of it would give.
+ * The scope predicate is in the UPDATE itself rather than checked beforehand. A check followed by
+ * an unscoped write is a race, and more practically it is two places the rule has to be right;
+ * putting it in the statement means a project outside the caller's scope matches no row and the
+ * edit comes back as a 404, which is the same answer a read of it would give.
  */
 export const ProjectUpdateOps: (
   caller: NeotmsCaller,

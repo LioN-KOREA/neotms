@@ -24,9 +24,9 @@
 // ## Call budget
 //
 // 288 runs a day on a 1,000-call key, one call each. Two stages sharing one key is 576, which still
-// fits but is most of the budget - so if a third stage ever appears, give it its own key rather than
-// stretching this one. The bootstrap walk-back below can spend up to seven extra calls, once, on a
-// database that has never held a quote.
+// fits but is most of the budget - so if a third stage ever appears, give it its own key rather
+// than stretching this one. The bootstrap walk-back below can spend up to seven extra calls, once,
+// on a database that has never held a quote.
 //
 // Five minutes is far more often than the data changes: AP01 is a DAILY table, published once per
 // business day at around 11:00 KST. The frequency is therefore not about granularity, it is about
@@ -44,8 +44,8 @@
 //      correct answer on a Sunday, and `fx_rate_latest` is deliberately uncapped by age so that it
 //      keeps serving it. An empty response writes nothing at all.
 //   2. **JPY is quoted per 100 units.** `cur_unit` comes back as `"JPY(100)"`, and `deal_bas_r` is
-//      KRW per 100 yen. Storing that unchanged would overstate every yen job by a hundredfold -
-//      and JPY is one of the six currencies this company collects, so this is not a hypothetical.
+//      KRW per 100 yen. Storing that unchanged would overstate every yen job by a hundredfold - and
+//      JPY is one of the six currencies this company collects, so this is not a hypothetical.
 //      Everything downstream assumes per-one-unit, so the division happens here, once.
 //   3. **Numbers carry thousands separators.** `"1,388.50"` parses as 1 under `Number()` - not as
 //      an error, as the integer one - which would value a dollar at one won. Stripped before parse,
@@ -54,9 +54,9 @@
 // ## What this function deliberately does not do
 //
 //   * **It does not fail loudly on an empty or refused response.** It logs and returns. A fetcher
-//     that throws is a fetcher with an alarm on it, and there is nobody on call; a fetcher that logs
-//     leaves the previous quote in place, which is a correct answer. Real staleness is visible in
-//     the console beside every converted figure, because `effective_date` is sent with the rate.
+//     that throws is a fetcher with an alarm on it, and there is nobody on call; a fetcher that
+//     logs leaves the previous quote in place, which is a correct answer. Real staleness is visible
+//     in the console beside every converted figure, because `effective_date` is sent with the rate.
 //   * **It does not touch `job` or `purchase_order`.** Nothing is re-valued by this Lambda. Open
 //     positions are converted at read time by the statistics queries, and settled ones are frozen.
 //     A fetcher with write access to the money columns is a fetcher that can restate an invoice.
@@ -100,8 +100,9 @@ const FETCH_TIMEOUT_MS = 10_000;
 /**
  * How many days back the bootstrap walk may go.
  *
- * Only used when `fx_rate` has never held a row. Seven covers a long weekend plus 설날 or 추석,
- * which are the only stretches with more than three consecutive non-business days.
+  * Only used when `fx_rate` has never held a row. Seven covers a long weekend plus the Lunar New
+  * Year or Chuseok holidays, which are the only stretches with more than three consecutive
+  * non-business days.
  */
 const BOOTSTRAP_LOOKBACK_DAYS = 7;
 
@@ -118,11 +119,11 @@ const MAX_RATE = 1_000_000;
  * named; the other eight (`ttb`, `tts`, `bkpr`, `yy_efee_r`, `ten_dd_efee_r`, `kftc_bkpr`,
  * `kftc_deal_bas_r`, `cur_nm`) are real but irrelevant here.
  *
- * `deal_bas_r` is the 매매기준율 - the mid rate. Deliberately not `ttb`/`tts`, the telegraphic
- * transfer buying and selling rates: those are what a bank would actually pay or charge, and they
- * straddle the mid rate by a spread. The question this system asks is "what is this receivable
- * worth", which is a valuation and not a quote for a transaction, so the mid rate is the honest
- * answer. Using `tts` would systematically overstate every open position.
+  * `deal_bas_r` is the mid (deal base) rate. Deliberately not `ttb`/ `tts`, the telegraphic
+  * transfer buying and selling rates: those are what a bank would actually pay or charge, and they
+  * straddle the mid rate by a spread. The question this system asks is "what is this receivable
+  * worth", which is a valuation and not a quote for a transaction, so the mid rate is the honest
+  * answer. Using `tts` would systematically overstate every open position.
  */
 type KeximRow = {
   /** 1 = success. See `KEXIM_RESULTS`. Present on every row, including in a failure response. */
@@ -130,12 +131,12 @@ type KeximRow = {
   /**
    * `"USD"`, `"EUR"`, `"JPY(100)"`, `"IDR(100)"`. The parenthesised number is the quote unit.
    *
-   * The Chinese currency arrives as **`"CNH"`**, the offshore yuan, and `"CNY"` is not in this table
-   * at all - which is why `FX_CURRENCY_CODES` lists CNH. See NeotmsCurrency.ts before changing it
-   * back; a CNY entry would simply never match a row here.
+   * The Chinese currency arrives as ** `"CNH"`**, the offshore yuan, and `"CNY"` is not in this
+   * table at all - which is why `FX_CURRENCY_CODES` lists CNH. See NeotmsCurrency.ts before
+   * changing it back; a CNY entry would simply never match a row here.
    */
   cur_unit?: unknown;
-  /** 매매기준율, with thousands separators. `"1,388.5"`. */
+  /** The mid rate, with thousands separators. `"1,388.5"`. */
   deal_bas_r?: unknown;
 };
 
@@ -161,9 +162,9 @@ const KEXIM_RESULTS: Record<number, string> = {
  * `"JPY(100)"` -> `{ code: "JPY", per: 100 }`, `"USD"` -> `{ code: "USD", per: 1 }`.
  *
  * The parenthesised form is how the bank says "this quote is for N units", and it is the trap worth
- * the most care in this file: JPY and IDR are both quoted per 100, JPY is one of the five currencies
- * this company uses, and getting it wrong does not look wrong - a yen job simply reports a hundred
- * times its worth, which reads as a large job.
+ * the most care in this file: JPY and IDR are both quoted per 100, JPY is one of the five
+ * currencies this company uses, and getting it wrong does not look wrong - a yen job simply reports
+ * a hundred times its worth, which reads as a large job.
  *
  * Returns null on anything that is not a three-letter code, optionally followed by a count in
  * parentheses, so a new format arrives as a skipped currency rather than as a bad rate. `(0)` is
@@ -199,9 +200,9 @@ export function parseRate(raw: string): number | null {
  *
  * KST and not the Lambda's clock, which is UTC: between 00:00 and 09:00 KST, UTC is still on
  * yesterday's date. Asking the bank for yesterday at 08:00 KST would fetch a table that exists and
- * is stale, and store it under yesterday's `effective_date` - so `fx_rate_latest` would keep serving
- * the day-old figure for nine hours after the new one was published. The same reasoning, and the
- * same fixed offset, as `TODAY_KST` in NeotmsDashboard.dbops.ts.
+ * is stale, and store it under yesterday's `effective_date` - so `fx_rate_latest` would keep
+ * serving the day-old figure for nine hours after the new one was published. The same reasoning,
+ * and the same fixed offset, as `TODAY_KST` in NeotmsDashboard.dbops.ts.
  *
  * A fixed +09:00 rather than an IANA zone because Korea has no daylight saving and has not since
  * 1988, so there is no transition for a fixed offset to get wrong.
@@ -225,10 +226,10 @@ type FetchResult = { ok: true; rows: KeximRow[] } | { ok: false; reason: string 
  * One call, for one business date.
  *
  * The API key goes in the QUERY STRING, because that is the only place this API accepts it. That is
- * worth one sentence of acknowledgement: a credential in a URL is normally a mistake, since it lands
- * in access logs and `Referer` headers. Here the request is server-to-server over TLS, so there is
- * no referrer and no browser history - but it does mean the URL must never be logged, which is why
- * every log line below names the DATE and not the URL.
+ * worth one sentence of acknowledgement: a credential in a URL is normally a mistake, since it
+ * lands in access logs and `Referer` headers. Here the request is server-to-server over TLS, so
+ * there is no referrer and no browser history - but it does mean the URL must never be logged,
+ * which is why every log line below names the DATE and not the URL.
  */
 async function fetchOneDay(apiKey: string, isoDate: string): Promise<FetchResult> {
   const url = new URL(KEXIM_URL);
@@ -352,12 +353,13 @@ export type FxFetchOutcome = {
 /**
  * Fetch and store, once.
  *
- * The wanted currency list is a constant (`FX_CURRENCY_CODES` in NeotmsCurrency.ts) and not a query.
- * An earlier version read it from `currency`, which put a database round trip ahead of the HTTP call
+ * The wanted currency list is a constant (`FX_CURRENCY_CODES` in NeotmsCurrency.ts) and not a
+ * query. An earlier version read it from `currency`, which put a database round trip ahead of the
+ * HTTP call
  * - justified at the time as failing on the cheap half first, so that a database outage could not
- * also spend an API call out of a daily budget of 1,000. That ordering is moot now and the reason the
- * list moved is a different one: `currency` is an ETL target, so a house code loaded out of legacy
- * COINTB_MAIN used to become a currency this function asked the bank about.
+ * also spend an API call out of a daily budget of 1,000. That ordering is moot now and the reason
+ * the list moved is a different one: `currency` is an ETL target, so a house code loaded out of
+ * legacy COINTB_MAIN used to become a currency this function asked the bank about.
  *
  * Never throws on an upstream problem - see the file header. The only exceptions that escape are
  * database and secret failures, which are genuine faults and which Lambda should record as errors.

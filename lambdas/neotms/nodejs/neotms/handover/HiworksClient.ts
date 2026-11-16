@@ -1,25 +1,27 @@
 // SPDX-License-Identifier: MIT
 //
-// Hiworks 오피스 메일을 사용자 자격으로 보내는 클라이언트. 인계메일(`NeotmsHandoverManager`)의
-// 유일한 소비자이고, 이 저장소에서 공개 API 문서가 없는 유일한 외부 연동이다 — 브라우저가
-// mails.office.hiworks.com 에서 실제로 보내는 요청을 그대로 옮긴 것이므로, 헤더 하나까지
-// 의미가 있다(`Origin`·`Referer` 가 빠지면 거절된다).
+// Sends Hiworks office mail as the signed-in user. Its only consumer is the handover mail (
+// `NeotmsHandoverManager`), and it is the one external integration in this repository with no
+// published API to work from - it mirrors, request for request, what the browser actually sends at
+// mails.office.hiworks.com. Every header matters as a result: drop `Origin` or `Referer` and the
+// call is refused.
 //
-// ## 왜 lambdas/common 이 아니라 여기인가
+// ## Why this lives here and not under lambdas/common
 //
-// 처음 놓였던 자리는 `lambdas/common/layers/nodejs/hiworks/` 였다. 그 디렉터리는 LPX 프로젝트에서
-// 그대로 가져온 기반 코드이고, `tsconfig.app.json` 이 **일부러 타입검사에서 빼** 두었다 — 설치하지
-// 않은 Cognito·KMS 패키지를 import 하므로 NEOTMS 의 배포를 막으면 안 되기 때문이다(그 파일의
-// 머리 주석). 거기 둔 채로 NEOTMS 코드가 import 하면 두 가지가 동시에 틀어진다: 이 파일은 어차피
-// import 를 통해 검사 대상으로 끌려 들어오면서도 "검사하지 않는 디렉터리" 에 앉아 있게 되고,
-// 언젠가 LPX 쪽 기반 코드를 다시 내려받아 덮어쓸 때 NEOTMS 전용 파일이 조용히 사라진다.
+// It arrived in `lambdas/common/layers/nodejs/hiworks/`. That tree is base code lifted from the LPX
+// project, and `tsconfig.app.json` DELIBERATELY excludes it from the typecheck - it imports Cognito
+// and KMS packages NEOTMS does not install, and it must not be able to block a NEOTMS deploy (see
+// that file's header). Leaving this module there while NEOTMS code imports it breaks two things at
+// once: the import drags the file into the typecheck anyway while it sits in a directory marked as
+// unchecked, and the next refresh of that base code from LPX would quietly delete a NEOTMS-only
+// file along with the feature that depends on it.
 //
-// ## 자격증명은 요청을 보낸 사람의 것이고, 아무 데도 남지 않는다
+// ## The credentials belong to the caller and are kept nowhere
 //
-// 로그인 ID 와 비밀번호는 대화상자에서 받아 이 함수까지 전달되고, `PHPSESSID` 로 바뀐 뒤 버려진다.
-// 저장하지 않고, 로그에 남기지 않으며, 메일은 **그 사람 자신의** Hiworks 계정에서 나간다. 회사
-// 공용 발신 계정을 두지 않은 것이 요점이다 — 그랬다면 이 엔드포인트가 "아무 주소로나 회사 이름으로
-// 메일을 보내는" 권한이 되었을 것이다.
+// The sign-in id and password are collected in the dialog, passed down to this module, exchanged
+// for a `PHPSESSID`, and dropped. They are not stored, not logged, and the mail goes out from the
+// CALLER'S OWN Hiworks account. There being no shared company sender is the point - with one, this
+// endpoint would have become the authority to mail anybody under the company's name.
 
 const REQUEST_HEADERS_BASE = {
     "Accept-Encoding": "gzip, deflate, br, zstd",

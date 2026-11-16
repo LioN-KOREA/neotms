@@ -12,11 +12,11 @@
 // type. A price that arrives as the JSON number `1234567890123456.78` is already wrong before any
 // code touches it. So amounts travel as decimal strings, are validated as decimal strings, and are
 // sent to PostgreSQL as strings on a placeholder cast to `numeric` (see `param` and `CASTS` in
-// PostgresUtils), so the server parses the decimal and no float is ever involved. Nothing in
-// this codebase performs arithmetic on a currency amount in JavaScript - the totals are computed in
-// SQL, where `numeric` arithmetic is exact. The legacy system stored amounts in `nvarchar` and
-// converted per row, which is how a yearly report came to take minutes; converting them to floats
-// on the way in would be a different, quieter version of the same mistake.
+// PostgresUtils), so the server parses the decimal and no float is ever involved. Nothing in this
+// codebase performs arithmetic on a currency amount in JavaScript - the totals are computed in SQL,
+// where `numeric` arithmetic is exact. The legacy system stored amounts in `nvarchar` and converted
+// per row, which is how a yearly report came to take minutes; converting them to floats on the way
+// in would be a different, quieter version of the same mistake.
 //
 // ## Ids are strings
 //
@@ -115,17 +115,17 @@ const settable = <S extends v.GenericSchema>(schema: S) => v.optional(v.nullable
  *
  * `cusName` is the only required field. That is deliberate and it matches how the work actually
  * arrives: a salesperson gets a company name and a phone number, and the billing address, currency
- * and rate band are filled in later. Requiring them up front produces placeholder rows ("미정",
+ * and rate band are filled in later. Requiring them up front produces placeholder rows ("TBD",
  * "000-0000-0000"), which are worse than nulls because they look like data.
  *
  * `cusCode` is absent on purpose - it is minted from a sequence (see NeotmsCodes), never supplied.
  *
- * `cusUpro` was here and was removed. "UPRO" is 사용 프로그램 - which CAT tool the counterparty
- * works in - and most clients of this company do not send translation work, so the field was a
- * required-looking box with no answer. The column survives for the ETL and is still read (see
- * CustomerRow.cusUpro); nothing can write it. `v.object` strips unknown keys rather than rejecting
- * them, so a browser still running yesterday's bundle and still posting `cusUpro` has it quietly
- * dropped instead of being handed a validation error for a field its user never saw.
+  * `cusUpro` was here and was removed. "UPRO" is the CAT tool - which tool the counterparty works
+  * in - and most clients of this company do not send translation work, so the field was a
+  * required-looking box with no answer. The column survives for the ETL and is still read (see
+  * CustomerRow.cusUpro); nothing can write it. `v.object` strips unknown keys rather than rejecting
+  * them, so a browser still running yesterday's bundle and still posting `cusUpro` has it quietly
+  * dropped instead of being handed a validation error for a field its user never saw.
  */
 export const CustomerCreateSchema = v.object({
   cusName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
@@ -138,7 +138,7 @@ export const CustomerCreateSchema = v.object({
   cusCoin: settable(CodeSchema),
   /** Minimum charge per job, in `cusCoin`. */
   cusMincost: settable(MoneySchema),
-  /** 분야. A `sys_code` code in the 'FIELD' domain - the screen picks it from a dropdown. */
+  /** Subject field. A `sys_code` code in the 'FIELD' domain - the screen picks it from a dropdown. */
   cusField: settable(CodeSchema),
   active: v.optional(v.boolean()),
 });
@@ -249,19 +249,19 @@ export const JobCreateSchema = v.object({
   workCode: settable(CodeSchema),
   jobPmId: settable(IdSchema),
   /**
-   * 업무 구분 - a `JOBTYPE` code: LINGUISTICS, MICE or IMC. Decides which of the two fields below
+   * Job type - a `JOBTYPE` code: LINGUISTICS, MICE or IMC. Decides which of the two fields below
    * applies, and therefore which detail table the job's payload lands in (db/011_job_types.sql).
    *
-   * Optional, and absent means LINGUISTICS. Not because the type is unimportant but because the
-   * ETL and every pre-existing client omit it, and the column's DEFAULT is the same value - a
-   * required field here would reject exactly the requests that are correct by default.
+   * Optional, and absent means LINGUISTICS. Not because the type is unimportant but because the ETL
+   * and every pre-existing client omit it, and the column's DEFAULT is the same value - a required
+   * field here would reject exactly the requests that are correct by default.
    */
   jobType: settable(CodeSchema),
   jobSlang: settable(CodeSchema),
   /** Target language ("ELANG" = end language). */
   jobElang: settable(CodeSchema),
   /**
-   * 업무 분류 - a `JOBCAT` code, for a MICE or IMC job. Any of the four is valid on either type;
+   * Job category - a `JOBCAT` code, for a MICE or IMC job. Any of the four is valid on either type;
    * the business has no type-to-category mapping.
    *
    * Deliberately NOT part of a discriminated union with `jobSlang` / `jobElang`. A `v.variant` on
@@ -332,7 +332,7 @@ export const PurchaseOrderCreateSchema = v.object({
   /** The vendor being paid. */
   translatorId: settable(IdSchema),
   /**
-   * 업무 구분 - a `JOBTYPE` code, exactly as on a job, and **independent of the job's own type**.
+   * Job type - a `JOBTYPE` code, exactly as on a job, and **independent of the job's own type**.
    *
    * Independent because the real cases demand it: a MICE conference buys interpretation (a
    * LINGUISTICS PO on a MICE job), and a translation project buys event staffing. Tying the PO's
@@ -346,7 +346,7 @@ export const PurchaseOrderCreateSchema = v.object({
   poSlang: settable(CodeSchema),
   poElang: settable(CodeSchema),
   /**
-   * 업무 분류 - a `JOBCAT` code, for a MICE or IMC purchase order. Any of the four is valid on
+   * Job category - a `JOBCAT` code, for a MICE or IMC purchase order. Any of the four is valid on
    * either type.
    *
    * Not a discriminated union with `poSlang` / `poElang`, for the reasons recorded on
@@ -399,7 +399,7 @@ export const PurchaseOrderCreateSchema = v.object({
 export const PurchaseOrderUpdateSchema = v.partial(v.omit(PurchaseOrderCreateSchema, ["jobId"]));
 
 /* -------------------------------------------------------------------------- */
-/* 결제 - approval, settlement, and the translator invoice                     */
+/* Payment - approval, settlement, and the translator invoice                 */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -431,13 +431,13 @@ export const PoApprovalSchema = v.object({ approved: v.boolean() });
  *
  * Picked from `PurchaseOrderCreateSchema` rather than restated, so the two cannot drift: these are
  * the same six columns, reached through a different gate. The narrowing is the point - this body
- * can move a PO to 완료 and mark it 정산완료, and it cannot touch an amount, a volume, a rate, a
- * deadline or a translator. Someone who may confirm a payment is not thereby someone who may change
- * what was owed.
+ * can move a PO to done and mark it fully settled, and it cannot touch an amount, a volume, a rate,
+ * a deadline or a translator. Someone who may confirm a payment is not thereby someone who may
+ * change what was owed.
  *
- * `poState` is included because settling the money IS what advances the workflow - 완료 means paid
- * in full (NeotmsPoStates.ts), so the state and the money state are set in the same request or they
- * are set inconsistently. 부분정산 stays at 납품 for the same reason.
+  * `poState` is included because settling the money IS what advances the workflow - done means paid
+  * in full (NeotmsPoStates.ts), so the state and the money state are set in the same request or
+  * they are set inconsistently. A partial settlement stays at delivered for the same reason.
  */
 export const PoSettlementSchema = v.partial(
   v.pick(PurchaseOrderCreateSchema, [
@@ -464,8 +464,8 @@ export const PoSettlementSchema = v.partial(
  * It is REQUIRED and must be non-empty. An invoice billing nothing is a document with a total of
  * zero sent to a translator who is owed money, which is the silent-arithmetic failure this whole
  * design is arranged to prevent. The manager additionally refuses POs that belong to another
- * translator, are not yet 납품, or are already on a different invoice - none of which a schema can
- * check, because all three are questions about rows.
+ * translator, are not yet delivered, or are already on a different invoice - none of which a schema
+ * can check, because all three are questions about rows.
  *
  * `invTranCode` is absent: minted from `seq_invoice_tran_code` (NeotmsCodes.INVOICE_TRAN_CODE),
  * never supplied, for the reason every other document code is.
@@ -493,7 +493,7 @@ export const InvoiceTranslatorCreateSchema = v.object({
    * a request that can be made expensive by anyone who can make it at all.
    */
   poIds: v.pipe(v.array(IdSchema), v.minLength(1, "an invoice must cover at least one PO"), v.maxLength(200)),
-  /** 인보이스 발행일. Absent means today, stamped server-side. */
+  /** Invoice issue date. Absent means today, stamped server-side. */
   invDay: settable(DateSchema),
   /** The issuing PM, whose name, phone and email print in the signature block. */
   invPmId: settable(IdSchema),
@@ -520,9 +520,9 @@ export const InvoiceTranslatorCreateSchema = v.object({
  * invoice at a different translator does not correct a mistake, it silently re-bills one person's
  * work to another. Cancel it and issue a new one, which leaves both documents in the record.
  *
- * `poIds` stays, and is a REPLACEMENT of the set rather than an addition to it - absent means "leave
- * the grouping alone", present means "these and only these". Adding a forgotten PO is the ordinary
- * case and must not require deleting the invoice.
+ * `poIds` stays, and is a REPLACEMENT of the set rather than an addition to it - absent means
+ * "leave the grouping alone", present means "these and only these". Adding a forgotten PO is the
+ * ordinary case and must not require deleting the invoice.
  */
 export const InvoiceTranslatorUpdateSchema = v.partial(
   v.omit(InvoiceTranslatorCreateSchema, ["translatorId"]),
@@ -543,7 +543,7 @@ export const InvoiceTranslatorUpdateSchema = v.partial(
 export const REPORT_TOP_N_MAX = 30;
 
 /* -------------------------------------------------------------------------- */
-/* 인계메일 - the handover mail                                                */
+/* Handover mail                                                              */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -552,18 +552,18 @@ export const REPORT_TOP_N_MAX = 30;
  * Every field is required, which is unusual in this file - almost everything else is `settable`.
  * The difference is that nothing here is a COLUMN. This body is not a partial edit of a stored
  * record; it is the five answers the mail cannot be composed without, and a missing one has no
- * sensible "leave it alone" reading. `인계 기능_261111.docx` page 3 is the form being filled in.
+ * sensible "leave it alone" reading. Page 3 of the handover spec is the form being filled in.
  *
  * ## The two picklists come from the mail template, not from `sys_code`
  *
  * `HANDOVER_FORMATS` and `HANDOVER_LAYOUTS` are literals in NeotmsHandoverMail, and importing them
  * here is what makes "what the server accepts" and "what the mail draws" the same set by
- * construction. Were they 유지보수 codes, deleting one would change the shape of a form that has
- * already been sent to people - see the comment on those two arrays.
+ * construction. Were they maintenance-screen codes, deleting one would change the shape of a form
+ * that has already been sent to people - see the comment on those two arrays.
  *
- * Non-empty arrays rather than single values: the document says 다수 가능, and the mail renders all
- * options with the chosen ones highlighted. `v.minLength(1)` is what "all items are required" means
- * for a multiple-choice field.
+  * Non-empty arrays rather than single values: the document allows several to be chosen, and the
+  * mail renders all options with the chosen ones highlighted. `v.minLength(1)` is what "all items
+  * are required" means for a multiple-choice field.
  *
  * ## The two credential fields, and why they are ordinary strings
  *
@@ -576,15 +576,16 @@ export const REPORT_TOP_N_MAX = 30;
  * and deliberately not values, which is what keeps a mistyped password out of CloudWatch.
  */
 export const HandoverMailSchema = v.object({
-  /** 편집포맷. At least one of WORD / HWP / PPT / EXCEL. */
+  /** Editing format. At least one of WORD / HWP / PPT / EXCEL. */
   formats: v.pipe(v.array(v.picklist(HANDOVER_FORMATS)), v.minLength(1, "pick at least one")),
-  /** 레이아웃. At least one of 보기좋게 / 표 병기 / DTP. */
+  /** Layout. At least one of the three the form offers. */
   layouts: v.pipe(v.array(v.picklist(HANDOVER_LAYOUTS)), v.minLength(1, "pick at least one")),
   /**
    * The operating PM's address.
    *
    * Shape-checked only, by `v.email`. Whether the address exists is a question only the mail server
-   * can answer, and Hiworks answers it - by bouncing, which reaches the sender rather than this API.
+   * can answer, and Hiworks answers it - by bouncing, which reaches the sender rather than this
+   * API.
    */
   recipient: v.pipe(v.string(), v.trim(), v.email("must be an email address"), v.maxLength(300)),
   hiworksId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
@@ -617,16 +618,16 @@ export const ReportTopNSchema = v.pipe(
  *
  * The date range is required, both ends of it, and that requirement is what makes the report
  * affordable to compute per request. Bounded, the aggregate is an index scan on `ix_job_eday` -
- * single-digit milliseconds for a month. Unbounded, it is the legacy system's slowest screen,
- * which aggregates the full history on every page view. Making the bound mandatory is what stops
- * the new system growing the old problem back.
+ * single-digit milliseconds for a month. Unbounded, it is the legacy system's slowest screen, which
+ * aggregates the full history on every page view. Making the bound mandatory is what stops the new
+ * system growing the old problem back.
  */
 export const ReportQuerySchema = v.object({
   from: DateSchema,
   to: DateSchema,
   /**
-   * What to break the totals down by. One dimension, because a two-dimensional breakdown is a
-   * pivot table and belongs in the XLSX export rather than in a JSON list.
+   * What to break the totals down by. One dimension, because a two-dimensional breakdown is a pivot
+   * table and belongs in the XLSX export rather than in a JSON list.
    *
    * THIS LIST IS ONE OF THREE THAT HAVE TO STAY EQUAL. The keys of `REPORT_DIMENSIONS` in
    * `reports/NeotmsReport.dbops.ts` are the implementations, and `REPORT_GROUPS` in the frontend's
@@ -660,15 +661,15 @@ export const ReportQuerySchema = v.object({
 });
 
 /* -------------------------------------------------------------------------- */
-/* sys_code - the 유지보수 screen                                              */
+/* sys_code - the maintenance screen                                          */
 /* -------------------------------------------------------------------------- */
 
 /**
  * A display order. Whole, small, and arriving as either a string or a number.
  *
  * Via `String` and a regex rather than `v.number()`, for the same reason `MoneySchema` does it: a
- * number input in a browser hands back a string, and `Number("")` is 0 while `Number("abc")` is
- * NaN - both of which would be accepted by a bare `v.number()` after a careless transform and then
+ * number input in a browser hands back a string, and `Number("")` is 0 while `Number("abc")` is NaN
+ * - both of which would be accepted by a bare `v.number()` after a careless transform and then
  * written to the column. The regex rejects the empty string, signs, decimals and exponents before
  * anything is converted.
  */
@@ -711,7 +712,7 @@ export const CodeCreateSchema = v.object({
 export const CodeUpdateSchema = v.partial(v.omit(CodeCreateSchema, ["code"]));
 
 /* -------------------------------------------------------------------------- */
-/* staff - the 사용자 관리 screen, and self-registration                       */
+/* staff - the staff administration screen, and self-registration             */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -753,20 +754,21 @@ export const StaffAdminUpdateSchema = v.partial(
  * The defaults are prefilled from LPX's `/userInfo`, and every one of them is editable here,
  * including the name. That is deliberate: `mgr_name` is what gets printed on a purchase order and
  * an invoice, and the name on an SSO account is not always the name a person works under. Letting
- * them correct it is the difference between a document that looks official and one that looks wrong.
+ * them correct it is the difference between a document that looks official and one that looks
+ * wrong.
  *
  * Notice what this cannot touch: `roleId`, `viewScope`, `active`, `mgrId`, `corpCode`, `lpxSub`.
  * The first three are the permission system; the last three are identity. A self-service form that
  * could write any of the six would be the cookie-forging defect rebuilt with better manners.
  */
 export const SelfProfileSchema = v.object({
-  /** The name on documents. Required - a PO with a blank 담당자 is not a usable PO. */
+  /** The name on documents. Required - a PO with a blank contact name is not a usable PO. */
   name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
   /** Romanised name, for English-language POs and invoices. */
   nameEng: settable(text(300)),
   email: settable(text(300)),
   phone: settable(text(100)),
-  /** 직위. Printed on outgoing documents. */
+  /** Job title. Printed on outgoing documents. */
   position: settable(text(100)),
 });
 

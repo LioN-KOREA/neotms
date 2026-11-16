@@ -488,19 +488,20 @@ export interface ProjectInput {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 인계메일                                                                    */
+/* Handover mail                                                               */
 /* -------------------------------------------------------------------------- */
 
 /**
- * 편집포맷과 레이아웃. 인계 기능_261111.docx 3쪽 양식의 선택지 그대로다.
+ * The editing formats and the layouts, exactly as the handover spec's page-3 form lists them.
  *
- * `neotms.codes.ts` 가 아니라 여기 있는 이유는 그 파일의 머리말이 정한 경계 때문이다 — 거기
- * 적힌 목록들은 **DB 컬럼의 값**(진행 상태, 통화)이고, 이 일곱 낱말은 어느 컬럼에도 저장되지
- * 않는다. 메일 양식의 일부이고, 저장되는 것은 보내진 메일뿐이다.
+ * They live here rather than in `neotms.codes.ts` because of the boundary that file's own header
+ * draws: the lists over there are VALUES OF DB COLUMNS (project state, currency), and none of
+ * these seven words is stored in any column. They are part of the mail template, and the only
+ * thing stored is the mail that was sent.
  *
- * 서버의 `HANDOVER_FORMATS` / `HANDOVER_LAYOUTS`(NeotmsHandoverMail.ts)와 **같아야 한다.**
- * 서버 스키마의 picklist 가 그 배열에서 나오므로, 여기 없는 값을 보내면 400 이고 여기만 있는
- * 값은 화면에 뜨지만 저장되지 않는다. 테스트가 두 목록을 맞춰 둔다.
+ * They MUST match the server's `HANDOVER_FORMATS` / `HANDOVER_LAYOUTS` (NeotmsHandoverMail.ts).
+ * The server schema's picklists are built from those arrays, so a value missing there is a 400,
+ * and a value missing here is one the screen never offers. A test reconciles the two lists.
  */
 export const HANDOVER_FORMATS = ['WORD', 'HWP', 'PPT', 'EXCEL'] as const
 export const HANDOVER_LAYOUTS = ['보기좋게', '표 병기', 'DTP'] as const
@@ -509,28 +510,29 @@ export type HandoverFormat = (typeof HANDOVER_FORMATS)[number]
 export type HandoverLayout = (typeof HANDOVER_LAYOUTS)[number]
 
 /**
- * 인계메일 발송 요청. 전부 필수다.
+ * A request to send the handover mail. Every field is required.
  *
- * 이 본문에는 컬럼이 하나도 없다 — 저장되는 값이 아니라 "메일을 짜는 데 없으면 안 되는 다섯
- * 가지" 이고, 그래서 이 파일의 다른 `*Input` 들과 달리 `?` 가 없다. 빠진 칸에 "건드리지 않음"
- * 이라는 읽기가 성립하지 않는다.
+ * Not one field here is a column. These are the five answers the mail cannot be composed without,
+ * not values being stored, which is why - unlike every other `*Input` in this file - none of them
+ * carries `?`. "Leave this one alone" is not a reading an omitted field could have.
  */
 export interface HandoverMailInput {
   formats: HandoverFormat[]
   layouts: HandoverLayout[]
-  /** 받는 사람(운영 PM). */
+  /** The recipient: the operating PM. */
   recipient: string
   /**
-   * 호출자 본인의 하이웍스 계정. 메일은 **이 계정에서** 나간다.
+   * The caller's OWN Hiworks account. The mail goes out FROM THIS ACCOUNT.
    *
-   * 서버는 이 둘을 로그인에 한 번 쓰고 버린다 — 저장하지 않고 로그에도 남기지 않는다. 화면도
-   * 같은 규칙을 지켜야 한다: 이 두 값은 상태에만 있고 `localStorage` 에 가지 않는다.
+   * The server signs in once with these and discards them - never stored, never logged. The
+   * screen keeps the same rule: both values live in component state only and never reach
+   * `localStorage`.
    */
   hiworksId: string
   hiworksPassword: string
 }
 
-/** 보낸 뒤 서버가 알려 주는 것. 본문은 돌아오지 않는다. */
+/** What the server reports back after sending. The body does not come back. */
 export interface HandoverMailSent {
   subject: string
   recipient: string

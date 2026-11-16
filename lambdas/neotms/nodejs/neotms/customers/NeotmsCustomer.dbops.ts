@@ -64,8 +64,8 @@ export type CustomerRow = {
    * CustomerCreateSchema, so no request can set it. It stays on the read path because the ETL will
    * land legacy values here, and a column the API cannot even report is a column whose data is
    * discovered years later by someone querying the database directly. `translator.tranUpro` is the
-   * live one - see db/007_codes.sql section 2e for why the question was worth asking of a translator
-   * and not of a client.
+   * live one - see db/007_codes.sql section 2e for why the question was worth asking of a
+   * translator and not of a client.
    */
   cusUpro: string | null;
   /** A decimal string. Never a number - see neotms.schemas. */
@@ -138,10 +138,10 @@ export type CustomerSortKey = keyof typeof CUSTOMER_SORTS;
  * Columns the free-text search covers.
  *
  * `cus_name` is backed by a PGroonga index (`ix_cus_name_pgrn`), which is what makes a
- * two-character Korean term - 삼성, 네이버 - an index scan rather than a sequential one. The other
- * three have no index and are compared within the rows the name predicate already narrowed; that is
- * fine on a table of a few thousand customers, and it is the reason not to add a fifth column here
- * without an index behind it.
+ * two-character Korean term - most company names are two characters - an index scan rather than a
+ * sequential one. The other three have no index and are compared within the rows the name predicate
+ * already narrowed; that is fine on a table of a few thousand customers, and it is the reason not
+ * to add a fifth column here without an index behind it.
  */
 const CUSTOMER_SEARCH_COLUMNS = ["c.cus_name", "c.cus_code", "c.cus_email", "c.cus_phone"];
 

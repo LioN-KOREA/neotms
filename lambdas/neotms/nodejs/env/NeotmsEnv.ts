@@ -12,7 +12,7 @@
 //     utils/SecretsUtils.ts). A Lambda environment variable is readable by anyone with console
 //     access to the function, and rotating one means a redeploy.
 //   * An OIDC client secret. There isn't one - the LPX client is public and PKCE is what ties the
-//     authorization code to whoever began the flow (연동 안내서 §2).
+//     authorization code to whoever began the flow (account-system integration guide §2).
 
 import * as v from "valibot";
 
@@ -41,8 +41,8 @@ const EnvSchema = v.object({
   /**
    * 6543, the transaction-mode port - not 5432.
    *
-   * Two independent reasons, either one sufficient. First, the direct endpoint
-   * (`db.<ref>.supabase.co:5432`) resolves to IPv6 only unless the IPv4 add-on is bought, and a
+   * Two independent reasons, either one sufficient. First, the direct endpoint (
+   * `db.<ref>.supabase.co:5432`) resolves to IPv6 only unless the IPv4 add-on is bought, and a
    * Lambda outside a VPC has no IPv6 egress. Second, transaction mode returns the server connection
    * to the pool at COMMIT rather than at disconnect, which is the only mode that survives a
    * function whose concurrency is a multiple of the database's connection limit.
@@ -78,8 +78,8 @@ const EnvSchema = v.object({
    *
    * On the Data API branch this was unavoidable machinery - a result set was capped at 1 MiB, so a
    * large report had to leave the database through `aws_s3.query_export_to_s3` and be picked up
-   * from S3. Over a real socket there is no such cap, so the only remaining limit is Lambda's own
-   * 6 MB response payload. This bucket is therefore now just a spill target the FUNCTION writes to
+   * from S3. Over a real socket there is no such cap, so the only remaining limit is Lambda's own 6
+   * MB response payload. This bucket is therefore now just a spill target the FUNCTION writes to
    * and hands back as a presigned URL, which is also why it no longer needs a KMS key.
    */
   NEOTMS_EXPORT_BUCKET_NAME: v.fallback(v.string(), ""),
@@ -91,7 +91,7 @@ const EnvSchema = v.object({
   // list fails closed (every cross-origin request is refused), which is the correct failure.
   NEOTMS_ALLOWED_ORIGIN_URLS: v.fallback(v.string(), ""),
 
-  // -------- OIDC (연동 안내서 §2-§5) ----------------------------------------
+  // -------- OIDC (account-system integration guide §2-§5) ------------------
   /** The account system's issuer, no trailing slash. Asserted as every access token's `iss`. */
   NEOTMS_OIDC_ISSUER: v.fallback(v.string(), ""),
   /** This app's client id. Sent as client_id, and asserted as every access token's `aud`. */
@@ -109,21 +109,21 @@ const EnvSchema = v.object({
    * Tier one of two. Holding it means "may open NEOTMS"; it says nothing about which menus or which
    * rows, which is decided from the staff row (role matrix and view scope - Q9).
    *
-   * The fallback is EMPTY, deliberately, and it used to be the string `"neotms.access"`. A non-empty
-   * fallback is actively dangerous here: `isAuthConfigComplete()` below only checks that this is
-   * non-empty, so a guessed default made an unconfigured deployment look fully configured while
-   * `authorities.includes(...)` could never match - every account would be told it lacks access,
-   * with a 403 that reads as a permissions decision rather than as a missing setting. Empty means
-   * `isAuthConfigComplete()` is false and the guard answers 500 "not configured" instead.
+   * The fallback is EMPTY, deliberately, and it used to be the string `"neotms.access"`. A
+   * non-empty fallback is actively dangerous here: `isAuthConfigComplete()` below only checks that
+   * this is non-empty, so a guessed default made an unconfigured deployment look fully configured
+   * while `authorities.includes(...)` could never match - every account would be told it lacks
+   * access, with a 403 that reads as a permissions decision rather than as a missing setting. Empty
+   * means `isAuthConfigComplete()` is false and the guard answers 500 "not configured" instead.
    */
   NEOTMS_APP_AUTHORITY_ID: v.fallback(v.string(), ""),
   /**
    * The LPX authority that may let itself in and provision the first NEOTMS staff row.
    *
    * `lpx.admin.access` - LPX's own global administrator - in both stages. It exists because
-   * 002..005 build an entirely empty database and an entirely empty database cannot be signed
-   * into: the guard refuses an identity with no `staff` row, the only way to create a `staff` row
-   * is through NEOTMS, and NEOTMS has no route that writes one. Holding this authority breaks that
+   * 002..005 build an entirely empty database and an entirely empty database cannot be signed into:
+   * the guard refuses an identity with no `staff` row, the only way to create a `staff` row is
+   * through NEOTMS, and NEOTMS has no route that writes one. Holding this authority breaks that
    * cycle; see `bootstrapSuperuser` in NeotmsAuthGuard and `staff_bootstrap_superuser()` in
    * db/006_bootstrap.sql.
    *
@@ -140,7 +140,7 @@ const EnvSchema = v.object({
    */
   NEOTMS_BOOTSTRAP_AUTHORITY_ID: v.fallback(v.string(), ""),
 
-  // -------- 환율 (Korea Export-Import Bank open API) ------------------------
+  // -------- FX rates (Korea Export-Import Bank open API) --------------------
   /**
    * Name of the Secrets Manager secret holding the KEXIM API key - `neotms/erapikey`.
    *

@@ -140,8 +140,8 @@ export type TranslatorSortKey = keyof typeof TRANSLATOR_SORTS;
  * `tran_dup` is in here on purpose.
  *
  * It holds alternate spellings and romanisations of the same person, and its whole reason for
- * existing is that a PM searching "Kim Min-su" should find the translator registered as "김민수".
- * Leaving it out of the search would make the column decorative.
+ * existing is that a PM searching a romanised name should find the translator registered under the
+ * Korean spelling of it. Leaving it out of the search would make the column decorative.
  */
 const TRANSLATOR_SEARCH_COLUMNS = [
   "t.tran_name",
@@ -330,11 +330,11 @@ export const TranslatorUpdateOps: (
 /**
  * Soft-delete a translator.
  *
- * Never a hard delete: every PO ever issued to this person references the row, and `ON DELETE
- * RESTRICT` on `purchase_order.translator_id` would refuse anyway. In practice a translator is
- * usually deactivated rather than deleted - `active = false` takes them out of the assignment
- * pickers while leaving the history legible, which is what "we no longer work with them" actually
- * means.
+ * Never a hard delete: every PO ever issued to this person references the row, and
+ * `ON DELETE RESTRICT` on `purchase_order.translator_id` would refuse anyway. In practice a
+ * translator is usually deactivated rather than deleted - `active = false` takes them out of the
+ * assignment pickers while leaving the history legible, which is what "we no longer work with them"
+ * actually means.
  */
 export const TranslatorSoftDeleteOps: (id: string, ctx: WriteContext) => SqlOps<string | null> = (
   id,

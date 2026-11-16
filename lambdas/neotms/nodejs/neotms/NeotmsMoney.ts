@@ -21,12 +21,12 @@
 // actually asking ("what is this book worth").
 //
 // The reason the first two rows exist is the mirror of that. Once money has been exchanged, its KRW
-// amount is a historical fact: it was invoiced at that figure, and a report of a closed quarter must
-// reproduce it on every run, forever. `*_price_ksum` is that fact - and it may have been
+// amount is a historical fact: it was invoiced at that figure, and a report of a closed quarter
+// must reproduce it on every run, forever. `*_price_ksum` is that fact - and it may have been
 // hand-adjusted after a negotiation, which is the second reason nothing here recomputes it.
 //
 // So "exchange it" and "freeze it" are the same operation, and the console performs it as one: the
-// 원화로 환산 button rewrites `coin_code` to KRW, `*_price_sum` to the converted amount and
+// The convert-to-KRW button rewrites `coin_code` to KRW, `*_price_sum` to the converted amount
 // `coin_rate` to 1. No extra column, no boolean, no state machine - the row simply moves from the
 // third case to the first. db/014_fx_rates.sql is the authority on the model.
 //
@@ -67,8 +67,8 @@
  * LEFT, always. An INNER join would drop every KRW row (nothing quotes KRW against itself) and
  * every row in a currency with no quote yet - silently, as missing revenue.
  *
- * @param fx    alias to give the view
- * @param coinCode  the qualified currency column to match on, e.g. `j.coin_code`
+ * @param fx alias to give the view @param coinCode the qualified currency column to match on, e.g.
+ * `j.coin_code`
  */
 export function krwJoin(fx: string, coinCode: string): string {
   return `LEFT JOIN fx_rate_latest ${fx} ON ${fx}.currency_code = ${coinCode}`;
@@ -88,8 +88,8 @@ export function krwJoin(fx: string, coinCode: string): string {
  * - has that figure restated to 0 the moment this expression goes live, because `0 * rate` is not
  * NULL and so `COALESCE` never reaches the fallback. That is the one case db/014's backfill cannot
  * pin shut from its side: it skips a zero total because 0/0 yields no rate to recover, which leaves
- * the row OPEN and hands the problem here. Zero is also the dangerous direction to be wrong in -
- * it deflates revenue silently, the "quiet quarter" failure the header warns about. A genuinely
+ * the row OPEN and hands the problem here. Zero is also the dangerous direction to be wrong in - it
+ * deflates revenue silently, the "quiet quarter" failure the header warns about. A genuinely
  * free-of-charge job is unaffected: its stored ksum is 0 too, so it still reads 0, by fallback
  * rather than by multiplication.
  */

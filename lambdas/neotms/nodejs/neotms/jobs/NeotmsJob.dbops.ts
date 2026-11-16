@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
-// The job (legacy PRJTB_JOB). One deliverable: one service, one price, and - depending on its
-// 업무 구분 - either one language pair or one 업무 분류.
+// The job (legacy PRJTB_JOB). One deliverable: one service, one price, and - depending on its job
+// type - either one language pair or one job category.
 //
 // REVENUE IS BOOKED HERE. `job_price_ksum` is the column the reports sum, which makes this module's
 // correctness a reporting concern rather than a screen concern - a job written wrong is a figure
@@ -9,9 +9,9 @@
 //
 // ## The type decides which side table the payload is in
 //
-// `job.job_type` is the discriminator (LINGUISTICS / MICE / IMC). The columns that only one type has
-// live in `job_detail_linguistic` (`job_slang`, `job_elang`) and `job_detail_non_linguistic`
-// (`job_category`), keyed one-row-per-job on `job_id`. db/011_job_types.sql has the full reasoning;
+// `job.job_type` is the discriminator (LINGUISTICS / MICE / IMC). The columns that only one type
+// has live in `job_detail_linguistic` (`job_slang`, `job_elang`) and `job_detail_non_linguistic` (
+// `job_category`), keyed one-row-per-job on `job_id`. db/011_job_types.sql has the full reasoning;
 // what this module has to honour is three things:
 //
 //   1. Both joins are LEFT and both detail rows are optional. A job with neither a language nor a
@@ -27,10 +27,10 @@
 //
 // ## The scope is inherited, which is why every read joins the project
 //
-// A job has one owner of its own (`job_pm_id`) but belongs to a project with two
-// (`prj_mgr_id`, `prj_pm_id`), and all three must be able to see it: the sales manager who sold the
-// project, the PM who runs it, and the PM assigned this particular deliverable. So `project` is
-// joined on every read - not for its columns, but because the scope predicate needs them.
+// A job has one owner of its own (`job_pm_id`) but belongs to a project with two (`prj_mgr_id`,
+// `prj_pm_id`), and all three must be able to see it: the sales manager who sold the project, the
+// PM who runs it, and the PM assigned this particular deliverable. So `project` is joined on every
+// read - not for its columns, but because the scope predicate needs them.
 //
 // The join is INNER and unconditional, which is also the integrity check: `project_id` is NOT NULL
 // with an FK, so a job with no visible project is a job whose project was soft-deleted, and that is
@@ -96,15 +96,18 @@ export type JobRow = {
   workCode: string | null;
   jobPmId: string | null;
   jobPmName: string | null;
-  /** 업무 구분 - a JOBTYPE code. NOT NULL in the database, so only a create response can lack it. */
+  /** The job type - a JOBTYPE code. NOT NULL in the database, so only a create response
+   *  can lack it. */
   jobType: string | null;
   /** From `job_detail_linguistic`, and null for a job that has no such row. */
   jobSlang: string | null;
   jobElang: string | null;
-  /** 업무 분류 - from `job_detail_non_linguistic`. Null on a linguistics job by definition. */
+  /** The job category - from `job_detail_non_linguistic`. Null on a linguistics job by
+   *  definition. */
   jobCategory: string | null;
   /**
-   * How the amount was derived - also from `job_detail_linguistic`, and null on non-linguistic work.
+   * How the amount was derived - also from `job_detail_linguistic`, and null on non-linguistic
+   * work.
    *
    * Decimal strings throughout. See neotms.schemas: no amount passes through a JS number.
    *
@@ -117,7 +120,7 @@ export type JobRow = {
   jobPrice: string | null;
   jobPriceDis: string | null;
   /**
-   * The amount - on `job` itself, for every 업무 구분.
+   * The amount - on `job` itself, for every job type.
    *
    * It stays on the parent because a KRW total means the same thing on all three types, and because
    * `job_price_ksum` is what the report sums, what `JOB_SORTS.amount` sorts by and what the project
@@ -158,7 +161,7 @@ export type JobRow = {
  * The language pair, the category and the five pricing inputs are deliberately absent: they are in
  * the two detail tables, so they can only be selected through a join - see `JOB_DETAIL_COLUMNS`.
  * What IS still here is the money - `coin_code` through `job_price_ksum` - because the amount stays
- * on the parent for every 업무 구분. db/012_job_pricing.sql has the reasoning.
+ * on the parent for every job type. db/012_job_pricing.sql has the reasoning.
  */
 const jobColumns = (q: string): string => `
   ${q}.id             AS job_id,
@@ -200,17 +203,18 @@ const JOB_PROJECT_COLUMNS = `
 /**
  * The type-specific columns, from the two detail tables.
  *
- * At most one of the two rows exists for any job and often neither does, so every column here can be
- * null and none of them is aliased to anything but its own name - `toJobRow` reads `job_slang` the
- * same way it did when the column was on `job`, which is what keeps the move invisible above this
- * module.
+ * At most one of the two rows exists for any job and often neither does, so every column here can
+ * be null and none of them is aliased to anything but its own name - `toJobRow` reads `job_slang`
+ * the same way it did when the column was on `job`, which is what keeps the move invisible above
+ * this module.
  *
  * Separate from `jobColumns` because the write paths interpolate that into `RETURNING`, where a
  * joined table is not in scope.
  *
  * The five pricing inputs sit on the linguistic side because only linguistic work is billed per
  * word: a MICE or IMC job carries its total directly, and the total is on `job` itself. So a
- * non-linguistic row reads `job_volume` as null, which is exactly what the 물량/단가 column wants.
+ * non-linguistic row reads `job_volume` as null, which is exactly what the volume and unit-price
+ * column wants.
  */
 const JOB_DETAIL_COLUMNS = `
   jdl.job_slang    AS job_slang,
@@ -288,11 +292,12 @@ export const JOB_SORTS = {
    * Largest jobs first. Sorted on the KRW total so mixed-currency lists compare meaningfully.
    *
    * Deliberately the BOOKED figure (`job_price_ksum`) and not the live `job_price_krw` the row
-   * displays, so an open position can sort a place or two away from where its shown amount would put
-   * it. That is the lesser of two evils: `sortAlias` derives the cursor's row key by slicing after
-   * the first dot (NeotmsQuery.ts), so a sort target must be a real qualified column - point this at
-   * the `CASE` expression and the keyset cursor stops advancing SILENTLY, repeating the first page
-   * forever with no error. A slightly stale ordering is visible; a stalled cursor is not.
+   * displays, so an open position can sort a place or two away from where its shown amount would
+   * put it. That is the lesser of two evils: `sortAlias` derives the cursor's row key by slicing
+   * after the first dot (NeotmsQuery.ts), so a sort target must be a real qualified column - point
+   * this at the `CASE` expression and the keyset cursor stops advancing SILENTLY, repeating the
+   * first page forever with no error. A slightly stale ordering is visible; a stalled cursor is
+   * not.
    */
   amount: { column: "j.job_price_ksum", cast: "numeric" },
 } as const satisfies Record<string, SortTarget>;
@@ -313,7 +318,7 @@ const JOB_FILTERS = {
   projectId: { column: "j.project_id", kind: "id" },
   state: { column: "j.job_state", kind: "text" },
   workCode: { column: "j.work_code", kind: "text" },
-  /** 업무 구분. The one filter that identifies a MICE or IMC job as such. */
+  /** The job type. The one filter that identifies a MICE or IMC job as such. */
   jobType: { column: "j.job_type", kind: "text" },
   /**
    * The language pair, now read through the detail table.
@@ -324,7 +329,7 @@ const JOB_FILTERS = {
    */
   slang: { column: "jdl.job_slang", kind: "text" },
   elang: { column: "jdl.job_elang", kind: "text" },
-  /** 업무 분류 - the language pair's counterpart for the non-linguistic types. */
+  /** The job category - the language pair's counterpart for the non-linguistic types. */
   jobCategory: { column: "jdn.job_category", kind: "text" },
   pmId: { column: "j.job_pm_id", kind: "id" },
   /** Filters on the project's customer, which is where the customer actually lives. */
@@ -443,7 +448,8 @@ export const JobGetOps: (caller: NeotmsCaller, id: string) => SqlOps<JobRow | nu
 /** What `JobProjectOps` answers: the job exists, is visible, and is this project's and this type's. */
 export type JobIdentity = {
   projectId: string;
-  /** 업무 구분. Never null - the column is NOT NULL - but defaulted here against a pre-011 row. */
+  /** The job type. Never null - the column is NOT NULL - but defaulted here against a
+   *  pre-011 row. */
   jobType: string;
 };
 
@@ -457,7 +463,7 @@ export type JobIdentity = {
  *
  * It returns the type for two reasons, both of them about not writing a second scoped read:
  *
- *   - a new PO defaults its own 업무 구분 from its job's, and
+  *   - a new PO defaults its own job type from its job's, and
  *   - `updateJob` needs the CURRENT type to know whether the type is changing and therefore which
  *     stale detail row to delete first.
  *
@@ -521,8 +527,8 @@ const JOB_FIELDS: readonly FieldSpec<JobUpdate & { projectId?: string }>[] = [
   { column: "work_code", kind: "text", read: (i) => i.workCode },
   { column: "job_pm_id", kind: "id", read: (i) => i.jobPmId },
   /**
-   * 업무 구분. Seven columns are NOT here any more and must not be re-added, because a spec for a
-   * column `job` no longer has makes EVERY save fail with 42703:
+   * The job type. Seven columns are NOT here any more and must not be re-added, because a spec for
+   * a column `job` no longer has makes EVERY save fail with 42703:
    *
    * - `job_slang`, `job_elang` (db/011_job_types.sql) and `job_volume`, `unit_code`,
    *   `job_price_sel`, `job_price`, `job_price_dis` (db/012_job_pricing.sql) belong to
@@ -639,13 +645,14 @@ export const JobUpdateOps: (
  * `job_detail_linguistic`'s writable columns - the language pair and how the amount was derived.
  *
  * The five pricing inputs are here and not in `JOB_FIELDS` because only linguistic work is billed
- * per word (db/012_job_pricing.sql). A MICE or IMC job submits `job_price_sum` and
- * `job_price_ksum` directly, and those two never left `job`.
+ * per word (db/012_job_pricing.sql). A MICE or IMC job submits `job_price_sum` and `job_price_ksum`
+ * directly, and those two never left `job`.
  *
  * Consequence worth knowing: re-typing a job to MICE drops this row, so the word count and unit
  * price go with it while the total survives on the parent. That is the point - the legacy
- * workaround stored a fabricated 한국어 > 한국어 pair and `1 단어` to make a non-linguistic job fit
- * a linguistic form, and clearing it must not disturb the one number the report reads.
+ * workaround stored a fabricated same-language pair and a volume of one word to make a
+ * non-linguistic job fit a linguistic form, and clearing it must not disturb the one number the
+ * report reads.
  */
 const JOB_LINGUISTIC_FIELDS: readonly FieldSpec<JobUpdate>[] = [
   { column: "job_slang", kind: "text", read: (i) => i.jobSlang },

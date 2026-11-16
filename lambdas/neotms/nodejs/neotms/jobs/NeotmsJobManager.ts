@@ -99,10 +99,10 @@ export async function getJob(
  *
  * ## Why this one is a transaction
  *
- * A job's 업무 구분 payload is in a side table (db/011_job_types.sql), so creating a MICE job is two
- * INSERTs. Un-transacted, a failure between them leaves a job row that claims to be MICE with no
- * category anywhere - indistinguishable from a MICE job nobody has finished filling in, and so not
- * even reportable as a defect. Either both land or neither does.
+  * A job's job-type payload is in a side table (db/011_job_types.sql), so creating a MICE job is
+  * two INSERTs. Un-transacted, a failure between them leaves a job row that claims to be MICE with
+  * no category anywhere - indistinguishable from a MICE job nobody has finished filling in, and so
+  * not even reportable as a defect. Either both land or neither does.
  *
  * The visibility read stays OUTSIDE the transaction deliberately. It is read-only, and under
  * Supavisor's transaction mode the backend is unavailable to every other caller from BEGIN to
@@ -156,16 +156,16 @@ export async function createJob(
  * otherwise still have its original language pair, and would appear to have remembered something
  * the user had moved away from. The constraint's contribution is to make omitting it loud.
  *
- * The table cleared is the one belonging to the type being LEFT - `jobDetailTable(current.jobType)`,
- * not the one the new type does not use. Those are the same table only while there are two types on
- * each side of the linguistic line: MICE to IMC leaves a `MICE` row in `job_detail_non_linguistic`,
- * which is also where an IMC row goes, and clearing "the other table" would clear nothing and let
- * the FK refuse the UPDATE.
+ * The table cleared is the one belonging to the type being LEFT -
+ * `jobDetailTable(current.jobType)`, not the one the new type does not use. Those are the same
+ * table only while there are two types on each side of the linguistic line: MICE to IMC leaves a
+ * `MICE` row in `job_detail_non_linguistic`, which is also where an IMC row goes, and clearing "the
+ * other table" would clear nothing and let the FK refuse the UPDATE.
  *
- * `JobProjectOps` opens the transaction because it is scoped: it answers "may this caller write this
- * job" and "what type is it now" in one statement, and the unscoped `JobDetailClearOps` that follows
- * is safe only because of it. `JobUpdateOps` is scoped too - redundantly, on purpose, so that no
- * write in the ops module depends on a caller having checked first.
+ * `JobProjectOps` opens the transaction because it is scoped: it answers "may this caller write
+ * this job" and "what type is it now" in one statement, and the unscoped `JobDetailClearOps` that
+ * follows is safe only because of it. `JobUpdateOps` is scoped too - redundantly, on purpose, so
+ * that no write in the ops module depends on a caller having checked first.
  */
 export async function updateJob(
   caller: NeotmsCaller,

@@ -19,12 +19,13 @@
 // checks for itself regardless - a hidden button is a courtesy, not a control.
 //
 // THIS IS THE ONE ROUTE THAT RUNS WITHOUT A STAFF ROW, and the reason is a deadlock the earlier
-// version of this file had. Behind the full guard, an employee with no staff row got a bare 403 from
-// every endpoint including this one - so the SPA had nothing to render but "not registered, contact
-// an administrator", on a system where self-registration is the way to become registered. The person
-// able to fix it was shown the one screen that did not mention the fix. So this route takes the
-// account-only tier (`requireLpxAccountOnly`) and does the staff lookup itself, which lets it answer
-// "you are not registered yet" as a 200 the UI can act on instead of a 403 it can only display.
+// version of this file had. Behind the full guard, an employee with no staff row got a bare 403
+// from every endpoint including this one - so the SPA had nothing to render but "not registered,
+// contact an administrator", on a system where self-registration is the way to become registered.
+// The person able to fix it was shown the one screen that did not mention the fix. So this route
+// takes the account-only tier (`requireLpxAccountOnly`) and does the staff lookup itself, which
+// lets it answer "you are not registered yet" as a 200 the UI can act on instead of a 403 it can
+// only display.
 
 import { pgQuery } from "../../utils/PostgresUtils.js";
 import {
@@ -43,8 +44,9 @@ export type MenuGrant = MenuNode & {
    * The five flags, named.
    *
    * Named rather than sent as the raw `role_1..role_5` array on purpose: the mapping from column to
-   * action is UNCONFIRMED (see `MenuAction`), so if it turns out to be wrong it has to be correctable
-   * in one place. A client that received the array would have baked the guess into its own code.
+   * action is UNCONFIRMED (see `MenuAction`), so if it turns out to be wrong it has to be
+   * correctable in one place. A client that received the array would have baked the guess into its
+   * own code.
    */
   may: Record<MenuAction, boolean>;
 };
@@ -54,10 +56,10 @@ export type MenuGrant = MenuNode & {
  *
  *   * `unregistered` - a verified LPX account with no staff row. Gets the sign-up form, prefilled
  *     from `prefill` below.
- *   * `pending`      - a staff row exists and `role_id IS NULL`. Gets the waiting notice. There is
- *     no mail in this system, so the only thing that moves this forward is an administrator seeing
- *     the request at the top of 사용자 관리.
- *   * `active`       - a role is assigned. Gets the application.
+ *   * `pending` - a staff row exists and `role_id IS NULL`. Gets the waiting notice. There is no
+ *     mail in this system, so the only thing that moves this forward is an administrator seeing the
+ *     request at the top of the staff administration screen.
+ *   * `active` - a role is assigned. Gets the application.
  *
  * `inactive` is deliberately not in this list. A deactivated row is a refusal (403), not a state
  * with a screen: offering it the sign-up form would let somebody an administrator switched off mint
@@ -128,8 +130,8 @@ const NO_RIGHTS: Record<MenuAction, boolean> = {
  * The whole menu tree, each entry carrying this caller's rights on it.
  *
  * Menus the role holds no rights on are returned with every flag false rather than omitted. The UI
- * needs the full tree to render a disabled entry and to keep the navigation order stable, and a menu
- * silently missing from this response is indistinguishable from a menu that was deleted.
+ * needs the full tree to render a disabled entry and to keep the navigation order stable, and a
+ * menu silently missing from this response is indistinguishable from a menu that was deleted.
  */
 async function grantsFor(caller: NeotmsCaller): Promise<MenuGrant[]> {
   const menus = (await pgQuery(MenuTreeOps())).data;
@@ -153,8 +155,8 @@ async function grantsFor(caller: NeotmsCaller): Promise<MenuGrant[]> {
 /**
  * The caller's registration state, and - once approved - their profile and permission matrix.
  *
- * Takes an `LpxIdentity` rather than a `NeotmsCaller` because there may not be a caller yet; see the
- * file header. The staff lookup it does is the same one the full guard does, through the same
+ * Takes an `LpxIdentity` rather than a `NeotmsCaller` because there may not be a caller yet; see
+ * the file header. The staff lookup it does is the same one the full guard does, through the same
  * function and the same cache, so an answer here and a refusal on the next request cannot disagree.
  *
  * The menu tree is read only for an approved caller. Not an optimisation worth much on its own - it

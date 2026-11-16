@@ -1,27 +1,27 @@
 // SPDX-License-Identifier: MIT
 //
-// 대시보드 - "how are MY projects doing", in one query.
+// The dashboard - "how are MY projects doing", in one query.
 //
-// Two dashboards, 영업 and PM, differing in exactly one thing: which column on `project` means
-// "mine". 영업 reads `prj_mgr_id` (the sales manager who sold the work), PM reads `prj_pm_id` (the
-// project manager running it). Everything else - the three state tiles, the three money figures - is
-// the same aggregate over whichever set that selects, which is why this is one ops and not two.
+// Two dashboards, sales and PM, differing in exactly one thing: which column on `project` means
+// "mine". Sales reads `prj_mgr_id` (the sales manager who sold the work), PM reads `prj_pm_id` (the
+// project manager running it). Everything else - the three state tiles, the three money figures -
+// is the same aggregate over whichever set that selects, which is why this is one ops and not two.
 //
 // ## Why this is not a report with a filter
 //
-// The reports could almost answer this and the "almost" is the whole problem. Three mismatches, each
-// of which would make the dashboard quietly wrong rather than unavailable:
+// The reports could almost answer this and the "almost" is the whole problem. Three mismatches,
+// each of which would make the dashboard quietly wrong rather than unavailable:
 //
 //   1. **The report's `pmId` filter is `j.job_pm_id`, the JOB's PM, not the project's.** Those
 //      legitimately differ - db/002_tables.sql says so on the column - so filtering the report by
 //      `pmId` answers "the jobs I personally run", not "my projects". A project PM who delegates
 //      every job would read zero.
-//   2. **`ReportQuerySchema` requires both ends of a date range**, and the question here has none.
+//   2. ** `ReportQuerySchema` requires both ends of a date range**, and the question here has none.
 //      Picking a range for the user ("this month") would silently answer a different question, and
 //      the figure a manager compares against their target is their book, not a month of it.
 //   3. **Revenue and cost would be scoped by `REPORT_SCOPE_COLUMNS`,** which ORs three ownership
-//      columns together. That is correct for a report - it must show exactly the jobs its reader can
-//      list - but it is wider than "my projects" and would fold in jobs from other people's
+//      columns together. That is correct for a report - it must show exactly the jobs its reader
+//      can list - but it is wider than "my projects" and would fold in jobs from other people's
 //      projects where the reader happens to be the job PM.
 //
 // ## Unbounded by date, bounded by ownership
@@ -30,17 +30,17 @@
 // a deliberate difference from the reports, where the range is what keeps live aggregation
 // affordable, and it is affordable here for a different reason: the set is bounded by
 // `prj_mgr_id = me` / `prj_pm_id = me` on `ix_prj_mgr` / `ix_prj_pm` instead - one person's book,
-// not the company's history. The client labels the figure 전체 so that an all-time total reads as a
-// deliberate all-time total.
+// not the company's history. The client labels the figure "all time" so that an all-time total
+// reads as a deliberate all-time total.
 //
 // ## One row per project, twice over
 //
 // Revenue is on the job and cost is on the PO, and a project has many of each. Joining both would
-// multiply every job's revenue by the project's PO count, which - as NeotmsReport.dbops.ts puts it -
-// does not look wrong, it just overstates income. So each side is collapsed in its own
+// multiply every job's revenue by the project's PO count, which - as NeotmsReport.dbops.ts puts
+// it - does not look wrong, it just overstates income. So each side is collapsed in its own
 // `LEFT JOIN LATERAL` with no `GROUP BY`, which returns exactly one row and therefore cannot
-// duplicate or drop a project. It is the same shape `ProjectTotalsOps` uses for a single project,
-// widened from one id to a set.
+// duplicate or drop a project. It is the same shape `ProjectTotalsOps` uses for a single
+// project, widened from one id to a set.
 
 import { param, readMoney, type SqlOps, type SqlParameter } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
@@ -57,7 +57,7 @@ import {
 /* Which column means "mine"                                                  */
 /* -------------------------------------------------------------------------- */
 
-/** 영업 or PM. The only axis on which the two dashboards differ. */
+/** Sales or PM. The only axis on which the two dashboards differ. */
 export type DashboardRole = "sales" | "pm";
 
 /**
@@ -92,18 +92,19 @@ export type DashboardSummary = {
   role: DashboardRole;
   /** Every non-deleted project of mine. The denominator the three tiles are read against. */
   projects: number;
-  /** 진행 - live work. */
+  /** Live work. */
   inProgress: number;
   /**
-   * Past its due date and not yet 완료/취소.
+   * Past its due date and not yet done or cancelled.
    *
-   * **Overlaps the other two tiles**, and is meant to: a 진행 project whose date has passed is both
-   * in progress and late, and a 보류 one that has passed its date is both parked and late. The three
-   * numbers are three questions about the same set, not a partition of it, so they do not sum to
-   * `projects` - and the client says so rather than letting a reader discover it by adding them up.
+   * **Overlaps the other two tiles**, and is meant to: a live project whose date has passed is both
+   * in progress and late, and a parked one that has passed its date is both parked and late. The
+   * three numbers are three questions about the same set, not a partition of it, so they do not sum
+   * to `projects` - and the client says so rather than letting a reader discover it by adding them
+   * up.
    */
   overdue: number;
-  /** 보류 - parked. The legacy screen called this tile "Holding 프로젝트". */
+  /** Parked. The legacy screen called this tile "Holding". */
   onHold: number;
   /**
    * Projects whose `prj_state` is not one of the five this build knows.
@@ -143,10 +144,10 @@ const TODAY_KST = "(now() AT TIME ZONE 'Asia/Seoul')::date";
  *
  * `scopeClause` is applied on top of the ownership filter even though the ownership filter already
  * pins one of `PROJECT_SCOPE_COLUMNS` to this caller, making it strictly redundant today. It stays
- * because the redundancy is cheap - the planner drops a predicate implied by an equality on the same
- * column - and because the day somebody widens the ownership filter (a team dashboard, a
- * "my department" view) the scope predicate is what keeps the widening from also widening who can
- * be read. A scope clause that was never there is not noticed at that moment.
+ * because the redundancy is cheap - the planner drops a predicate implied by an equality on the
+ * same column - and because the day somebody widens the ownership filter (a team dashboard, a "my
+ * department" view) the scope predicate is what keeps the widening from also widening who can be
+ * read. A scope clause that was never there is not noticed at that moment.
  */
 export const DashboardSummaryOps: (
   caller: NeotmsCaller,

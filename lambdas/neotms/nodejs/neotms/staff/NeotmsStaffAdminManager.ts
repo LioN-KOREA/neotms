@@ -1,34 +1,35 @@
 // SPDX-License-Identifier: MIT
 //
-// The 사용자 관리 endpoints: who works here, what roles exist, and who holds which.
+// The staff administration endpoints: who works here, what roles exist, and who holds which.
 //
 // ## This is the most dangerous endpoint in the application
 //
 // `PATCH /api/v0/admin/staff/:id` writes `staff.role_id`, and every permission in NEOTMS resolves
 // from that column through `sys_role_auth`. A caller who can reach this route can grant themselves
 // or anybody else the full menu x action matrix. That is not a flaw - somebody has to be able to
-// approve a new colleague - but it does mean the gate on the route table (`menu: NeotmsMenu.STAFF`,
-// `action: "update"`) is the single thing standing between a PM and total control of the system.
+// approve a new colleague - but it does mean the gate on the route table (
+// `menu: NeotmsMenu.STAFF`, `action: "update"`) is the single thing standing between a PM and total
+// control of the system.
 //
-// In LKTMS the equivalent value arrived in an unsigned cookie. The improvement is not merely that it
-// now lives in a table; it is that the write has exactly one statement
-// (`StaffAdminUpdateOps`), one route, and one menu, so the question "what can change somebody's
-// permissions" has a finite answer.
+// In LKTMS the equivalent value arrived in an unsigned cookie. The improvement is not merely that
+// it now lives in a table; it is that the write has exactly one statement (`StaffAdminUpdateOps`),
+// one route, and one menu, so the question "what can change somebody's permissions" has a finite
+// answer.
 //
 // ## Why the self-lockout guards are here and not in the database
 //
 // Two refusals below stop a caller editing their own row into uselessness. They are in TypeScript
 // rather than in a CHECK constraint because they depend on WHO IS ASKING, which the database does
 // not know - the connection is a single pooled application role, not the end user. A trigger would
-// have to be told the caller, i.e. trust a value the application passed it, which is the same
-// trust boundary with more moving parts.
+// have to be told the caller, i.e. trust a value the application passed it, which is the same trust
+// boundary with more moving parts.
 //
 // ## What these guards do NOT cover, stated plainly
 //
 // They stop a caller CLEARING their own role or DEACTIVATING themselves. They do not stop a caller
-// assigning themselves a role that happens to lack 사용자 관리 rights, and they do not stop the last
-// administrator demoting a DIFFERENT administrator. Either can leave the company with nobody able
-// to assign roles.
+// assigning themselves a role that happens to lack staff administration rights, and they do not
+// stop the last administrator demoting a DIFFERENT administrator. Either can leave the company with
+// nobody able to assign roles.
 //
 // A complete guard would be "refuse if this change leaves no active staff holding STAFF.update",
 // which needs a count over `sys_role_auth`. It is deliberately not implemented here, for one
@@ -38,7 +39,7 @@
 // legitimate changes or permits the lockout it was written to prevent, and both are worse than the
 // documented recovery path:
 //
-//   SELECT staff_bootstrap_superuser(...);   -- db/006_bootstrap.sql
+//   SELECT staff_bootstrap_superuser(...); -- db/006_bootstrap.sql
 //
 // which re-mints or repairs a superuser from the SQL editor. Confirm the action mapping and this
 // becomes a short query worth adding.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// 번역가 인보이스 - the translator invoice / payable (legacy INVTB_TRAN).
+// The translator invoice / payable (legacy INVTB_TRAN).
 //
 // ## What this table is FOR, which is not what the PO already does
 //
@@ -12,30 +12,29 @@
 //
 // So the division of responsibility is:
 //
-//   * `invoice_translator`  - the document. Its code, its date, its totals, and the payment recorded
-//                             against it. One row per document.
-//   * `purchase_order`      - the work, and the SSOT for payment STATE. `invoice_translator_id`
-//                             points at the document, `po_state` and `po_money_state` say how far
-//                             the work and the money have got.
+//   * `invoice_translator` - the document. Its code, its date, its totals, and the payment recorded
+//     against it. One row per document.
+//   * `purchase_order` - the work, and the SSOT for payment STATE. `invoice_translator_id` points
+//     at the document, `po_state` and `po_money_state` say how far the work and the money have got.
 //
 // The invoice does not own the PO's state, and nothing here writes `po_state`. An invoice being
-// issued does not move a PO to 완료 - only money does, and 완료 means paid in full
+// issued does not move a PO to PO_STATE_DONE - only money does, and that state means paid in full
 // (NeotmsPoStates.ts). The settlement route on the PO is what records that.
 //
 // ## The three columns written by subquery rather than accepted
 //
-// `tran_name`, `pm_code` and `pm_name` are denormalised copies - see `DerivedSpec` in NeotmsWrite.ts
-// for the general argument. On an invoice the argument is sharper than usual, because this row is
-// printed and sent: a client that could post `tranName` would decide whose name appears on a
-// payment document.
+// `tran_name`, `pm_code` and `pm_name` are denormalised copies - see `DerivedSpec` in
+// NeotmsWrite.ts for the general argument. On an invoice the argument is sharper than usual,
+// because this row is printed and sent: a client that could post `tranName` would decide whose name
+// appears on a payment document.
 //
 // ## Scope
 //
-// An invoice is visible to its own PM (`inv_pm_id`) OR to anybody who can see one of the POs on it.
-// The second half is the one that matters: a PM who raised three of the four POs on an invoice has
-// to be able to open the document those POs are on, and `inv_pm_id` alone would hide it from them.
-// The PO half reuses `PO_SCOPE_COLUMNS` by import rather than restating the four columns - see
-// `invoiceScopeClause`.
+// An invoice is visible to its own PM (`inv_pm_id`) OR to anybody who can see one of the POs on
+// it. The second half is the one that matters: a PM who raised three of the four POs on an invoice
+// has to be able to open the document those POs are on, and `inv_pm_id` alone would hide it from
+// them. The PO half reuses `PO_SCOPE_COLUMNS` by import rather than restating the four columns -
+// see `invoiceScopeClause`.
 
 import {
   param,
@@ -133,8 +132,8 @@ export type InvoiceRow = {
 
 /**
  * The column list, as a function of the table qualifier - the convention every dbops module here
- * follows (see NeotmsCustomer.dbops.ts) so the same list serves a SELECT and an `INSERT
- * ... RETURNING`.
+ * follows (see NeotmsCustomer.dbops.ts) so the same list serves a SELECT and an
+ * `INSERT ... RETURNING`.
  *
  * The two PO aggregates are correlated subqueries rather than a `GROUP BY` join. A join to
  * `purchase_order` would fan one invoice out into one row per PO, and then every other column would
@@ -244,9 +243,9 @@ export type InvoiceSortKey = keyof typeof INVOICE_SORTS;
  * What the payables screen searches by.
  *
  * `inv_tran_code` first because the overwhelmingly common reason to search this list is that
- * somebody is holding a document with a code on it. `tran_name` is the denormalised copy and carries
- * the Korean 2-gram index the DDL comment mentions, so a name search is served by an index rather
- * than by a scan.
+ * somebody is holding a document with a code on it. `tran_name` is the denormalised copy and
+ * carries the Korean 2-gram index the DDL comment mentions, so a name search is served by an index
+ * rather than by a scan.
  */
 const INVOICE_SEARCH_COLUMNS = ["it.inv_tran_code", "it.tran_name", "it.pm_name"];
 
@@ -276,8 +275,8 @@ export type InvoiceFilters = Partial<Record<keyof typeof INVOICE_FILTERS, string
 /**
  * Who may see this invoice: its PM, or anyone who can see a PO on it.
  *
- * The `EXISTS` half is the reason `PO_SCOPE_COLUMNS` is exported from the PO module. Restating those
- * four columns here would be the fourth copy of the list, which is precisely the drift the
+ * The `EXISTS` half is the reason `PO_SCOPE_COLUMNS` is exported from the PO module. Restating
+ * those four columns here would be the fourth copy of the list, which is precisely the drift the
  * `REPORT_SCOPE_COLUMNS` equality test exists to catch - and a scope list that has drifted does not
  * fail, it just shows somebody a row they should not have.
  *
@@ -397,8 +396,8 @@ export const InvoiceCodeOps: (id: string) => SqlOps<string | null> = (id) => ({
  * `inv_tran_code` is not here either - minted once, by the INSERT. See NeotmsCodes.ts.
  *
  * The `inv_mo_*` five are the payment recorded against the DOCUMENT. They are writable through the
- * 결제 menu's update action, which is the same authority that approves a PO: deciding that money
- * went out is not the same job as raising the paperwork that asked for it.
+ * The payment menu's update action, which is the same authority that approves a PO: deciding that
+ * money went out is not the same job as raising the paperwork that asked for it.
  */
 const INVOICE_FIELDS: readonly FieldSpec<InvoiceTranslatorUpdate>[] = [
   { column: "coin_code", kind: "text", read: (i) => i.coinCode },
@@ -439,12 +438,12 @@ const INVOICE_DERIVED: readonly DerivedSpec<InvoiceTranslatorUpdate>[] = [
  * Create the invoice document.
  *
  * `translator_id` and `tran_name` are written unconditionally, the name by subquery from the id -
- * the same pairing `PoCreateOps` uses for `po_tran_name`, for the same reason: the name on a payment
- * document must be the name of the translator it is addressed to, and a request cannot be allowed a
- * say in that.
+ * the same pairing `PoCreateOps` uses for `po_tran_name`, for the same reason: the name on a
+ * payment document must be the name of the translator it is addressed to, and a request cannot be
+ * allowed a say in that.
  *
- * `poIds` is NOT written here. Attaching the POs is a second statement against a second table
- * (`PoInvoiceAssignOps`), and the manager runs the two inside one transaction - an invoice that
+ * `poIds` is NOT written here. Attaching the POs is a second statement against a second table (
+ * `PoInvoiceAssignOps`), and the manager runs the two inside one transaction - an invoice that
  * exists with none of its POs attached is a document with a total and no lines, which is worse than
  * a failed request.
  */
@@ -457,8 +456,9 @@ export const InvoiceCreateOps: (
   // Assembled as two parallel lists and joined once, rather than interpolated as three groups
   // separated by commas. A body naming none of the optional columns is legitimate - the manager
   // always supplies `invPmId`, but an invoice with only a translator and its POs is a valid
-  // document - and the three-group form would then emit `(code, translator_id, tran_name, ,
-  // created_by)`, which is a syntax error rather than an empty-but-valid INSERT.
+  // document - and the three-group form would then emit
+  // `(code, translator_id, tran_name, , created_by)`, which is a syntax error rather than an
+  // empty-but-valid INSERT.
   const columns = [
     "inv_tran_code",
     "translator_id",
@@ -539,8 +539,8 @@ export const InvoiceUpdateOps: (
  * Void an invoice.
  *
  * Soft, like every delete in this schema - the document was sent, and a payable that vanishes is a
- * payable nobody can answer a question about. The POs are detached separately
- * (`PoInvoiceDetachOps`), in the same transaction: a PO still pointing at a voided invoice is a PO
+ * payable nobody can answer a question about. The POs are detached separately (
+ * `PoInvoiceDetachOps`), in the same transaction: a PO still pointing at a voided invoice is a PO
  * that can never be re-invoiced, because `PoInvoiceAssignOps` refuses one already on another
  * invoice. Detaching returns the work to the uninvoiced list, which is where it belongs.
  */

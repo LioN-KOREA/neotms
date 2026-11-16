@@ -25,18 +25,17 @@
 //      so `ix_job_eday` turns every report into a bounded index scan. Measured on a database an
 //      order of magnitude larger than production (150k jobs, 200k POs, 15 years): 7-10 ms for a
 //      month, 66 ms for a year, 673 ms for the entire fifteen years. The rollup's advantage over
-//      that is tens of milliseconds a manager cannot perceive, bought with a whole second system
-//      of record for revenue that can silently disagree with the first.
+//      that is tens of milliseconds a manager cannot perceive, bought with a whole second system of
+//      record for revenue that can silently disagree with the first.
 //
 // What the rollup's existence did leave behind is its *definitions*, and those were right. They are
 // preserved exactly here, so a report run today reproduces what the rollup would have computed:
 //
-//   business date  job.job_eday            - delivery is the point of revenue recognition, so a job
+//   business date job.job_eday - delivery is the point of revenue recognition, so a job
 //                                            created in December and delivered in January belongs
 //                                            to January. NOT created_at, NOT the project's dates.
-//   revenue        JOB_KRW over job        - booked on the JOB
-//   cost           PO_KRW over purchase_order - booked on the PO
-//   margin         revenue - cost          - derived in SQL, never stored
+//   revenue JOB_KRW over job - booked on the JOB cost PO_KRW over purchase_order - booked on the PO
+//   margin revenue - cost - derived in SQL, never stored
 //
 // Both amounts are KRW rather than original-currency totals, because a report row aggregates across
 // currencies and those figures have to be comparable.
@@ -44,10 +43,10 @@
 // What produces the KRW figure is `NeotmsMoney.JOB_KRW` / `PO_KRW` rather than the bare
 // `*_price_ksum` columns, and the difference shows up in one case out of three: a foreign-currency
 // amount NOBODY HAS EXCHANGED YET is valued at today's rate, because its worth in KRW moves with
-// the currency until somebody converts it. An amount that HAS been exchanged keeps the figure it was
-// booked at, forever - so a report of a closed quarter still reproduces exactly on every run, which
-// is the property the captured `job.coin_rate` was introduced to guarantee and which this change
-// preserves rather than trades away. The full rule, and why it lives in one module, is in
+// the currency until somebody converts it. An amount that HAS been exchanged keeps the figure it
+// was booked at, forever - so a report of a closed quarter still reproduces exactly on every run,
+// which is the property the captured `job.coin_rate` was introduced to guarantee and which this
+// change preserves rather than trades away. The full rule, and why it lives in one module, is in
 // NeotmsMoney's header; db/014_fx_rates.sql is the authority on the data model behind it.
 //
 // ## Revenue lives one level above cost
@@ -72,8 +71,8 @@
 // means "no customer", not "customer 0" - see `dimensionFilters`, which translates it back.
 //
 // `?` keeps its narrow meaning: a LINGUISTICS job whose languages were never recorded. Work that
-// has no language pair to record at all - MICE, IMC, anything else added to the 업무 구분 list later
-// - keys as `(비언어)` instead, so the `?` line stays readable as the data-entry gap it is. That
+// has no language pair to record at all - MICE, IMC, anything else added to the job-type list later
+// - keys as the non-linguistic bucket instead, so the `?` line stays readable as the
 // distinction is the one thing the rollup could not have expressed, because it predates the type.
 
 import {
@@ -202,8 +201,8 @@ const REPORT_MEASURES = `
  *
  * `key` and `label` are interpolated into the SQL, and `join` more so - so this map is an
  * allow-list in the strict sense. `ReportQuerySchema.groupBy` is a valibot `picklist`, so a request
- * can only name one of these nine; the object is keyed by those same names and nothing else
- * reaches here.
+ * can only name one of these nine; the object is keyed by those same names and nothing else reaches
+ * here.
  *
  * `label` is cast to text in every case because the column it comes from varies - a date, a bigint
  * id, a code string - and a single result shape is worth more to the client than preserving three
@@ -232,9 +231,9 @@ type Dimension = {
    *
    * Separate from `displayBy` because "which rows matter" and "what order to read them in" are not
    * the same question once there is a limit, and for the time series they are opposites. `LIMIT 10`
-   * on a `job_eday ASC` ordering returns the *oldest* ten days in the range - so a user asking
-   * for "the last 30 days, top 10" would be shown January while believing they were shown the
-   * recent past. Nothing about the result looks wrong: ten rows, correct figures, ascending dates.
+   * on a `job_eday ASC` ordering returns the *oldest* ten days in the range - so a user asking for
+   * "the last 30 days, top 10" would be shown January while believing they were shown the recent
+   * past. Nothing about the result looks wrong: ten rows, correct figures, ascending dates.
    */
   pickBy: string;
   /** What order the surviving rows are returned in: a time series reads chronologically, a
@@ -262,21 +261,23 @@ const idKey = (column: string): string => `COALESCE(${column}, 0)::text`;
 const BY_REVENUE = "revenue DESC, dim_label ASC";
 
 /**
- * The language pair, or `(비언어)` for work that has no such thing.
+  * The language pair, or the non-linguistic bucket for work that has no such thing.
  *
  * Both halves live in `job_detail_linguistic` since db/011_job_types.sql, and a job of any other
- * 업무 구분 has no row there at all - so without the `CASE` every MICE and IMC job would read
+ * job type has no row there at all - so without the `CASE` every MICE and IMC job would read
  * `? > ?`, which already means something else entirely. `? > ?` is the data-entry gap this file's
  * header documents: a linguistics job somebody delivered without recording the languages. Blending
  * the two would put a growing business line inside a bucket managers are trained to read as "go and
  * fix these records".
  *
  * The `ELSE` is keyed off `j.job_type` rather than off the absence of a `jdl` row, so it mirrors
- * `isLinguistic` in NeotmsJobTypes.ts: a fourth type added later from 유지보수 lands in `(비언어)`,
- * which is the honest answer until someone gives it a dimension of its own.
+ * `isLinguistic` in NeotmsJobTypes.ts: a fourth type added later from the maintenance screen lands
+ * in the non-linguistic bucket, which is the honest answer until someone gives it a dimension of
+ * its own.
  *
  * Still no join to `sys_code` for the two codes themselves - resolving them to `code_name` would
- * cost two more joins to print "한국어 > 영어" where the whole company says "KO > EN".
+ * cost two more joins to print the full Korean language names where the whole company says "KO >
+ * EN".
  */
 const LANG_PAIR = `CASE WHEN j.job_type = '${JOB_TYPE_LINGUISTIC}'
                   THEN COALESCE(NULLIF(jdl.job_slang, ''), '?') || ' > '
@@ -334,14 +335,14 @@ const REPORT_DIMENSIONS = {
     displayBy: BY_REVENUE,
   },
   /*
-   * The subject domain, resolved from the project's primary field code. `prj_field2` is deliberately
-   * not reported on: a job counted under two fields would double the revenue of any breakdown that
-   * summed the bars.
+   * The subject domain, resolved from the project's primary field code. `prj_field2` is
+   * deliberately not reported on: a job counted under two fields would double the revenue of any
+   * breakdown that summed the bars.
    *
    * Joined on `sys_code.code`, which is UNIQUE - so this cannot fan a job out across several code
    * rows the way an unconstrained label join could. A retired code with no row at all falls through
-   * to sentinel 0, indistinguishable here from a project with no field set; to tell those two apart,
-   * query `project.prj_field` directly.
+   * to sentinel 0, indistinguishable here from a project with no field set; to tell those two
+   * apart, query `project.prj_field` directly.
    */
   category: {
     key: idKey("sc.id"),
@@ -364,16 +365,16 @@ const REPORT_DIMENSIONS = {
     displayBy: BY_REVENUE,
   },
   /*
-   * 업무 구분 - which line of business the revenue came from, and the dimension `langPair` can no
-   * longer answer now that it folds all three non-linguistic types into one line.
+   * The job type - which line of business the revenue came from, and the dimension `langPair` can
+   * no longer answer now that it folds all three non-linguistic types into one line.
    *
    * Keyed on the CODE, not on `sys_code.id` the way `category` is. The code is what `j.job_type`
    * actually stores and what every other layer - the CHECK constraints, `isLinguistic`, the job
    * list's filter - identifies a type by, so going through the id would add a join to the key
    * expression and a fan-out risk for no gain. The label still resolves through `sys_code` to print
-   * "언어 및 통번역" rather than "LINGUISTICS", falling back to the raw code so that a retired code
-   * row degrades to `MICE` instead of to "(unassigned)" - the type is NOT NULL, so "(unassigned)"
-   * would be a lie here.
+   * the readable code name rather than "LINGUISTICS", falling back to the raw code so that a
+   * retired code row degrades to `MICE` instead of to "(unassigned)" - the type is NOT NULL, so
+   * "(unassigned)" would be a lie here.
    *
    * Alias `sct`, because `sc` is taken by `category` above and two joins to `sys_code` under one
    * alias is a syntax error rather than a wrong number.
@@ -386,14 +387,15 @@ const REPORT_DIMENSIONS = {
     displayBy: BY_REVENUE,
   },
   /*
-   * 업무 분류 - the MICE/IMC equivalent of a language pair, from `job_detail_non_linguistic`.
+   * The job category - the MICE/IMC equivalent of a language pair, from
+   * `job_detail_non_linguistic`.
    *
    * Every linguistics job falls into "(unassigned)" here, and that is correct rather than a gap: a
-   * translation job has no 업무 분류 to record. Read this dimension with a 업무 구분 report beside
-   * it, or the unassigned bar reads as missing data.
+   * translation job has no job category to record. Read this dimension with a job-type report
+   * beside it, or the unassigned bar reads as missing data.
    *
-   * Two joins, both LEFT: the detail row is optional by design (a MICE job saved before its category
-   * was known has none), and the code row may have been retired.
+   * Two joins, both LEFT: the detail row is optional by design (a MICE job saved before its
+   * category was known has none), and the code row may have been retired.
    */
   jobCategory: {
     key: unassigned("jdn.job_category"),
@@ -412,8 +414,8 @@ const REPORT_DIMENSIONS = {
  * Not pagination - a report is read as a whole or exported, not scrolled - but a ceiling. The Data
  * API caps a result set at 1 MiB and fails the whole call when it is exceeded, from deep inside the
  * SQL layer where the error says nothing useful. A thousand lines of five short fields is far below
- * that, and a breakdown that would exceed it is a breakdown nobody reads on screen: that is what the
- * XLSX export is for.
+ * that, and a breakdown that would exceed it is a breakdown nobody reads on screen: that is what
+ * the XLSX export is for.
  */
 export const REPORT_LINE_CAP = 1000;
 
@@ -443,7 +445,8 @@ function dimensionFilters(query: ReportQuery): SqlClause {
   const parameters: SqlParameter[] = [];
   const add = (column: string, name: string, value: string | undefined): void => {
     if (value === undefined) return;
-    // `IdSchema` is `^\d{1,19}$`, so "0" can also arrive as "00" - match on the value, not the text.
+    // `IdSchema` is `^\d{1,19}$`, so "0" can also arrive as "00" - match on the value, not the
+    // text.
     if (/^0+$/.test(value)) {
       parts.push(`AND ${column} IS NULL`);
       return;
@@ -561,8 +564,8 @@ export const ReportBreakdownOps: (
  * The totals for the same range and filters, independent of the breakdown.
  *
  * A separate query rather than a sum of the returned lines, because the lines are capped: adding up
- * a truncated list would produce a grand total quietly smaller than the real one, which is the worst
- * kind of wrong number - plausible, and off by an amount nobody can account for.
+ * a truncated list would produce a grand total quietly smaller than the real one, which is the
+ * worst kind of wrong number - plausible, and off by an amount nobody can account for.
  *
  * No `dimension.join`, because there is no dimension: the label joins exist to print a name and
  * nothing here is grouped. Leaving them out is not just tidiness - a label join is the one place a
@@ -609,9 +612,10 @@ export type WorkloadCounts = {
  *
  * Both would need the `job_state` vocabulary, and the legacy state values are UNCONFIRMED - the
  * column is free text and the code set has not been profiled. A counter built on a guessed literal
- * ('DONE', 'COMPLETE', '완료') does not fail; it silently reads zero, and a dashboard tile that
- * always shows zero is read as good news. So these three counters are defined purely by dates,
- * which need no vocabulary, and the state-based tiles wait until the real values are known.
+ * ('DONE', 'COMPLETE', or a mistyped state word) does not fail; it silently reads zero, and a
+ * dashboard tile that always shows zero is read as good news. So these three counters are defined
+ * purely by dates, which need no vocabulary, and the state-based tiles wait until the real values
+ * are known.
  *
  * `jobsWithoutPo` is the one worth watching: a job due this week with nothing subcontracted is
  * either work about to be done in-house or work nobody has started, and both are things a PM wants

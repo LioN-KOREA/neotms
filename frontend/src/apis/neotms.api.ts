@@ -283,18 +283,20 @@ export const deleteProject = (id: string) =>
   neotmsApi<void>(`/api/v0/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 /**
- * 인계메일 발송.
+ * Sends the handover mail.
  *
- * 경로가 프로젝트에 달려 있고 **권한도 프로젝트**다(`PROJECT:read`) — PO 의 `/approval` 과는
- * 반대 경우다. 밖으로 나가는 값이 전부 호출자가 이미 화면에서 읽을 수 있는 것이고, 메일은
- * 호출자 **자신의** 하이웍스 계정에서 나가므로, 이 호출이 새로 주는 권한이 없다. 원래 요구사항이
- * "클립보드로 복사해서 하이웍스에 붙여넣기" 였다는 것을 생각하면 분명하다.
+ * The path hangs off the project and SO DOES THE AUTHORITY (`PROJECT:read`) - the opposite case to
+ * the PO's `/approval`. Everything leaving the server is a value the caller can already read on
+ * screen, and the mail goes out from the caller's OWN Hiworks account, so this call grants nothing
+ * new. That is clearest from what it replaces: the original requirement was "copy to the clipboard
+ * and paste it into Hiworks".
  *
- * POST 이고 PATCH 가 아니다. 이 저장소에서 PATCH 는 부분 수정이라는 뜻인데, 여기서 바뀌는 행은
- * 하나도 없다. 바뀌는 것은 PM 의 받은메일함이다.
+ * POST, not PATCH. In this repository PATCH means a partial edit, and not one row changes here.
+ * What changes is the PM's inbox.
  *
- * **멱등이 아니다.** 두 번 부르면 메일이 두 통 간다. 화면이 보내는 동안 버튼을 잠가야 하는
- * 이유이고, 서버가 중복을 막아 줄 방법은 없다 — 같은 프로젝트를 다시 인계하는 것도 정상이다.
+ * **NOT idempotent.** Call it twice and two mails go out. That is why the screen locks the button
+ * while it is sending, and why the server cannot deduplicate for us - handing the same project over
+ * a second time is a legitimate thing to do.
  */
 export const sendHandoverMail = (id: string, input: HandoverMailInput) =>
   neotmsApi<HandoverMailSent>(`/api/v0/projects/${encodeURIComponent(id)}/handover-mail`, {

@@ -142,9 +142,9 @@ export function limitClause<K extends string>(query: ListQuery<K>): SqlClause {
 /**
  * The `ORDER BY` for a resolved list query.
  *
- * `NULLS LAST` on a descending sort and `NULLS FIRST` on an ascending one - i.e. nulls always at the
- * end - so a list sorted by an optional date puts the rows that have no date where a reader expects
- * them, and the ordering stays the same shape in both directions.
+ * `NULLS LAST` on a descending sort and `NULLS FIRST` on an ascending one - i.e. nulls always at
+ * the end - so a list sorted by an optional date puts the rows that have no date where a reader
+ * expects them, and the ordering stays the same shape in both directions.
  *
  * It must also match the keyset comparison, or paging and ordering disagree and rows go missing.
  * This is why the ORDER BY is built here from the same resolved target rather than written out at
@@ -159,7 +159,7 @@ export function orderByClause<K extends string>(query: ListQuery<K>, idColumn: s
 /**
  * Escape a user-supplied search term for use in a `LIKE` pattern.
  *
- * Without this, `%` and `_` typed by a user are wildcards: searching for the customer "50% 할인"
+ * Without this, `%` and `_` typed by a user are wildcards: searching for a customer named "50% off"
  * matches everything, and searching for "A_B" matches "AxB". The backslash has to be escaped first
  * or it would escape the escapes we add.
  */
@@ -170,15 +170,15 @@ const escapeLike = (term: string): string =>
  * A substring search across one or more columns, answered from a PGroonga index.
  *
  * `LIKE '%term%'` rather than a tsvector match, and PGroonga rather than pg_trgm, for a reason that
- * only shows up in Korean: pg_trgm indexes 3-grams, so a two-character term - 삼성, 번역, 계약 - has
- * no trigram at all and the planner falls back to a sequential scan. The index exists and does
- * nothing, silently. PGroonga tokenises CJK text properly and serves the two-character case, which
- * is the shortest term people actually type.
+ * only shows up in Korean: pg_trgm indexes 3-grams, so a two-character term - and most Korean
+ * company and subject words are two characters long - has no trigram at all and the planner falls
+ * back to a sequential scan. The index exists and does nothing, silently. PGroonga tokenises CJK
+ * text properly and serves the two-character case, which is the shortest term people actually type.
  *
  * ## Why this still says LIKE
  *
- * PGroonga has its own operators (`&@~`, `%%`) and they would be the obvious thing to emit. LIKE is
- * kept because PGroonga documents an internal rewrite of `column LIKE '%KEYWORD%'` into
+ * PGroonga has its own operators (`&@~`, `%%`) and they would be the obvious thing to emit. LIKE
+ * is kept because PGroonga documents an internal rewrite of `column LIKE '%KEYWORD%'` into
  * `column %% 'KEYWORD'`, so the index is used either way - and keeping LIKE means this one function
  * is the entire search layer. Switching to `%%` would push a PGroonga dependency into every list
  * query in the ~20 dbops modules, and make the SQL untestable against a plain PostgreSQL.
@@ -227,9 +227,9 @@ export type FilterSpec = { column: string; kind: SqlParamKind };
  * request decides only WHICH of the declared columns are filtered, never what they are called - the
  * same division of labour as `FieldSpec` on the write side.
  *
- * An absent or empty value is no filter. `?state=` is what a cleared dropdown sends, and treating it
- * as "equals the empty string" would match the many rows where these optional columns are blank -
- * i.e. clearing a filter would appear to apply a new one.
+ * An absent or empty value is no filter. `?state=` is what a cleared dropdown sends, and treating
+ * it as "equals the empty string" would match the many rows where these optional columns are blank
+ * - i.e. clearing a filter would appear to apply a new one.
  *
  * Parameters are prefixed `f_` so they cannot collide with the page limit, the cursor, the search
  * term or a column-named write parameter in the same statement.
@@ -253,7 +253,7 @@ export function filterClause<K extends string>(
 }
 
 /**
- * An inclusive `from`/`to` range on one column.
+ * An inclusive `from`/ `to` range on one column.
  *
  * Either end may be omitted, which is what makes "everything due before Friday" expressible without
  * a second endpoint. Both ends are inclusive because that is what a user means by a date range on a
@@ -291,9 +291,9 @@ export function rangeClause(
 /**
  * Restrict a list to the rows this caller owns, unless their view scope says otherwise.
  *
- * `columns` are the staff-id columns that count as ownership for the entity being listed - a project
- * is "yours" if you are either its sales manager or its PM, so both columns are passed. A caller
- * with the wide view scope gets an empty clause and sees everything.
+ * `columns` are the staff-id columns that count as ownership for the entity being listed - a
+ * project is "yours" if you are either its sales manager or its PM, so both columns are passed. A
+ * caller with the wide view scope gets an empty clause and sees everything.
  *
  * Three things about this are deliberate:
  *

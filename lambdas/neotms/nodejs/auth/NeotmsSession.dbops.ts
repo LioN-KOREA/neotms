@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 //
 // A signed-in browser's session: what the backend holds so that the refresh token never reaches the
-// browser (연동 안내서 §2, "왜 /token 은 백엔드에서 부르는가").
+// browser (account-system integration guide §2, "why /token is called from the backend").
 //
 // The browser holds only a random session id, in an HttpOnly cookie. The record is keyed by the
 // SHA-256 of that id rather than by the id itself, so a read of the table - a support query, a

@@ -334,15 +334,16 @@ export function useDeleteProject() {
 }
 
 /**
- * 인계메일 발송. **무효화가 없는 유일한 쓰기 훅**이다.
+ * Sends the handover mail. THE ONE WRITE HOOK HERE THAT INVALIDATES NOTHING.
  *
- * 이 파일의 머리말이 "무효화 범위를 넓게 잡는다" 고 적은 것의 예외이고, 예외인 이유는 간단하다 —
- * 이 호출은 데이터베이스의 어떤 행도 바꾸지 않는다. 바뀌는 것은 운영 PM 의 받은메일함이고, 그건
- * 이 캐시가 들고 있는 값이 아니다. 습관적으로 `PROJECT_AFFECTS` 를 붙이면 메일을 보낼 때마다
- * 목록·작업·발주·리포트·대시보드를 전부 다시 읽는다 — 이 시스템의 비용은 사실상 그 호출 수다.
+ * It is the exception to this file's header rule of casting the invalidation net wide, and the
+ * reason is simple: this call changes no row in the database. What changes is the operating PM's
+ * inbox, which is not a value this cache holds. Attaching `PROJECT_AFFECTS` out of habit would
+ * re-read the project list, the jobs, the purchase orders, the reports and the dashboards on every
+ * mail sent - and this system's cost is essentially its call count.
  *
- * `useMutation` 인 것은 맞다. 쿼리가 아니기 때문이다: 버튼을 누를 때만 일어나고, 두 번 누르면
- * 두 번 일어나며, 캐시에 담아 재사용할 결과가 아니다.
+ * It is still a `useMutation`, because it is not a query: it happens only when a button is pressed,
+ * it happens twice if pressed twice, and its result is not something to cache and reuse.
  */
 export function useSendHandoverMail() {
   return useMutation({

@@ -10,7 +10,7 @@
 // that must only ever be read from the server:
 //
 //   * `staff.role_id` (legacy MGR_AUTH_CODE) -> the 48-menu x 5-action matrix.
-//   * `staff.view_scope` (legacy MGR_VIEW)   -> whether this person sees their own rows or all of
+//   * `staff.view_scope` (legacy MGR_VIEW) -> whether this person sees their own rows or all of
 //     them.
 //
 // In LKTMS both arrived in an unsigned cookie, so anyone who could edit a cookie could grant
@@ -172,8 +172,8 @@ export const StaffClaimOps: (staffId: string, sub: string) => SqlOps<StaffRow | 
  * somebody has already populated; immediately after `db/002..005` nobody has, so `StaffByLpxSubOps`
  * finds nothing, `StaffUnclaimedByEmailOps` finds nothing, and every sign-in is refused with "not
  * registered as NEOTMS staff" - including the sign-in of the person who would have registered the
- * others. Only a caller holding `lpx.admin.access` reaches this (see NeotmsAuthGuard), and only when
- * their own lookup came back missing or inactive.
+ * others. Only a caller holding `lpx.admin.access` reaches this (see NeotmsAuthGuard), and only
+ * when their own lookup came back missing or inactive.
  *
  * ALL OF THE DECISION IS IN THE DATABASE, deliberately, and that is why this file - which is
  * otherwise only queries - calls a function. Three reasons, in order of how much they cost if
@@ -185,8 +185,8 @@ export const StaffClaimOps: (staffId: string, sub: string) => SqlOps<StaffRow | 
  *      administrators signing in together would both find no row and both insert one, and one
  *      person would end up with two staff records - which splits their project history, because
  *      `mgr_id` is what every legacy `REG_ID` points at.
- *   2. The repair, adopt and mint branches all need `FOR UPDATE` and a `unique_violation` handler to
- *      be correct under that race. Those exist in SQL and have no equivalent here.
+ *   2. The repair, adopt and mint branches all need `FOR UPDATE` and a `unique_violation` handler
+ *      to be correct under that race. Those exist in SQL and have no equivalent here.
  *   3. `role_id`, `view_scope` and `active` are the three values this codebase refuses to let a
  *      caller influence. Deciding them inside a `SECURITY INVOKER` function with a pinned
  *      `search_path` keeps the decision in the same place as the constraints that bound it.
@@ -236,7 +236,8 @@ export const StaffBootstrapSuperuserOps: (
  *   * The bootstrap runs for a caller holding `lpx.admin.access` and produces a WORKING ACCOUNT -
  *     it assigns a role, because its entire purpose is to get the first administrator in.
  *   * This one runs for anybody holding the NEOTMS app authority and produces a REQUEST - `role_id`
- *     is NULL, so the row grants nothing until an administrator assigns a role on 사용자 관리.
+ *     is NULL, so the row grants nothing until an administrator assigns a role on the staff
+ *     administration screen.
  *
  * It follows the bootstrap's shape for the same three reasons given there, and the first applies
  * more sharply here. The decision is "does this subject already have a row, and if not which free
@@ -247,10 +248,10 @@ export const StaffBootstrapSuperuserOps: (
  * split across both from that day on. As one statement calling one function it is atomic without a
  * transaction, and the `unique_violation` handler inside decides the collision.
  *
- * It also returns the id rather than the row, for the reason the bootstrap does: a volatile function
- * and a `JOIN staff` in one statement would read the snapshot taken before the function ran and come
- * back empty. The caller re-reads through the ordinary path - and in fact re-reads through
- * `getProfile`, so the response it builds is the same `ProfileView` the SPA would get from
+ * It also returns the id rather than the row, for the reason the bootstrap does: a volatile
+ * function and a `JOIN staff` in one statement would read the snapshot taken before the function
+ * ran and come back empty. The caller re-reads through the ordinary path - and in fact re-reads
+ * through `getProfile`, so the response it builds is the same `ProfileView` the SPA would get from
  * `/api/v0/me` a moment later, built by the same code.
  *
  * Idempotent per subject: called twice it returns the same id and changes nothing. Notably it does

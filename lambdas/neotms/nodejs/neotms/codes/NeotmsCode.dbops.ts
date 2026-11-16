@@ -5,10 +5,11 @@
 // Before this module existed there was no SELECT against `sys_code` anywhere in the codebase, and
 // the consequence was not a missing feature but a wall. Twenty-two columns across this schema are
 // `text REFERENCES sys_code (code) ON DELETE RESTRICT`, `sys_code` was empty, and so every INSERT
-// that carried a code - a customer's 분야, a job's 작업 종류 and 언어, a purchase order's 단위 -
-// failed with SQLSTATE 23503. The screens that collected those values did it with free-text inputs
-// and a hint saying "등록된 코드값만 저장됩니다", which was true and useless: no value was
-// registered, so no value worked, and the error named a constraint rather than a field.
+// that carried a code - a customer's subject field, a job's work type and language, a purchase
+// order's pricing unit - failed with SQLSTATE 23503. The screens that collected those values did it
+// with free-text inputs and a hint saying "only registered code values are saved", which was true
+// and useless: no value was registered, so no value worked, and the error named a constraint rather
+// than a field.
 //
 // db/007_codes.sql seeded the five domains. This module is how they are read and maintained.
 //
@@ -26,11 +27,11 @@
 //
 // Also inherited, also unavoidable: a foreign key needs a unique constraint on the columns it
 // references, and making it `(code_parent, code)` would mean mirroring `code_parent` into all
-// twenty-two referencing tables. So '기타' can exist exactly once in this database - 작업 has it,
-// and the other domains qualify theirs ('일반·기타', '기타 언어', '기타 프로그램'). The create
-// path turns the resulting 23505 into a sentence that says so, because "duplicate key value
-// violates unique constraint sys_code_code_key" does not tell an administrator that the code they
-// want is already in use by a different list.
+// twenty-two referencing tables. So a bare "other" can exist exactly once in this database - the
+// work-type domain has it, and the other domains qualify theirs ("general/other", "other language",
+// "other program"). The create path turns the resulting 23505 into a sentence that says so, because
+// "duplicate key value violates unique constraint sys_code_code_key" does not tell an administrator
+// that the code they want is already in use by a different list.
 
 import {
   param,
@@ -52,51 +53,53 @@ import type { CodeCreate, CodeUpdate } from "../neotms.schemas.js";
  * These are the literal `sys_code.code` values of the domain rows - the ones with `code_parent`
  * NULL - and they are ASCII while their children are mostly Korean. The asymmetry is on purpose: a
  * domain code travels in a query string and gets compared against this constant, while a child's
- * code is the value that lands in `job.work_code` and is already Korean in both the frontend and the
- * legacy data. "Mostly", because the rule is really that a code is whatever the thing is called -
- * UPRO's children are `Trados` and `memoQ`, and JOBTYPE's are `LINGUISTICS`, `MICE` and `IMC`.
+ * code is the value that lands in `job.work_code` and is already Korean in both the frontend and
+ * the legacy data. "Mostly", because the rule is really that a code is whatever the thing is called
+ * - UPRO's children are `Trados` and `memoQ`, and JOBTYPE's are `LINGUISTICS`, `MICE` and `IMC`.
  *
  * Nothing enforces that a `sys_code` row's parent is one of these. An administrator may add a ninth
- * domain from 유지보수 and it will be listed and maintained like the others; what it will NOT have
- * is a dropdown reading it, because that requires a line of frontend code naming it. This constant
- * exists so the ones with dropdowns are enumerable rather than scattered across form components.
+ * domain from the maintenance screen and it will be listed and maintained like the others; what it
+ * will NOT have is a dropdown reading it, because that requires a line of frontend code naming it.
+ * This constant exists so the ones with dropdowns are enumerable rather than scattered across form
+ * components.
  */
 export const NeotmsCodeDomain = {
   /**
-   * 분야, the DETAILED list. customer.cus_field, project.prj_field2, translator.tran_field,
-   * translator.tran_unfield
+   * Subject field, the DETAILED list. customer.cus_field, project.prj_field2,
+   * translator.tran_field, translator.tran_unfield
    *
-   * `project.prj_field` used to read this list too, and that was the defect db/016_project_fields.sql
-   * corrects: the eighteen values seeded here are specific subject areas (IT·소프트웨어, 의학·제약,
-   * 특허·지식재산), so they are what legacy called PRJ_FIELD2, and the coarse list they group into
-   * was simply missing. The eighteen stay here rather than moving to PRJCAT because a customer's
-   * 분야 and a translator's 가능 분야 are detailed too, and `sys_code.code` is unique across the
-   * whole table - the same value cannot sit in both domains.
+   * `project.prj_field` used to read this list too, and that was the defect
+   * db/016_project_fields.sql corrects: the eighteen values seeded here are specific subject areas
+   * (IT and software, medicine and pharmaceuticals, patents and intellectual property), so they are
+   * what legacy called PRJ_FIELD2, and the coarse list they group into was simply missing. The
+   * eighteen stay here rather than moving to PRJCAT because a customer's subject field and a
+   * translator's workable fields are detailed too, and `sys_code.code` is unique across the whole
+   * table - the same value cannot sit in both domains.
    */
   FIELD: "FIELD",
   /**
-   * 프로젝트 분야, the COARSE list. project.prj_field only.
+   * Project field, the COARSE list. project.prj_field only.
    *
    * Added by db/016_project_fields.sql; see that file's header for why it is a `sys_code` domain
    * rather than the dedicated table the request described. It exists because the margin report's
-   * 분야별 dimension groups on `prj_field`, and eighteen fine-grained fields give eighteen thin bars
-   * instead of an answer.
+   * by-field dimension groups on `prj_field`, and eighteen fine-grained fields give eighteen thin
+   * bars instead of an answer.
    */
   PRJCAT: "PRJCAT",
-  /** 작업 종류. job.work_code, purchase_order.po_work_code, customer_contract.work_code, translator_lang.work_code, translator.tran_work_con */
+  /** Work type. job.work_code, purchase_order.po_work_code, customer_contract.work_code, translator_lang.work_code, translator.tran_work_con */
   WORK: "WORK",
   /**
-   * 단가 단위. job_detail_linguistic.unit_code, po_detail_linguistic.po_unit_code,
-   * translator_lang.tran_la_unit - the first two moved off their parents in
-   * db/012_job_pricing.sql, because only linguistic work is billed per unit.
+   * Pricing unit. job_detail_linguistic.unit_code, po_detail_linguistic.po_unit_code,
+   * translator_lang.tran_la_unit - the first two moved off their parents in db/012_job_pricing.sql,
+   * because only linguistic work is billed per unit.
    */
   UNIT: "UNIT",
-  /** 언어. eight columns across job, purchase_order, customer_contract and translator_lang */
+  /** Language. eight columns across job, purchase_order, customer_contract and translator_lang */
   LANG: "LANG",
-  /** 사용 프로그램 (CAT tool). translator.tran_upro, and customer.cus_upro which is read-only now. */
+  /** CAT tool. translator.tran_upro, and customer.cus_upro which is read-only now. */
   UPRO: "UPRO",
   /**
-   * 업무 구분. job.job_type, purchase_order.po_type - and the `job_type` / `po_type` columns the
+   * Job type. job.job_type, purchase_order.po_type - and the `job_type` / `po_type` columns the
    * four detail tables repeat in order to pin themselves to one value (db/011_job_types.sql).
    *
    * The only domain whose absence breaks a save rather than just emptying a dropdown: `job_type` is
@@ -105,7 +108,7 @@ export const NeotmsCodeDomain = {
    */
   JOBTYPE: "JOBTYPE",
   /**
-   * 업무 분류. job_detail_non_linguistic.job_category, po_detail_non_linguistic.po_category
+   * Job category. job_detail_non_linguistic.job_category, po_detail_non_linguistic.po_category
    *
    * One shared list for both non-linguistic types: any of the four categories is valid on a MICE
    * job and on an IMC job alike. There is no type-to-category mapping to encode.
@@ -160,11 +163,11 @@ const toCodeRow = (row: SqlRow): CodeRow => ({
  * `ord_no NULLS LAST, code` for every listing here.
  *
  * `ord_no` is nullable and the ETL will not populate it, so a plain `ORDER BY ord_no` puts every
- * migrated code ahead of the seeded ones in PostgreSQL (NULLs sort first on ASC) - a 분야 dropdown
- * whose first eight entries are unordered legacy values and whose curated list is below the fold.
- * `code` as the tiebreak makes the order total, which matters more than it sounds: an ORDER BY with
- * ties is free to return them differently between two calls, and a dropdown whose options move
- * between page loads reads as a broken screen.
+ * migrated code ahead of the seeded ones in PostgreSQL (NULLs sort first on ASC) - a subject-field
+ * dropdown whose first eight entries are unordered legacy values and whose curated list is below
+ * the fold. `code` as the tiebreak makes the order total, which matters more than it sounds: an
+ * ORDER BY with ties is free to return them differently between two calls, and a dropdown whose
+ * options move between page loads reads as a broken screen.
  */
 const CODE_ORDER = `ORDER BY c.ord_no NULLS LAST, c.code`;
 
@@ -172,10 +175,11 @@ const CODE_ORDER = `ORDER BY c.ord_no NULLS LAST, c.code`;
  * Every active code in every domain, in one statement.
  *
  * One request for all of them rather than one per domain, and the reason is the shape of the
- * demand: a single form needs 분야 and 작업 and 단위 and 언어 at once, so per-domain fetching means
- * four round trips to render one modal, each taking a Supavisor connection from a budget of forty.
- * The whole table is about sixty rows of short text - smaller than the customer page that triggers
- * the same screen - so there is nothing to be saved by splitting it.
+ * demand: a single form needs the subject field and the work type and the unit and the language at
+ * once, so per-domain fetching means four round trips to render one modal, each taking a Supavisor
+ * connection from a budget of forty. The whole table is about sixty rows of short text - smaller
+ * than the customer page that triggers the same screen - so there is nothing to be saved by
+ * splitting it.
  *
  * Domain rows are included (they come back with `codeParent` null), because the client groups by
  * parent and needs the domain's own label to title the group. Without them the UI would have to
@@ -198,7 +202,7 @@ export const CodeAllOps: () => SqlOps<CodeRow[]> = () => ({
 });
 
 /**
- * Every code, including inactive ones. The 유지보수 screen's listing.
+  * Every code, including inactive ones. The maintenance screen's listing.
  *
  * Separate from `CodeAllOps` rather than a parameter on it, so that "may see retired codes" is
  * decided by which route was reached - and therefore by `sys_role_auth` - instead of by a query
@@ -312,10 +316,10 @@ export const CodeChildCountOps: (code: string) => SqlOps<number> = (code) => ({
  * what retiring a code actually means.
  *
  * This statement is expected to fail. Any of twenty-two `ON DELETE RESTRICT` constraints will
- * refuse it the moment one row anywhere references the code, and that is the desired behaviour -
- * it is the database refusing to orphan a job's 작업 종류. The manager turns the 23503 into a
- * sentence naming the alternative, because the raw message names a constraint on a table the
- * administrator was not looking at.
+ * refuse it the moment one row anywhere references the code, and that is the desired behaviour - it
+ * is the database refusing to orphan a job's work type. The manager turns the 23503 into a sentence
+ * naming the alternative, because the raw message names a constraint on a table the administrator
+ * was not looking at.
  */
 export const CodeDeleteOps: (id: string) => SqlOps<string | null> = (id) => ({
   sql: `DELETE FROM sys_code WHERE id = :id RETURNING id AS deleted_id`,

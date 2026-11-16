@@ -6,11 +6,11 @@
 // definition, and the three statistics queries join this same view. So why does the client need the
 // rate at all?
 //
-// Because of one button. 원화로 환산 does not ask the server "what is this worth"; it rewrites the
-// row - `coin_code` to KRW, the total to the converted amount, `coin_rate` to 1 - and the user has
-// to SEE the number before committing to it. The form also previews 원화 환산 합계 live while the
-// amount is being typed, which is a figure that exists only in the unsaved form. Neither of those
-// can be answered by a query over stored rows.
+// Because of one button. Convert-to-KRW does not ask the server "what is this worth"; it rewrites
+// the row - `coin_code` to KRW, the total to the converted amount, `coin_rate` to 1 - and the user
+// has to SEE the number before committing to it. The form also previews the KRW-converted total
+// live while the amount is being typed, which is a figure that exists only in the unsaved form.
+// Neither of those can be answered by a query over stored rows.
 //
 // ## Read-only, and that is a decision
 //
@@ -18,7 +18,7 @@
 // `'manual'` value. Writing a rate by hand is an operator action with company-wide reach - one row
 // moves every open position's reported worth at once - and it belongs in SQL, where it leaves a
 // trace, rather than behind a form somebody can reach by accident. If that ever becomes a screen it
-// should be a 유지보수 one with its own menu right, not an addition to this module.
+// should be a maintenance-screen one with its own menu right, not an addition to this module.
 
 import {
   param,
@@ -88,8 +88,8 @@ export type FxQuote = {
  * currency fetching would mean a round trip - and a Supavisor connection out of forty - every time
  * the dropdown changed. There are at most six rows of short text (KRW is not quoted).
  *
- * KRW is not here and is not missing. Nothing quotes KRW against itself, and the client's conversion
- * is a no-op in that case anyway.
+ * KRW is not here and is not missing. Nothing quotes KRW against itself, and the client's
+ * conversion is a no-op in that case anyway.
  *
  * Not scoped, and there is nothing to scope: a rate is a fact about a currency, identical for every
  * caller, with no owning staff member and no WHERE clause a scope could narrow. The same argument
@@ -136,10 +136,11 @@ export const FxRateLatestOps: () => SqlOps<FxRateRow[]> = () => ({
  *
  * There was one - `SELECT coin_code FROM currency WHERE coin_code <> 'KRW'` - on the argument that
  * the table already IS the list of what the console can submit. It is now the constant
- * `FX_CURRENCY_CODES` in NeotmsCurrency.ts, because `currency` is an ETL target as well as a lookup:
- * a house code or a typo loaded out of legacy COINTB_MAIN became a currency the fetcher asked the
- * bank about, and then warned about on every one of its 288 daily runs. That module's header has the
- * full reasoning and the test that keeps the constant, the seed and `COIN_CODES` in step.
+ * `FX_CURRENCY_CODES` in NeotmsCurrency.ts, because `currency` is an ETL target as well as a
+ * lookup: a house code or a typo loaded out of legacy COINTB_MAIN became a currency the fetcher
+ * asked the bank about, and then warned about on every one of its 288 daily runs. That module's
+ * header has the full reasoning and the test that keeps the constant, the seed and `COIN_CODES` in
+ * step.
  */
 
 /**
@@ -155,7 +156,8 @@ export const FxRateAnyOps: () => SqlOps<boolean> = () => ({
   sql: `SELECT EXISTS (SELECT 1 FROM fx_rate) AS fx_any`,
   parameters: [],
   // `readBool` rather than a `=== true` comparison: `bool` is not in the pinned-to-text OID list, so
-  // whether `pg` hands this back as a boolean or as "t" is the driver's business, not this module's.
+  // whether `pg` hands this back as a boolean or as "t" is the driver's business, not this
+  // module's.
   mapper: (rows) => readBool(rows[0] ?? {}, "fx_any") ?? false,
 });
 
@@ -164,8 +166,8 @@ export const FxRateAnyOps: () => SqlOps<boolean> = () => ({
  *
  * `ON CONFLICT (currency_code, effective_date)` is `uq_fx_rate_ccy_date`, and the upsert is what
  * makes a five-minute schedule harmless: the upstream publishes once per business day, so all but
- * the first run of the day re-writes the same numbers. A plain INSERT would raise a unique violation
- * 287 times a day, and `DO NOTHING` would never pick up a corrected quote.
+ * the first run of the day re-writes the same numbers. A plain INSERT would raise a unique
+ * violation 287 times a day, and `DO NOTHING` would never pick up a corrected quote.
  *
  * One multi-row statement rather than a loop of single upserts, which buys two things. It is one
  * round trip instead of five - and under Supavisor transaction mode a round trip holds a pooled
@@ -173,8 +175,8 @@ export const FxRateAnyOps: () => SqlOps<boolean> = () => ({
  * every currency moves to today's quote or none does, so there is no window in which the report
  * values USD at today's rate and EUR at Friday's.
  *
- * `created_at` is left to its default on insert and NOT touched on update, so it keeps meaning "when
- * this quote first arrived" - which is what makes a late correction visible as a row whose
+ * `created_at` is left to its default on insert and NOT touched on update, so it keeps meaning
+ * "when this quote first arrived" - which is what makes a late correction visible as a row whose
  * `created_at` is well after its `effective_date`.
  *
  * Returns the number of rows written. An EMPTY `quotes` ARRAY IS NOT ACCEPTED: `VALUES ()` is a

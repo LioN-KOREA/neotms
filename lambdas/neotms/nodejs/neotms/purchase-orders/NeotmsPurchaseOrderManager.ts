@@ -47,10 +47,10 @@ function readFilters(request: RequestData): PoFilters {
     state: read("state"),
     invoiceState: read("invoiceState"),
     moneyState: read("moneyState"),
-    // The three the 결제 screens drive. `approved` and `uninvoiced` are the two halves of that
-    // section's work - what is waiting for sign-off, and what has been delivered but not yet
-    // billed - and `invoiceTranslatorId` is how an invoice's own lines are fetched, so the print
-    // document reads the POs through the same scoped list every other screen does.
+    // The three the payment screens drive. `approved` and `uninvoiced` are the two halves of that
+    // section's work - what is waiting for sign-off, and what has been delivered but not yet billed
+    // - and `invoiceTranslatorId` is how an invoice's own lines are fetched, so the print document
+    // reads the POs through the same scoped list every other screen does.
     approved: read("approved"),
     uninvoiced: read("uninvoiced"),
     invoiceTranslatorId: read("invoiceTranslatorId"),
@@ -72,10 +72,10 @@ function readFilters(request: RequestData): PoFilters {
 /**
  * List purchase orders.
  *
- * The cursor key comes from `PO_SORT_ALIASES` rather than from `sortAlias`, because a PO row carries
- * three tables' columns and its own `created_at` had to be prefixed to avoid colliding with the
- * job's. This is the one list in the codebase where the convention does not hold - see the comment
- * on `PO_SORT_ALIASES`.
+ * The cursor key comes from `PO_SORT_ALIASES` rather than from `sortAlias`, because a PO row
+ * carries three tables' columns and its own `created_at` had to be prefixed to avoid colliding with
+ * the job's. This is the one list in the codebase where the convention does not hold - see the
+ * comment on `PO_SORT_ALIASES`.
  */
 export async function listPurchaseOrders(
   caller: NeotmsCaller,
@@ -122,10 +122,10 @@ export async function getPurchaseOrder(
  *   3. An unspecified PM defaults to the caller, so a scoped PM does not create a PO they cannot
  *      then see.
  *
- * The job read also supplies the 업무 구분 the PO starts with. Defaulted from the job rather than to
- * LINGUISTICS because a PO raised against a MICE job is far more often a MICE PO than not - but
- * only defaulted: a request that names its own `poType` keeps it, which is how an interpretation PO
- * gets raised against a MICE conference.
+  * The job read also supplies the job type the PO starts with. Defaulted from the job rather than
+  * to LINGUISTICS because a PO raised against a MICE job is far more often a MICE PO than not - but
+  * only defaulted: a request that names its own `poType` keeps it, which is how an interpretation
+  * PO gets raised against a MICE conference.
  */
 export async function createPurchaseOrder(
   caller: NeotmsCaller,

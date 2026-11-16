@@ -1,39 +1,39 @@
 // SPDX-License-Identifier: MIT
 //
-// 업무 구분 - the one string the job, PO and report modules all have to agree on.
+// The job type - the one string the job, PO and report modules all have to agree on.
 //
-// A job or a PO is LINGUISTICS (언어 및 통번역), MICE or IMC. The first carries a language pair, the
-// other two carry an 업무 분류, and which of the two side tables a row's payload lives in follows
-// from that one value. db/011_job_types.sql has the schema and the reasoning.
+// A job or a PO is LINGUISTICS, MICE or IMC. The first carries a language pair, the other two carry
+// a job category, and which of the two side tables a row's payload lives in follows from that one
+// value. db/011_job_types.sql has the schema and the reasoning.
 //
 // ## Why a module for one constant
 //
-// `'LINGUISTICS'` appears in five places that must not drift: two CHECK constraints and a DEFAULT in
-// the database, both dbops modules' detail writes, and the report's `langPair` dimension, which
-// decides on it whether a row reads as a language pair or as `(비언어)`. The constraints are the
-// authority - they are what the ETL is held to as well - so the TypeScript side is a mirror, and
-// mirrors are safest when there is exactly one of them.
+// `'LINGUISTICS'` appears in five places that must not drift: two CHECK constraints and a DEFAULT
+// in the database, both dbops modules' detail writes, and the report's `langPair` dimension, which
+// decides on it whether a row reads as a language pair or as the non-linguistic bucket. The
+// constraints are the authority - they are what the ETL is held to as well - so the TypeScript side
+// is a mirror, and mirrors are safest when there is exactly one of them.
 //
 // ## The membership test is negative on purpose
 //
 // `isLinguistic` asks whether the type IS the one linguistic value; everything else is
 // non-linguistic. Written the other way round - a list of the two non-linguistic types - a fourth
-// type added from 유지보수 would fall through as linguistic, which is the worst of the three
-// possible answers: the job would get a language-pair form it has no use for and be refused a
-// category. This way, an unrecognised type is treated as non-linguistic and the only thing it is
-// denied is a language pair. That matches the database, where the non-linguistic CHECK is
-// `job_type <> 'LINGUISTICS'` rather than `job_type IN (...)`.
+// type added from the maintenance screen would fall through as linguistic, which is the worst of
+// the three possible answers: the job would get a language-pair form it has no use for and be
+// refused a category. This way, an unrecognised type is treated as non-linguistic and the only
+// thing it is denied is a language pair. That matches the database, where the non-linguistic CHECK
+// is `job_type <> 'LINGUISTICS'` rather than `job_type IN (...)`.
 
 /**
  * The linguistic type's `sys_code.code`.
  *
- * Also the DEFAULT of `job.job_type` and `purchase_order.po_type`, which is why a request that omits
- * the type lands here: all historical work is linguistics, and so is everything the LKTMS ETL
+ * Also the DEFAULT of `job.job_type` and `purchase_order.po_type`, which is why a request that
+ * omits the type lands here: all historical work is linguistics, and so is everything the LKTMS ETL
  * inserts without knowing the column exists.
  */
 export const JOB_TYPE_LINGUISTIC = "LINGUISTICS";
 
-/** Whether this 업무 구분 carries a language pair rather than an 업무 분류. */
+/** Whether this job type carries a language pair rather than a job category. */
 export const isLinguistic = (jobType: string | null | undefined): boolean =>
   (jobType ?? JOB_TYPE_LINGUISTIC) === JOB_TYPE_LINGUISTIC;
 
@@ -84,13 +84,13 @@ export type PoDetailTable = "po_detail_linguistic" | "po_detail_non_linguistic";
  *
  * ## It does not catch the auto-named ones, and should not
  *
- * PostgreSQL names a constraint you do not name after the full table, so the `sys_code` FKs on these
- * tables are `job_detail_linguistic_job_slang_fkey`, `job_detail_linguistic_unit_code_fkey` (added by
- * db/012_job_pricing.sql when `unit_code` moved) and so on. None of those match this prefix, so an
- * unrecognised unit code or language code still surfaces as a 500 rather than as a sentence about
- * 업무 구분 - which is correct, because it is a different mistake with a different fix, and it read
- * the same way before the columns moved. Hand-named means "this file put it there on purpose"; that
- * is the line this regex is drawn along.
+ * PostgreSQL names a constraint you do not name after the full table, so the `sys_code` FKs on
+ * these tables are `job_detail_linguistic_job_slang_fkey`, `job_detail_linguistic_unit_code_fkey`
+ * (added by db/012_job_pricing.sql when `unit_code` moved) and so on. None of those match this
+ * prefix, so an unrecognised unit code or language code still surfaces as a 500 rather than as a
+ * sentence about the job type - which is correct, because it is a different mistake with a
+ * different fix, and it read the same way before the columns moved. Hand-named means "this file put
+ * it there on purpose"; that is the line this regex is drawn along.
  */
 const DETAIL_CONSTRAINT = /^(?:jdl|jdn|pdl|pdn)_/;
 
@@ -99,29 +99,28 @@ const DETAIL_CONSTRAINT = /^(?:jdl|jdn|pdl|pdn)_/;
  *
  * The happy path never reaches this. Both forms render the language pair and the category ON the
  * selected type, so a request carrying the wrong one is either hand-crafted or sent by a client
- * built against a different version of this API. In both cases a 400 naming the actual
- * disagreement is worth far more than a 500 quoting `jdl_is_linguistic`, which appears nowhere a
- * user can see.
+ * built against a different version of this API. In both cases a 400 naming the actual disagreement
+ * is worth far more than a 500 quoting `jdl_is_linguistic`, which appears nowhere a user can see.
  *
  * ## Why this matches on the constraint and not on the SQLSTATE
  *
  * The two constraints catch the same mistake from two directions - the CHECK rejects a detail row
- * whose own type is wrong for its table, the FK rejects one whose type disagrees with its parent's -
- * and which fires depends on whether the type or the payload was the thing that moved. So both
+ * whose own type is wrong for its table, the FK rejects one whose type disagrees with its parent's
+ * - and which fires depends on whether the type or the payload was the thing that moved. So both
  * 23514 and 23503 have to be caught. But 23503 is ALSO what an unrecognised `sys_code` code raises,
  * and that is a different error with a different fix. The constraint name is the only thing that
  * separates them, so it is what this reads.
  *
  * ## The separation is not perfect, and the imperfection is harmless
  *
- * Measured against a real database (the docker rehearsal in README.md): setting `job_type` to a code
- * `sys_code` does not have is refused by `job_job_type_fkey` when the job has no detail row - no
- * message from here, a 500, correct. But when the job DOES have a detail row, PostgreSQL reports
+ * Measured against a real database (the docker rehearsal in README.md): setting `job_type` to a
+ * code `sys_code` does not have is refused by `job_job_type_fkey` when the job has no detail row -
+ * no message from here, a 500, correct. But when the job DOES have a detail row, PostgreSQL reports
  * `jdl_job_type_fkey` instead, because changing the parent's type orphans the child, and that
  * violation is found first. So an unknown code on a job with a detail row gets the sentence below.
  *
- * Left as it is deliberately. The sentence tells the user to check the 업무 구분, which is exactly
- * what is wrong with the request; the alternative is a 500 and a constraint name. Both inputs are
+ * Left as it is deliberately. The sentence tells the user to check the job type, which is what is
+ * wrong with the request; the alternative is a 500 and a constraint name. Both inputs are
  * hand-crafted anyway - every form offers only codes read from `sys_code`.
  */
 export function typeMismatchMessage(constraintName: string): string | null {

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 //
-// Code-table endpoints: the dropdown feed, and the 유지보수 screen behind it.
+// Code-table endpoints: the dropdown feed, and the maintenance screen behind it.
 //
 // Two audiences with very different rights, which is why there are two listings:
 //
-//   * `GET /api/v0/codes` is `anyStaff`. Every form in the application needs 분야, 작업 종류, 단가
-//     단위 and 언어 to render, so refusing this to a signed-in user with no 유지보수 right would
-//     mean their customer form has empty dropdowns. Reading a list of category names is not a
-//     privilege worth gating.
+//   * `GET /api/v0/codes` is `anyStaff`. Every form in the application needs the subject field,
+//     work type, pricing unit and language lists to render, so refusing this to a signed-in user
+//     with no maintenance right would mean their customer form has empty dropdowns. Reading a list
+//     of category names is not a privilege worth gating.
 //   * `GET /api/v0/admin/codes` and the three writes are gated on MAINTENANCE. Deciding what the
-//     company's 분야 taxonomy IS is a different authority from using it.
+//     company's subject-field taxonomy IS is a different authority from using it.
 //
 // ## Most of this file is error translation, and that is the point
 //
@@ -18,15 +18,15 @@
 // constraint violation, and the raw messages name constraints on tables the administrator was not
 // looking at:
 //
-//   duplicate key value violates unique constraint "sys_code_code_key"
-//   update or delete on table "sys_code" violates foreign key constraint
+//   duplicate key value violates unique constraint "sys_code_code_key" update or delete on table
+//   "sys_code" violates foreign key constraint
 //     "translator_tran_work_con_fkey" on table "translator"
 //
 // The first does not say "that code is already in a different list". The second does not say "a
 // translator still uses it; deactivate it instead" - and it names only ONE of the twenty-two
 // constraints, whichever was checked first, so it is not even a complete answer to "what is using
-// this?". Translating them here is what makes the screen operable by somebody who did not write
-// the schema.
+// this?". Translating them here is what makes the screen operable by somebody who did not write the
+// schema.
 //
 // `exceptionToErrorResponse` already turns both into a 409 with a correct generic message - "That
 // record already exists." and "A referenced record does not exist." - and for a customer or a job
@@ -73,7 +73,7 @@ export async function listCodes(): Promise<ResponseData<CodeListView | string>> 
   });
 }
 
-/** Every code including the retired ones, for 유지보수. */
+/** Every code including the retired ones, for the maintenance screen. */
 export async function listCodesForAdmin(): Promise<ResponseData<CodeListView | string>> {
   return runDb("list codes for maintenance", async () => {
     const items = (await pgQuery(CodeAllIncludingInactiveOps())).data;
@@ -168,13 +168,13 @@ export async function updateCode(
  * The child check is separate from the reference check because the two have different remedies.
  * Deleting a DOMAIN row that still has children is refused by `sys_code_code_parent_fkey`, and the
  * fix is to move or delete the children - nothing outside this screen is involved. Deleting a code
- * that a job or a translator references is refused by one of twenty-two business-table
- * constraints, and the fix is almost always not to delete it at all.
+ * that a job or a translator references is refused by one of twenty-two business-table constraints,
+ * and the fix is almost always not to delete it at all.
  *
  * Which is the message this endpoint leads with. `active = false` retires a code properly: it
  * disappears from every dropdown while the rows already referencing it keep resolving. Deletion
- * cannot do that, and an administrator who deletes 분야 codes to "clean up" will find the only
- * thing standing between them and a broken customer list is the constraint that refused them.
+ * cannot do that, and an administrator who deletes subject-field codes to "clean up" will find the
+ * only thing standing between them and a broken customer list is the constraint that refused them.
  */
 export async function deleteCode(id: string): Promise<ResponseData<{ id: string } | string>> {
   return runDb("delete code", async () => {

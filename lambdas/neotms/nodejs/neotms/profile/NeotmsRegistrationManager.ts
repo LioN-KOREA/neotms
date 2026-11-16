@@ -11,7 +11,7 @@
 // means an empty permission matrix, which means every menu-gated route still refuses it. The only
 // thing that changes is that `/api/v0/me` starts answering `pending` instead of `unregistered`, so
 // the SPA swaps the sign-up form for the waiting notice. Approval is a separate act by a separate
-// person on 사용자 관리, and nothing in this file can perform it.
+// person on the staff administration screen, and nothing in this file can perform it.
 //
 // There is deliberately no administrator-facing POST anywhere in the application to pair with this
 // one. A staff row is only usable once it carries an `lpx_sub`, and `lpx_sub` is an OIDC subject
@@ -39,11 +39,12 @@ import { getProfile, type ProfileView } from "./NeotmsProfileManager.js";
  * for why that is the same code and not a second builder - so the SPA can render the waiting notice
  * from the response it already has, without a round trip whose answer it can predict.
  *
- * Takes the client address as a plain argument rather than a `WriteContext`. `WriteContext.actor` is
- * the caller's `mgrId`, which is built by `callerOf` - and `callerOf` throws on this route, because
- * there is no caller yet. The actor of this write is the row being created, so there is nothing for
- * `created_by` to name; `staff_self_register()` stamps the literal `'self-registration'` instead,
- * which is also the marker that answers "who got in without anybody approving them".
+ * Takes the client address as a plain argument rather than a `WriteContext`. `WriteContext.actor`
+ * is the caller's `mgrId`, which is built by `callerOf` - and `callerOf` throws on this route,
+ * because there is no caller yet. The actor of this write is the row being created, so there is
+ * nothing for `created_by` to name; `staff_self_register()` stamps the literal
+ * `'self-registration'` instead, which is also the marker that answers "who got in without anybody
+ * approving them".
  */
 export async function registerSelf(
   identity: LpxIdentity,
@@ -92,9 +93,9 @@ export async function registerSelf(
        *
        * The SPA never shows the sign-up form to an identity with a staff row, so a POST arriving
        * here means the client's idea of the registration state was stale - an old tab, a replayed
-       * request, a back button. Saying so lets it refetch `/api/v0/me` and land on the right screen;
-       * answering 200 would tell it the form submission worked and leave it showing a confirmation
-       * for something that did not happen.
+       * request, a back button. Saying so lets it refetch `/api/v0/me` and land on the right
+       * screen; answering 200 would tell it the form submission worked and leave it showing a
+       * confirmation for something that did not happen.
        *
        * This is NOT the double-click case. Two submissions racing both pass this check, both call
        * the function, and both get 201 with the same row - the function's branch (a) exists for
@@ -140,8 +141,8 @@ export async function registerSelf(
     const after = await getProfile(identity);
 
     /*
-     * 201 only if the re-read actually produced the profile. A 503 from the re-read must stay a 503:
-     * a transient error dressed as 201 is one the browser will not retry.
+     * 201 only if the re-read actually produced the profile. A 503 from the re-read must stay a
+     * 503: a transient error dressed as 201 is one the browser will not retry.
      *
      * No `Location` header. The created resource is the caller's own staff row, whose only
      * representation is `/api/v0/me` - a URL the client is already using - and a header the CORS

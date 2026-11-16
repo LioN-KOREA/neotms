@@ -3,7 +3,8 @@
 // Is this access token genuine, and was it issued to THIS app?
 //
 // Verified locally against the account system's public JWKS - no call leaves the Lambda per request
-// beyond the occasional key download. Every check 연동 안내서 §5 lists is asserted here:
+// beyond the occasional key download. Every check §5 of the account-system integration guide lists
+// is asserted here:
 //
 //   - the signature, with the key chosen by the token header's `kid` (two keys are always published
 //     and the signing one rotates yearly; taking the first key works until the day it does not);

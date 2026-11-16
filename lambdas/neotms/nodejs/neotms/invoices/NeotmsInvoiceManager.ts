@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// 결제 - translator-invoice endpoints, and the two PO money actions that belong with them.
+// Payment - translator-invoice endpoints, and the two PO money actions that belong with them.
 //
 // Everything in this file is reached through the `PAYMENT` menu rather than `PURCHASE_ORDER`, and
 // NeotmsMenus.ts records why: raising a PO is a PM's daily work, signing off the amount on it is a
@@ -9,9 +9,9 @@
 //
 // ## The one invariant this module defends
 //
-// An invoice must cover exactly the POs it was asked to cover. Every other rule in here follows from
-// that, because the failure it prevents is silent: a translator who sent one invoice for four jobs
-// and was paid for three does not find out from this system, and neither does anybody else.
+// An invoice must cover exactly the POs it was asked to cover. Every other rule in here follows
+// from that, because the failure it prevents is silent: a translator who sent one invoice for four
+// jobs and was paid for three does not find out from this system, and neither does anybody else.
 //
 // So `PoInvoiceAssignOps` returns a COUNT, and a count short of the number of ids asked for aborts
 // the whole request rather than issuing the document. The transaction is what makes "aborts" mean
@@ -154,16 +154,16 @@ export async function getInvoice(
  *      delivered, already on another invoice, or out of scope - and every one of those would print
  *      a wrong document. `PoInvoiceAssignOps` lists them.
  *
- * A short count THROWS `LinesRefused`, which is what rolls the transaction back - see that class for
- * why returning would not. So a rejected request leaves no invoice row and burns only a sequence
- * number, which is the trade the sequence exists to make (NeotmsCodes.ts): a gap in the codes is
- * invisible, a half-issued invoice is not.
+ * A short count THROWS `LinesRefused`, which is what rolls the transaction back - see that class
+ * for why returning would not. So a rejected request leaves no invoice row and burns only a
+ * sequence number, which is the trade the sequence exists to make (NeotmsCodes.ts): a gap in the
+ * codes is invisible, a half-issued invoice is not.
  *
  * The refusal is deliberately one message for all four causes. Naming which PO and why would be
  * friendlier, and it would also tell a caller which PO ids exist and which translator they belong
- * to - the enumeration oracle `notFound` exists to avoid. The 결제 screen only offers POs that pass
- * all four tests, so a caller reaching this message has either raced somebody else or built the
- * request by hand.
+ * to - the enumeration oracle `notFound` exists to avoid. The payment screen only offers POs that
+ * pass all four tests, so a caller reaching this message has either raced somebody else or built
+ * the request by hand.
  */
 export async function createInvoice(
   caller: NeotmsCaller,
@@ -218,14 +218,14 @@ export async function createInvoice(
 /**
  * Edit an invoice, and optionally replace the set of POs on it.
  *
- * `poIds` is a REPLACEMENT, not an addition - the schema's docstring says so, and the implementation
- * is detach-then-assign so that it cannot be read any other way. A PATCH that omits `poIds`
- * leaves the lines alone; one that sends three ids ends with exactly those three.
+ * `poIds` is a REPLACEMENT, not an addition - the schema's docstring says so, and the
+ * implementation is detach-then-assign so that it cannot be read any other way. A PATCH that omits
+ * `poIds` leaves the lines alone; one that sends three ids ends with exactly those three.
  *
  * Detach before assign, and both inside the transaction with the row update. The ordering is
- * forced: `PoInvoiceAssignOps` refuses a PO already on another invoice, and until the detach has run
- * the POs currently on THIS invoice look exactly like that to a re-send of the same list. Doing it
- * the other way round would make the commonest edit - "same POs, corrected total" - fail.
+ * forced: `PoInvoiceAssignOps` refuses a PO already on another invoice, and until the detach has
+ * run the POs currently on THIS invoice look exactly like that to a re-send of the same list. Doing
+ * it the other way round would make the commonest edit - "same POs, corrected total" - fail.
  *
  * `PoInvoiceDetachOps` is unscoped, and the scoped `InvoiceUpdateOps` above it is what authorises
  * it. Hence the update first: if the caller may not see this invoice, nothing has been detached.
@@ -287,9 +287,9 @@ export async function updateInvoice(
  * Void an invoice and return its POs to the uninvoiced list.
  *
  * The detach is not tidying-up, it is the point: `PoInvoiceAssignOps` refuses a PO that already
- * points at an invoice, so a PO left attached to a voided document could never be billed again. Both
- * statements in one transaction, because an invoice marked deleted with its POs still attached is
- * exactly that dead end.
+ * points at an invoice, so a PO left attached to a voided document could never be billed again.
+ * Both statements in one transaction, because an invoice marked deleted with its POs still attached
+ * is exactly that dead end.
  */
 export async function deleteInvoice(
   caller: NeotmsCaller,
@@ -345,11 +345,11 @@ export async function approvePurchaseOrder(
  * ## Why this is a separate route and not just `PATCH /purchase-orders/{id}`
  *
  * It writes the same six columns that endpoint already writes - `PoSettlementSchema` is literally
- * `v.pick`ed from the PO create schema - and it reuses `PoUpdateOps`. What differs is the authority:
- * this one is gated on `PAYMENT:update`. So a PM may record that a PO is 진행 on the PO screen, and
- * deciding that the money went out is somebody else's grant. Narrowing the BODY is what makes that
- * meaningful; a route with the same gate and the full body would be the PO endpoint under another
- * name.
+ * `v.pick`ed from the PO create schema - and it reuses `PoUpdateOps`. What differs is the
+ * authority: this one is gated on `PAYMENT:update`. So a PM may record that a PO is in progress on
+ * the PO screen, and deciding that the money went out is somebody else's grant. Narrowing the BODY
+ * is what makes that meaningful; a route with the same gate and the full body would be the PO
+ * endpoint under another name.
  *
  * ## The approval gate
  *
@@ -358,14 +358,15 @@ export async function approvePurchaseOrder(
  * document, which simply does not render, this one has to be refused in words because the caller is
  * trying to record that it already happened.
  *
- * 취소 is refused for the same reason from the other end: a cancelled PO was never approved and
- * never will be, so there is nothing to settle.
+ * A cancelled PO is refused for the same reason from the other end: it was never approved and never
+ * will be, so there is nothing to settle.
  *
- * Nothing here cross-checks 완료 against `po_money_state`. It is tempting - 완료 MEANS PAID IN FULL
- * (NeotmsPoStates.ts) - and it is wrong to enforce here: section 11c of db/015_payment.sql lists the
- * legacy rows that are 완료 without 정산완료, deliberately uncorrected because whether each was
- * really paid is a question for the accounts. A rule that refuses to SAVE those rows would make them
- * uneditable, which is the migration hazard the whole free-text `po_state` decision exists to avoid.
+ * Nothing here cross-checks PO_STATE_DONE against `po_money_state`. It is tempting - DONE MEANS
+ * PAID IN FULL (NeotmsPoStates.ts) - and it is wrong to enforce here: section 11c of
+ * db/015_payment.sql lists the legacy rows sitting at DONE without a fully-settled money state,
+ * deliberately uncorrected because whether each was really paid is a question for the accounts. A
+ * rule that refuses to SAVE those rows would make them uneditable, which is the migration hazard
+ * the whole free-text `po_state` decision exists to avoid.
  */
 export async function settlePurchaseOrder(
   caller: NeotmsCaller,

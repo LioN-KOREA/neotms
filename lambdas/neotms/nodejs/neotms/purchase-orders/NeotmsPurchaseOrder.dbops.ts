@@ -3,8 +3,8 @@
 // The purchase order (legacy PRJTB_PO). What we pay a translator.
 //
 // COST IS BOOKED HERE. `po_price_ksum` is what the reports sum as cost, and margin is the job's
-// revenue minus the sum of its POs' cost - so a PO on the wrong job is a margin wrong on two rows of
-// every report at once.
+// revenue minus the sum of its POs' cost - so a PO on the wrong job is a margin wrong on two rows
+// of every report at once.
 //
 // ## `project_id` is derived, never accepted
 //
@@ -26,17 +26,18 @@
 //
 // ## `po_type` is the PO's own, not the job's
 //
-// A PO carries an 업무 구분 exactly as a job does, and its payload is in `po_detail_linguistic` or
-// `po_detail_non_linguistic` by the same rule (db/011_job_types.sql). What it does NOT do is inherit
-// its job's type: a MICE conference buys interpretation, and a translation project buys event
-// staffing, so tying the two together would make both unrecordable. The job's type is the DEFAULT
-// the manager fills in on create, and nothing more than that.
+// A PO carries a job type exactly as a job does, and its payload is in `po_detail_linguistic` or
+// `po_detail_non_linguistic` by the same rule (db/011_job_types.sql). What it does NOT do is
+// inherit its job's type: a MICE conference buys interpretation, and a translation project buys
+// event staffing, so tying the two together would make both unrecordable. The job's type is the
+// DEFAULT the manager fills in on create, and nothing more than that.
 //
 // Three columns here are easy to confuse with the new one and none of them is related:
 //
 //   * `po_lang` - which language the printed PO document is rendered in. Letterhead, not content.
 //   * `po_cat_use` / `po_cat_word` / `po_cat_mid` / `po_cat_stotal` - CAT-TOOL analysis, as in
-//     Trados. Nothing to do with 업무 분류, which is `po_category` and lives on the detail table.
+//     Trados. Nothing to do with the job category, which is `po_category` and lives on the detail
+//     table.
 //
 // ## Three columns this module READS and does not WRITE
 //
@@ -128,32 +129,33 @@ export type PurchaseOrderRow = {
    * current value is the correct one and a frozen copy would be a bug. For the same reason they are
    * read-only here and have no entry in `PO_FIELDS`.
    *
-   * Null from `RETURNING`, like the detail columns, because they need a join. Also null whenever the
-   * PO names no translator or no PM, which the document renders as an empty line.
+   * Null from `RETURNING`, like the detail columns, because they need a join. Also null whenever
+   * the PO names no translator or no PM, which the document renders as an empty line.
    */
   poTranEmail: string | null;
   poPmEmail: string | null;
   poPmPhone: string | null;
-  /** 업무 구분 - a JOBTYPE code. Independent of the job's; see the module header. */
+  /** The job type - a JOBTYPE code. Independent of the job's; see the module header. */
   poType: string | null;
   /** From `po_detail_linguistic`, and null for a PO that has no such row. */
   poSlang: string | null;
   poElang: string | null;
-  /** 업무 분류 - from `po_detail_non_linguistic`. Not `po_cat_*`, which is CAT-tool analysis. */
+  /** The job category - from `po_detail_non_linguistic`. Not `po_cat_*`, which is CAT-tool
+   *  analysis. */
   poCategory: string | null;
   /**
    * How the cost was derived - also from `po_detail_linguistic`, so null on non-linguistic work.
    *
-   * These four moved off `purchase_order` in db/012_job_pricing.sql. A MICE or IMC PO is not
-   * bought per word, so it has no volume and no unit price; what it has is the total below,
-   * entered directly. Note there is no discount column on the PO side - there never was one.
+   * These four moved off `purchase_order` in db/012_job_pricing.sql. A MICE or IMC PO is not bought
+   * per word, so it has no volume and no unit price; what it has is the total below, entered
+   * directly. Note there is no discount column on the PO side - there never was one.
    */
   poVolume: string | null;
   poUnitCode: string | null;
   poPriceSel: string | null;
   poPrice: string | null;
   /**
-   * The amount - on `purchase_order` itself, for every 업무 구분.
+   * The amount - on `purchase_order` itself, for every job type.
    *
    * `po_price_ksum` is what the report sums as cost, what `PO_SORTS.amount` sorts by and what the
    * project rollup aggregates, which is why it stayed put while the derivation moved.
@@ -193,10 +195,10 @@ export type PurchaseOrderRow = {
    * Has the money on this PO been signed off. db/015_payment.sql.
    *
    * INDEPENDENT of `poState`, and the console must treat it that way: an unapproved PO cannot be
-   * printed or sent whatever state it is in, and an approved one may still be sitting at 미승인
-   * because the work has not started. Defaults false, including on anything the ETL inserts, which
-   * is the safe direction - a PO wrongly refused by the print screen is reported immediately,
-   * whereas one wrongly sent is not.
+   * printed or sent whatever state it is in, and an approved one may still be sitting at
+   * PO_STATE_UNAPPROVED because the work has not started. Defaults false, including on anything the
+   * ETL inserts, which is the safe direction - a PO wrongly refused by the print screen is reported
+   * immediately, whereas one wrongly sent is not.
    */
   poApproved: boolean;
   /** Server-stamped. Null on an unapproved PO, and on legacy rows 015 inferred approval for. */
@@ -223,7 +225,8 @@ export type PurchaseOrderRow = {
 };
 
 /**
- * The PO's OWN columns. Interpolated into `RETURNING`, which is why the detail columns are not here.
+ * The PO's OWN columns. Interpolated into `RETURNING`, which is why the detail columns are not
+ * here.
  *
  * `po_cat_*` ARE here and belong here - they are CAT-tool analysis figures on `purchase_order`
  * itself, and nothing in the application multiplies them, which is why they did not follow
@@ -300,8 +303,8 @@ const PO_PARENT_COLUMNS = `
  * the move is invisible above this module.
  *
  * The four pricing inputs are on the linguistic side because only linguistic work is bought per
- * unit. A non-linguistic PO therefore reads `po_volume` as null, which is what makes the 물량/단가
- * column render `-` with no change to the view at all.
+ * unit. A non-linguistic PO therefore reads `po_volume` as null, which is what makes the volume and
+ * unit-price column render `-` with no change to the view at all.
  */
 const PO_DETAIL_COLUMNS = `
   pdl.po_slang     AS po_slang,
@@ -419,12 +422,13 @@ export const PO_SORTS = {
   due: { column: "po.po_eday", cast: "date" },
   start: { column: "po.po_sday", cast: "date" },
   /**
-   * Largest first, on the BOOKED KRW figure rather than on the live `po_price_krw` the row displays.
+   * Largest first, on the BOOKED KRW figure rather than on the live `po_price_krw` the row
+   * displays.
    *
    * Same reason as `JOB_SORTS.amount`: a sort target has to be a real qualified column, because the
    * keyset cursor's row key is derived from the column name. An unexchanged PO can therefore sort a
-   * place away from where its shown amount would put it, which is visible - whereas pointing this at
-   * the `CASE` expression would stall the cursor silently.
+   * place away from where its shown amount would put it, which is visible - whereas pointing this
+   * at the `CASE` expression would stall the cursor silently.
    */
   amount: { column: "po.po_price_ksum", cast: "numeric" },
   /** When the money was paid. The column the settlement screen is read by. */
@@ -475,7 +479,7 @@ const PO_FILTERS = {
   moneyState: { column: "po.po_money_state", kind: "text" },
   pmId: { column: "po.po_pm_id", kind: "id" },
   workCode: { column: "po.po_work_code", kind: "text" },
-  /** 업무 구분. The PO list does not expose this yet; the filter is here so that it can. */
+  /** The job type. The PO list does not expose this yet; the filter is here so that it can. */
   poType: { column: "po.po_type", kind: "text" },
   slang: { column: "pdl.po_slang", kind: "text" },
   elang: { column: "pdl.po_elang", kind: "text" },
@@ -493,7 +497,7 @@ export type PoFilters = Partial<Record<keyof typeof PO_FILTERS, string>> & {
   paidFrom?: string;
   paidTo?: string;
   /**
-   * `'true'` or `'false'`. The 결제 screen's first question: what is waiting for approval.
+   * `'true'` or `'false'`. The payment screen's first question: what is waiting for approval.
    *
    * Deliberately NOT a `PO_FILTERS` entry, and this is the reason rather than an oversight.
    * `filterClause` passes the raw string to `param`, and `param`'s `bool` branch is
@@ -546,8 +550,8 @@ const uninvoicedClause = (value: string | undefined): SqlClause =>
  * The joins every read shares.
  *
  * `job` and `project` are INNER - a PO whose job or project is soft-deleted is not shown. The two
- * detail joins are LEFT and one-row-at-most by key (`po_id` is each detail table's primary key), so
- * they can neither drop a PO nor duplicate one.
+ * detail joins are LEFT and one-row-at-most by key (`po_id` is each detail table's primary key),
+ * so they can neither drop a PO nor duplicate one.
  *
  * `PO_KRW_JOIN` is LEFT with the same guarantee - it matches on `fx_rate_latest.currency_code`,
  * which the view makes unique by construction - and is what `po_price_krw` reads. NeotmsMoney.ts.
@@ -668,7 +672,7 @@ const PO_FIELDS: readonly FieldSpec<PurchaseOrderUpdate & { jobId?: string }>[] 
   { column: "po_pm_id", kind: "id", read: (i) => i.poPmId },
   { column: "translator_id", kind: "id", read: (i) => i.translatorId },
   /**
-   * 업무 구분. Six columns are NOT here any more and must not be re-added, because a spec for a
+   * The job type. Six columns are NOT here any more and must not be re-added, because a spec for a
    * column `purchase_order` no longer has makes EVERY save fail with 42703:
    *
    * - `po_slang`, `po_elang` (db/011_job_types.sql) and `po_volume`, `po_unit_code`,
@@ -762,10 +766,10 @@ export const PoCreateOps: (
 /**
  * Edit a purchase order.
  *
- * `po_state_dt` is advanced only when `po_state` is part of this edit. A CASE expression rather than
- * a conditional fragment, so the column is always assigned and the statement shape does not depend
- * on the body: when the state is unchanged it is assigned its own value, which PostgreSQL treats as
- * a no-op write.
+ * `po_state_dt` is advanced only when `po_state` is part of this edit. A CASE expression rather
+ * than a conditional fragment, so the column is always assigned and the statement shape does not
+ * depend on the body: when the state is unchanged it is assigned its own value, which PostgreSQL
+ * treats as a no-op write.
  *
  * Why it matters: `po_state_dt` is how long a PO has sat unacknowledged, which is the number a PM
  * chases translators by. Touching it on every edit - a typo fixed in the memo - would reset that
@@ -811,27 +815,28 @@ export const PoUpdateOps: (
 };
 
 /* -------------------------------------------------------------------------- */
-/* 결제 - the approval gate and the invoice grouping                           */
+/* Payment - the approval gate and the invoice grouping                       */
 /* -------------------------------------------------------------------------- */
 
 /**
  * Approve, or un-approve, one purchase order.
  *
  * The ONLY statement in the codebase that assigns `po_approved`. See the module header and the note
- * on `PO_FIELDS`: this is a separate statement because it is a separate authority, reached through a
- * route gated on `PAYMENT:update` rather than on `PURCHASE_ORDER:update`.
+ * on `PO_FIELDS`: this is a separate statement because it is a separate authority, reached through
+ * a route gated on `PAYMENT:update` rather than on `PURCHASE_ORDER:update`.
  *
  * ## The two stamps are written from the server, and only ever forward
  *
  * `po_approved_at` and `po_approved_by` are set from `now()` and the caller's `mgr_id` when
- * approving, and **left alone** when un-approving. That asymmetry is the point: "approved by X at T,
- * then revoked" is the useful record, and clearing the pair on revocation would erase the only
+ * approving, and **left alone** when un-approving. That asymmetry is the point: "approved by X at
+ * T, then revoked" is the useful record, and clearing the pair on revocation would erase the only
  * evidence that the approval ever happened. The flag says whether it holds NOW; the stamps say who
  * last granted it.
  *
- * `updated_at` is advanced but `po_state_dt` is NOT. Approval is not a workflow stage, and resetting
- * the state clock would make a PO that has sat unacknowledged for three weeks look new to the PM
- * chasing it - the hazard `PoUpdateOps` documents, in the one place it would be easiest to cause.
+ * `updated_at` is advanced but `po_state_dt` is NOT. Approval is not a workflow stage, and
+ * resetting the state clock would make a PO that has sat unacknowledged for three weeks look new to
+ * the PM chasing it - the hazard `PoUpdateOps` documents, in the one place it would be easiest to
+ * cause.
  *
  * Scoped, through the same four columns every other PO write uses. Approval authority decides WHO
  * MAY approve; it does not widen WHICH POs a person can see.
@@ -882,8 +887,8 @@ export const PoApprovalOps: (
  *
  *   * `translator_id = :translator_id` - a PO belonging to somebody else cannot be billed to this
  *     translator. The most expensive mistake available on this screen.
- *   * `po_state = ANY(:states)` - 납품 or 완료 only (`PO_STATES_INVOICEABLE`). There is nothing to
- *     bill for work that has not been delivered.
+  *   * `po_state = ANY(:states)` - delivered or done only (`PO_STATES_INVOICEABLE`). There is
+  *     nothing to bill for work that has not been delivered.
  *   * `invoice_translator_id IS NULL OR = :invoice_id` - a PO already on ANOTHER invoice is not
  *     silently moved. Re-running the same assignment is a no-op, which is what makes the update
  *     path's replace-the-set behaviour safe.
@@ -946,8 +951,8 @@ export const PoInvoiceAssignOps: (
  * Unscoped, and deliberately, for the reason `PoDetailClearOps` gives: it runs only inside a
  * transaction in which a scoped read of the INVOICE has already authorised the caller, and a fifth
  * copy of the four-column scope predicate is a worse risk than its absence here. Note what it is
- * keyed on - `invoice_translator_id`, not a list of PO ids - so it cannot reach a PO that was not on
- * this invoice in the first place.
+ * keyed on - `invoice_translator_id`, not a list of PO ids - so it cannot reach a PO that was not
+ * on this invoice in the first place.
  */
 export const PoInvoiceDetachOps = (invoiceId: string): SqlWriteOps => ({
   sql: `
@@ -1028,9 +1033,9 @@ export const PoDetailUpsertOps = (
  * Delete a PO's row from one detail table. Run before a type change.
  *
  * Unscoped, for the reason set out on `JobDetailClearOps`: the scope predicate here is four columns
- * across three tables, and a copy of it in this statement would be the place it drifts. It runs only
- * after `PoGetOps` or `PoUpdateOps` - both scoped - has returned a row for this caller, in the same
- * transaction and on the same id.
+ * across three tables, and a copy of it in this statement would be the place it drifts. It runs
+ * only after `PoGetOps` or `PoUpdateOps` - both scoped - has returned a row for this caller, in the
+ * same transaction and on the same id.
  */
 export const PoDetailClearOps = (poId: string, table: PoDetailTable): SqlWriteOps => ({
   sql: `DELETE FROM ${table} WHERE po_id = :po_id`,

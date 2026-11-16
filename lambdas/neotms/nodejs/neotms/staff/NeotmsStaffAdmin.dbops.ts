@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// `staff` and `sys_role` from the administrator's side - the 사용자 관리 screen.
+// `staff` and `sys_role` from the administrator's side - the staff administration screen.
 //
 // Distinct from `auth/NeotmsStaff.dbops.ts`, which reads the CALLER's own row on every request and
 // must stay as small and as fast as it is. This module reads and writes OTHER PEOPLE's rows, which
@@ -16,14 +16,15 @@
 //
 // In LKTMS both arrived in an unsigned cookie, so anybody who could edit a cookie could grant
 // themselves anything. The fix is not only that they now live in the database: it is that there is
-// exactly ONE statement in this codebase that writes them (`StaffAdminUpdateOps` below), reached by
-// exactly one route, gated on one menu. That is what makes the claim auditable rather than hopeful.
+// exactly ONE statement in this codebase that writes them (`StaffAdminUpdateOps` below), reached
+// by exactly one route, gated on one menu. That is what makes the claim auditable rather than
+// hopeful.
 //
 // ## There is no INSERT here
 //
 // An administrator cannot create a staff row. Rows arrive two ways only: the legacy ETL, and
-// self-registration by somebody who has signed in through LPX and whose identity therefore exists
-// (`staff_self_register()`, db/009_selfservice.sql). An admin-side INSERT would have to invent an
+// self-registration by somebody who has signed in through LPX and whose identity therefore exists (
+// `staff_self_register()`, db/009_selfservice.sql). An admin-side INSERT would have to invent an
 // `lpx_sub`, and a staff row with a made-up or absent subject is either unusable or - worse -
 // claimable by whoever next signs in with a matching email. So the administrator's job here is to
 // APPROVE, which is an UPDATE.
@@ -78,7 +79,8 @@ export type RoleOption = {
  * Aliased in full, for the reason given in auth/NeotmsStaff.dbops.ts: rows come back keyed by
  * column name, so `staff.id` and `sys_role.id` in one SELECT would collapse into a single key with
  * no error anywhere. Here that would mean the screen addressing a PATCH at a ROLE id while
- * believing it to be a staff id - and role ids are small integers, so it would hit a real staff row.
+ * believing it to be a staff id - and role ids are small integers, so it would hit a real staff
+ * row.
  */
 const STAFF_ADMIN_COLUMNS = `
   s.id           AS staff_id,
@@ -113,9 +115,9 @@ const toStaffAdminRow = (row: SqlRow): StaffAdminRow => ({
   linked: readBool(row, "staff_linked") ?? false,
   /*
    * `readText`, not a Date. The type parsers in PostgresUtils are overridden so that every
-   * timestamptz arrives as the wire string, because `String(new Date())` is
-   * "Wed Oct 29 2026 09:00:00 GMT+0900 (KST)" - not ISO, not parseable by the browser, and not an
-   * error. Every other mapper in this codebase reads timestamps the same way.
+   * timestamptz arrives as the wire string, because `String(new Date())` is "Wed Oct 29 2026
+   * 09:00:00 GMT+0900 (KST)" - not ISO, not parseable by the browser, and not an error. Every other
+   * mapper in this codebase reads timestamps the same way.
    */
   createdAt: readText(row, "staff_created_at"),
 });
@@ -126,12 +128,13 @@ const toStaffAdminRow = (row: SqlRow): StaffAdminRow => ({
  * ## The ordering is the feature
  *
  * `role_id IS NULL` sorts first, and that is not a cosmetic choice. A self-registered user lands
- * with `role_id = NULL` and sees "관리자님께서 회원가입 요청을 검토하고 있습니다." until somebody
- * acts. Nothing notifies the administrator - there is no mail path in this system - so the ONLY
- * thing standing between a new colleague and an indefinite wait is that their row is the first one
- * on this screen. `active` descending next, so a deactivated leaver with no role does not outrank a
- * live request. Then name, then `mgr_id` to make the order total (an ORDER BY with ties may return
- * them differently between two calls, and a list that reshuffles on refresh reads as broken).
+ * with `role_id = NULL` and sees the "an administrator is reviewing your sign-up request" notice
+ * until somebody acts. Nothing notifies the administrator - there is no mail path in this system -
+ * so the ONLY thing standing between a new colleague and an indefinite wait is that their row is
+ * the first one on this screen. `active` descending next, so a deactivated leaver with no role does
+ * not outrank a live request. Then name, then `mgr_id` to make the order total (an ORDER BY with
+ * ties may return them differently between two calls, and a list that reshuffles on refresh reads
+ * as broken).
  *
  * ## Not paginated, and not filtered by caller
  *
@@ -180,9 +183,9 @@ export const StaffAdminGetOps: (id: string) => SqlOps<StaffAdminRow | null> = (i
  * it - the same retire-don't-delete pattern as `sys_code`. A role still in use cannot be deleted
  * anyway: `staff.role_id` references it `ON DELETE RESTRICT`.
  *
- * This is the first query in the codebase to read `sys_role` other than as a LEFT JOIN onto `staff`,
- * which is worth noticing: until there was a screen for assigning roles, nothing ever needed to
- * enumerate them. `sys_role_menu` is still read by nothing in TypeScript - only by
+ * This is the first query in the codebase to read `sys_role` other than as a LEFT JOIN onto
+ * `staff`, which is worth noticing: until there was a screen for assigning roles, nothing ever
+ * needed to enumerate them. `sys_role_menu` is still read by nothing in TypeScript - only by
  * `sys_role_grant_all_menus()` in db/006_bootstrap.sql - because the guard resolves visibility from
  * `sys_role_auth` alone.
  */
@@ -209,13 +212,13 @@ export const RoleListOps: () => SqlOps<RoleOption[]> = () => ({
 /**
  * The three columns an administrator may write, and nothing else.
  *
- * This list IS the security boundary. Everything the 사용자 관리 screen can change about another
- * person is here, so the review question is "are these three acceptable", not "what else might that
- * screen reach". Name, email, phone and position are absent on purpose - the user maintains those
- * (`SelfProfileSchema`), and an administrator assigning a role has no reason to edit a phone number.
- * `mgr_id`, `lpx_sub` and `corp_code` are absent because they are identity: changing `lpx_sub` would
- * hand one person's record to another account, and changing `mgr_id` would orphan every `created_by`
- * that points at it.
+  * This list IS the security boundary. Everything the staff administration screen can change about
+  * another person is here, so the review question is "are these three acceptable", not "what else
+  * might that screen reach". Name, email, phone and position are absent on purpose - the user
+  * maintains those (`SelfProfileSchema`), and an administrator assigning a role has no reason to
+  * edit a phone number. `mgr_id`, `lpx_sub` and `corp_code` are absent because they are identity:
+  * changing `lpx_sub` would hand one person's record to another account, and changing `mgr_id`
+  * would orphan every `created_by` that points at it.
  *
  * `role_id` is `kind: "id"`, so it is cast to bigint and a non-numeric value fails as a parameter
  * rather than as a 23503 after the fact. `null` clears it, which is how an account is suspended
@@ -232,12 +235,12 @@ const STAFF_ADMIN_FIELDS: readonly FieldSpec<StaffAdminUpdate>[] = [
  *
  * `updated_at = now()` is appended unconditionally rather than being a `FieldSpec`, because an
  * administrative change to somebody else's permissions is the one edit in this system where "when
- * did this happen" is always worth answering. `staff` has no `updated_by`, and this is not the place
- * to add one - a column added here and not in the ETL's mapping is a column that reads as "nobody
- * changed this" for every migrated row.
+ * did this happen" is always worth answering. `staff` has no `updated_by`, and this is not the
+ * place to add one - a column added here and not in the ETL's mapping is a column that reads as
+ * "nobody changed this" for every migrated row.
  *
- * `deleted = false` in the WHERE, matching the listing: a soft-deleted row is not administrable from
- * the screen, so an id scraped from an old response cannot reactivate a leaver.
+ * `deleted = false` in the WHERE, matching the listing: a soft-deleted row is not administrable
+ * from the screen, so an id scraped from an old response cannot reactivate a leaver.
  */
 export const StaffAdminUpdateOps: (
   id: string,

@@ -81,9 +81,10 @@ export function ProjectsView() {
   })
   const [editing, setEditing] = useState<ProjectRow | null | undefined>(undefined)
   /*
-   * 인계메일을 보내려는 프로젝트. `editing` 과 따로 두는 이유는 두 대화상자가 **다른 일**을 하기
-   * 때문이다 — 서식은 프로젝트를 고치고, 이쪽은 아무것도 고치지 않고 메일을 보낸다. 하나로 합치면
-   * 메일을 보내려고 연 창이 프로젝트의 낡은 초안을 들고 있게 된다.
+   * The project whose handover mail is being sent. Kept separate from `editing` because the two
+   * dialogs DO DIFFERENT THINGS - the form edits the project, while this one edits nothing and
+   * sends a mail. Merged into one, a window opened to send a mail would be carrying a stale draft
+   * of the project.
    */
   const [handingOver, setHandingOver] = useState<ProjectRow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -344,8 +345,9 @@ export function ProjectsView() {
                 <th>기간</th>
                 <th>진행</th>
                 <th>입금</th>
-                {/* '수정' 이었다. 이 칸에 인계메일 버튼이 들어왔으므로 머리글이 칸의 내용보다
-                    좁아졌다 — 버튼 셋 중 하나만 가리키는 머리글은 나머지 둘을 설명하지 못한다. */}
+                {/* This column header named the edit button alone. With the handover-mail button added
+                    to the cell it became narrower than its contents - a heading naming one of
+                    three buttons says nothing about the other two. */}
                 <th>관리</th>
               </tr>
             </thead>
@@ -414,15 +416,17 @@ export function ProjectsView() {
                   <td>
                     <div className={ui.rowActions}>
                       {/*
-                       * 인계메일. 권한을 따로 보지 않는다 — 서버의 라우트가 `PROJECT:read` 이고
-                       * (NeotmsHandoverManager 머리말: 밖으로 나가는 값이 전부 이 화면에서 이미
-                       * 읽을 수 있는 것이고, 메일은 보내는 사람 자신의 하이웍스 계정에서 나간다),
-                       * 이 표를 보고 있다는 것 자체가 그 권한이 있다는 뜻이다. 여기에만 조건을
-                       * 더 붙이면 화면이 숨긴 일을 서버는 허용하는 상태가 되고, 둘 중 어느 쪽이
-                       * 정답인지 다음 사람이 알 수 없다.
+                       * Handover mail. No separate permission check - the server route is
+                       * `PROJECT:read` (see the header of NeotmsHandoverManager: everything leaving
+                       * the server is already readable on this screen, and the mail goes out from
+                       * the sender's own Hiworks account), so looking at this table IS holding that
+                       * permission. An extra condition here alone would leave the screen hiding
+                       * something the server permits, and the next person could not tell which of
+                       * the two is the intended answer.
                        *
-                       * 맨 앞에 둔다. 삭제는 계속 맨 뒤여야 하고(되돌릴 수 없는 것은 손이 자주
-                       * 가는 자리에서 멀수록 좋다), 수정 자리를 밀면 매일 쓰는 버튼이 움직인다.
+                       * First in the row. Delete has to stay last (the irreversible action is best
+                       * kept away from where hands land often), and pushing the edit button
+                       * along would move the one people press every day.
                        */}
                       <button
                         type="button"
