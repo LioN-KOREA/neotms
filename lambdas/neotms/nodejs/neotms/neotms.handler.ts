@@ -49,6 +49,7 @@ import {
   CodeUpdateSchema,
   CustomerCreateSchema,
   CustomerUpdateSchema,
+  HandoverMailSchema,
   JobCreateSchema,
   JobUpdateSchema,
   ProjectCreateSchema,
@@ -86,6 +87,7 @@ import {
   updateProject,
 } from "./projects/NeotmsProjectManager.js";
 import { createJob, deleteJob, getJob, listJobs, updateJob } from "./jobs/NeotmsJobManager.js";
+import { sendHandoverMail } from "./handover/NeotmsHandoverManager.js";
 import {
   createPurchaseOrder,
   deletePurchaseOrder,
@@ -326,6 +328,26 @@ const handleUpdateProject: RRHandler = async (request) => {
 const handleDeleteProject: RRHandler = async (request) => {
   const id = recordId(request);
   return id ? deleteProject(callerOf(request), id, writeContext(request)) : NOT_A_RECORD_ID;
+};
+
+/*
+ * 인계메일 - hand a project over to its operating PM by mail.
+ *
+ * No `writeContext`. Nothing in this database changes: the handler reads a project and its jobs,
+ * folds them into the form on page 3 of 인계 기능_261111.docx, and posts it through the CALLER'S OWN
+ * Hiworks account with credentials that live only in this request. There is no row to stamp a
+ * `created_by` on, and inventing one would claim a record exists that does not.
+ *
+ * That is also why the route is declared `PROJECT:read` rather than `update`. See the header of
+ * NeotmsHandoverManager: this endpoint discloses nothing the caller cannot already open, cannot
+ * reach a project outside their scope, and sends as them - it replaces a clipboard copy, which
+ * needed no authority beyond being able to look at the screen.
+ */
+const handleSendHandoverMail: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(HandoverMailSchema, request.body);
+  return parsed.ok ? sendHandoverMail(callerOf(request), id, parsed.value) : parsed.response;
 };
 
 const handleListJobs: RRHandler = async (request) => listJobs(callerOf(request), request);
@@ -684,6 +706,10 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: `${PROJECTS}/:id`, method: "GET", handler: handleGetProject, menu: NeotmsMenu.PROJECT, action: "read" },
   { path: `${PROJECTS}/:id`, method: "PATCH", handler: handleUpdateProject, menu: NeotmsMenu.PROJECT, action: "update" },
   { path: `${PROJECTS}/:id`, method: "DELETE", handler: handleDeleteProject, menu: NeotmsMenu.PROJECT, action: "delete" },
+  // 인계메일. A static trailing segment on the project resource, like `/purchase-orders/:id/approval`
+  // above - the id in the path says which project is being handed over. POST rather than PATCH
+  // because it changes nothing here; it performs an act whose result is a mail, not a row.
+  { path: `${PROJECTS}/:id/handover-mail`, method: "POST", handler: handleSendHandoverMail, menu: NeotmsMenu.PROJECT, action: "read" },
 
   // -- 작업 (revenue) -------------------------------------------------------
   { path: JOBS, method: "GET", handler: handleListJobs, menu: NeotmsMenu.JOB, action: "read" },

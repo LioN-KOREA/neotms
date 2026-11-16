@@ -34,6 +34,7 @@
 // the classic way a KST deadline becomes the previous day.
 
 import * as v from "valibot";
+import { HANDOVER_FORMATS, HANDOVER_LAYOUTS } from "./handover/NeotmsHandoverMail.js";
 
 /* -------------------------------------------------------------------------- */
 /* Primitives                                                                 */
@@ -541,6 +542,56 @@ export const InvoiceTranslatorUpdateSchema = v.partial(
  */
 export const REPORT_TOP_N_MAX = 30;
 
+/* -------------------------------------------------------------------------- */
+/* 인계메일 - the handover mail                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Sending a project's handover mail to its operating PM.
+ *
+ * Every field is required, which is unusual in this file - almost everything else is `settable`.
+ * The difference is that nothing here is a COLUMN. This body is not a partial edit of a stored
+ * record; it is the five answers the mail cannot be composed without, and a missing one has no
+ * sensible "leave it alone" reading. `인계 기능_261111.docx` page 3 is the form being filled in.
+ *
+ * ## The two picklists come from the mail template, not from `sys_code`
+ *
+ * `HANDOVER_FORMATS` and `HANDOVER_LAYOUTS` are literals in NeotmsHandoverMail, and importing them
+ * here is what makes "what the server accepts" and "what the mail draws" the same set by
+ * construction. Were they 유지보수 codes, deleting one would change the shape of a form that has
+ * already been sent to people - see the comment on those two arrays.
+ *
+ * Non-empty arrays rather than single values: the document says 다수 가능, and the mail renders all
+ * options with the chosen ones highlighted. `v.minLength(1)` is what "all items are required" means
+ * for a multiple-choice field.
+ *
+ * ## The two credential fields, and why they are ordinary strings
+ *
+ * `hiworksId` / `hiworksPassword` are the caller's own Hiworks sign-in. They are validated for
+ * length and nothing else - no pattern, no complexity rule - because this server is not the
+ * authority on them. Hiworks is, and it answers in one round trip. A regex here could only ever
+ * refuse a password that would have worked.
+ *
+ * They are never stored, logged, or echoed. `parseBody` reports field NAMES on a validation failure
+ * and deliberately not values, which is what keeps a mistyped password out of CloudWatch.
+ */
+export const HandoverMailSchema = v.object({
+  /** 편집포맷. At least one of WORD / HWP / PPT / EXCEL. */
+  formats: v.pipe(v.array(v.picklist(HANDOVER_FORMATS)), v.minLength(1, "pick at least one")),
+  /** 레이아웃. At least one of 보기좋게 / 표 병기 / DTP. */
+  layouts: v.pipe(v.array(v.picklist(HANDOVER_LAYOUTS)), v.minLength(1, "pick at least one")),
+  /**
+   * The operating PM's address.
+   *
+   * Shape-checked only, by `v.email`. Whether the address exists is a question only the mail server
+   * can answer, and Hiworks answers it - by bouncing, which reaches the sender rather than this API.
+   */
+  recipient: v.pipe(v.string(), v.trim(), v.email("must be an email address"), v.maxLength(300)),
+  hiworksId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
+  /** NOT trimmed. A leading or trailing space may be part of a password, and only Hiworks knows. */
+  hiworksPassword: v.pipe(v.string(), v.minLength(1), v.maxLength(300)),
+});
+
 /**
  * How many breakdown rows to return. Whole, small, and arriving as either a string or a number.
  *
@@ -737,6 +788,7 @@ export type PoApproval = v.InferOutput<typeof PoApprovalSchema>;
 export type PoSettlement = v.InferOutput<typeof PoSettlementSchema>;
 export type InvoiceTranslatorCreate = v.InferOutput<typeof InvoiceTranslatorCreateSchema>;
 export type InvoiceTranslatorUpdate = v.InferOutput<typeof InvoiceTranslatorUpdateSchema>;
+export type HandoverMailSend = v.InferOutput<typeof HandoverMailSchema>;
 export type ReportQuery = v.InferOutput<typeof ReportQuerySchema>;
 export type CodeCreate = v.InferOutput<typeof CodeCreateSchema>;
 export type CodeUpdate = v.InferOutput<typeof CodeUpdateSchema>;

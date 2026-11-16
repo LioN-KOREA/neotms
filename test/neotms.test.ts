@@ -54,6 +54,25 @@ import {
   parseDateField,
   shiftMonth,
 } from "../frontend/src/shared/utils/format.js";
+/*
+ * The third module imported rather than read, and for `format.ts`'s reason rather than
+ * `NeotmsMenus`'s: the handover mail composer does arithmetic, and the failures worth catching are
+ * not visible in any substring - a weekday computed through the local timezone, an off-by-one on
+ * the '4개국어 이상' rule, an unescaped `</td>` that silently shifts a table column.
+ *
+ * Free to import. It pulls in `NeotmsJobTypes` (one constant, two pure functions) and two
+ * `import type`s, which erase - so no `pg` and no environment validation, the same test that
+ * `NeotmsMenus` passes.
+ */
+import {
+  composeHandoverMail,
+  deadlines,
+  languageGroups,
+  HANDOVER_FORMATS,
+  HANDOVER_LAYOUTS,
+} from "../lambdas/neotms/nodejs/neotms/handover/NeotmsHandoverMail.js";
+import type { HandoverJob } from "../lambdas/neotms/nodejs/neotms/handover/NeotmsHandover.dbops.js";
+import type { ProjectRow } from "../lambdas/neotms/nodejs/neotms/projects/NeotmsProject.dbops.js";
 
 /*
  * The synthesised template for a stage, built at most once per run.
@@ -4338,5 +4357,400 @@ describe("date defaults, bulk operations and in-place editing", () => {
     expect(view).toContain("매출이 0이라 수익률을 셀 수 없습니다.");
     expect(view).not.toMatch(/marginRate \?\? 0/);
     expect(view).not.toMatch(/Math\.(max|abs)\(marginRate/);
+  });
+});
+
+/* ========================================================================== */
+/* 인계메일 - the handover mail                                               */
+/* ========================================================================== */
+
+describe("the handover mail", () => {
+  /** A project with every column populated the way the document's example has it. */
+  const project = (over: Partial<ProjectRow> = {}): ProjectRow => ({
+    id: "1",
+    prjCode: "PRJ_028961",
+    prjName: "메타바이오메드 사용설명서",
+    corpId: null,
+    coinCode: null,
+    prjMgrId: null,
+    prjMgrName: "조선미",
+    prjPmId: null,
+    prjPmName: "김재윤",
+    customerId: null,
+    cusCodeName: "메타바이오메드",
+    customerContactId: null,
+    cusMgrName: "이성준 대리",
+    prjField: null,
+    prjField2: null,
+    prjState: null,
+    prjInvoiceState: null,
+    prjMoneyState: null,
+    invCode: null,
+    invDt: null,
+    prjSday: null,
+    prjSdayTime: null,
+    prjEday: null,
+    prjEdayTime: null,
+    prjContent: null,
+    createdAt: null,
+    updatedAt: null,
+    ...over,
+  });
+
+  const job = (over: Partial<HandoverJob> = {}): HandoverJob => ({
+    jobName: "문서명",
+    jobType: "LINGUISTICS",
+    jobSlang: "한국어",
+    jobElang: "영어",
+    jobPmName: null,
+    jobEday: null,
+    jobEdayTime: null,
+    ...over,
+  });
+
+  const ALL = { formats: HANDOVER_FORMATS, layouts: HANDOVER_LAYOUTS } as const;
+  const WORD = { formats: ["WORD"], layouts: ["보기좋게"] } as const;
+
+  test("the subject is 고객사 / 담당자 / 언어, with the blank 담당자 left out rather than left in", () => {
+    /*
+     * 인계 기능_261111.docx: "고객사 / 담당자 / 언어로 정보 넣어져야". The 담당자 is deliberately
+     * blank for now (the request said so), and joining three parts with " / " regardless would
+     * produce `메타바이오메드 /  / 한국어-영어` - which reads as a subject with a word missing
+     * rather than as a field left empty on purpose.
+     *
+     * The subject separates the pair with `-` and the body with ` → `. That is not an
+     * inconsistency waiting to be tidied: the document specifies the two separators separately,
+     * for the two places.
+     */
+    const mail = composeHandoverMail(project(), [job()], WORD);
+    expect(mail.subject).toBe("메타바이오메드 / 한국어-영어");
+    expect(mail.subject).not.toContain(" /  / ");
+    // The 담당자 cell still exists in the body, empty. "Not recorded" and "this project has no
+    // contact" are different statements, and only the empty cell makes the first one.
+    expect(mail.html).toContain("거래처 / 담당자");
+    expect(mail.html).not.toContain("이성준");
+  });
+
+  test("a subject never comes out blank, even with no customer and no languages", () => {
+    // A mail with no subject cannot be found in an inbox afterwards. Falls back to the project
+    // name, then to the code - which always exists, being minted from a sequence.
+    expect(composeHandoverMail(project({ cusCodeName: null }), [], WORD).subject).toBe(
+      "메타바이오메드 사용설명서",
+    );
+    expect(
+      composeHandoverMail(project({ cusCodeName: null, prjName: null }), [], WORD).subject,
+    ).toBe("PRJ_028961");
+  });
+
+  test("four or more target languages collapse to 다국어 in the subject but not in the body", () => {
+    /*
+     * "타깃언어가 4개국어 이상일 경우 도착어는 '다국어'로 처리" - and that bullet sits under the
+     * 메일 제목 heading, which is why the body keeps the full list. The subject is for finding the
+     * mail later; the body is for doing the work, and nobody can plan from '다국어'.
+     *
+     * Both sides of the boundary are pinned. Reading '4개국어 이상' as "more than four" is the
+     * off-by-one this catches, and it would only ever be noticed by someone counting languages in
+     * a sent mail.
+     */
+    const three = ["영어", "일본어", "중국어(간체)"].map((t) => job({ jobElang: t }));
+    expect(composeHandoverMail(project(), three, WORD).subject).toBe(
+      "메타바이오메드 / 한국어-영어, 일본어, 중국어(간체)",
+    );
+
+    const mail = composeHandoverMail(project(), [...three, job({ jobElang: "베트남어" })], WORD);
+    expect(mail.subject).toBe("메타바이오메드 / 한국어-다국어");
+    expect(mail.html).toContain("한국어 → 영어, 일본어, 중국어(간체), 베트남어");
+    expect(mail.html).not.toContain("다국어");
+  });
+
+  test("the language list is deduplicated and skips the jobs that have no language at all", () => {
+    /*
+     * Five documents translated 한국어 → 영어 is one language pair, not five. A project shaped
+     * like that is ordinary, and listing the pair five times makes the subject unreadable.
+     *
+     * MICE and IMC jobs are skipped outright. They have no `job_detail_linguistic` row, so both
+     * columns are null; counting them would add an empty pair and the language cell would start
+     * with a comma.
+     */
+    const jobs = [
+      job(),
+      job({ jobName: "문서명 2" }),
+      job({ jobType: "MICE", jobSlang: null, jobElang: null }),
+      job({ jobType: "IMC", jobSlang: null, jobElang: null }),
+    ];
+    expect(composeHandoverMail(project(), jobs, WORD).subject).toBe("메타바이오메드 / 한국어-영어");
+    expect(languageGroups(jobs)).toEqual([{ source: "한국어", targets: ["영어"] }]);
+  });
+
+  test("a job with only one side of its pair contributes that side, not a '?'", () => {
+    /*
+     * The report's `langPair` writes `? > ?` because an aggregate needs a bucket for the unset
+     * case (db/011_job_types.sql). A mail is read by a person instead, so it prints what is known
+     * and nothing where nothing is - the same choice `jobTypeSummary` makes on screen. The mail
+     * and the screen calling one job by one name is worth more here than the mail and the report
+     * doing so.
+     */
+    const mail = composeHandoverMail(project(), [job({ jobElang: null })], WORD);
+    expect(mail.subject).toBe("메타바이오메드 / 한국어");
+    expect(mail.html).not.toContain("?");
+  });
+
+  test("the weekday is computed in UTC, so it does not slip a day in KST", () => {
+    /*
+     * THE timezone bug available here. `new Date("2026-11-13")` is UTC midnight; asking it for a
+     * LOCAL weekday in a zone behind UTC answers Thursday. Lambda runs in UTC and so does CI, so
+     * the broken version is green everywhere except in the mail the PM actually reads.
+     *
+     * 2026-11-13 is a Friday and 2026-11-16 a Monday - the two dates the document's own examples
+     * use, so a failure here can be checked against the source document rather than a calendar.
+     */
+    expect(composeHandoverMail(project({ prjEday: "2026-11-13" }), [], WORD).html).toContain(
+      "11/13 (금)",
+    );
+    expect(composeHandoverMail(project({ prjEday: "2026-11-16" }), [], WORD).html).toContain(
+      "11/16 (월)",
+    );
+  });
+
+  test("one shared deadline is one line; differing deadlines break into 언어: 납기 lines", () => {
+    /*
+     * The document's three steps. All the same -> one date. Dates differ -> one line per language.
+     * Times differ too -> each line carries its own (오전)/(오후).
+     *
+     * The form's 오전/오후 cell is highlighted only while the half is UNIFORM. Colouring one of
+     * them on a mail whose languages are split between morning and afternoon would state something
+     * untrue about half the work, in the one place the reader would not think to doubt.
+     */
+    const same = [
+      job({ jobEday: "2026-11-13", jobEdayTime: "15:00:00" }),
+      job({ jobElang: "일본어", jobEday: "2026-11-13", jobEdayTime: "15:00:00" }),
+    ];
+    expect(deadlines(same, project())).toEqual({ lines: ["11/13 (금)"], half: "오후" });
+    expect(composeHandoverMail(project(), same, WORD).html).not.toContain("한국어 → 영어: ");
+
+    const split = [
+      job({ jobEday: "2026-11-13", jobEdayTime: "15:00:00" }),
+      job({ jobElang: "베트남어", jobEday: "2026-11-20", jobEdayTime: "09:00:00" }),
+    ];
+    expect(deadlines(split, project())).toEqual({
+      lines: ["한국어 → 영어: 11/13 (금)(오후)", "한국어 → 베트남어: 11/20 (금)(오전)"],
+      half: null,
+    });
+  });
+
+  test("a missing delivery time highlights neither 오전 nor 오후", () => {
+    /*
+     * The document says the job-list toggle defaults to 오후. That is a default for a control a
+     * person is about to set, not a licence to assert a time nobody recorded - a mail that says
+     * 오후 cannot be told apart from one where 오후 was actually agreed.
+     */
+    const mail = composeHandoverMail(project({ prjEday: "2026-11-13" }), [], WORD);
+    expect(deadlines([], project({ prjEday: "2026-11-13" })).half).toBeNull();
+    expect(mail.html).toContain(">오전</td>");
+    expect(mail.html).toContain(">오후</td>");
+    // Two highlighted cells in the whole mail: the chosen format and the chosen layout.
+    expect(mail.html.match(/background:#3b57c4/g) ?? []).toHaveLength(2);
+  });
+
+  test("the jobs' deadlines win over the project's, which is the outer fallback", () => {
+    // 납품요청일 is per language wherever the data allows it; the project header is the same rule's
+    // outer ring, not a different rule.
+    const html = composeHandoverMail(
+      project({ prjEday: "2026-12-31" }),
+      [job({ jobEday: "2026-11-13" })],
+      WORD,
+    ).html;
+    expect(html).toContain("11/13 (금)");
+    expect(html).not.toContain("12/31");
+  });
+
+  test("every option is drawn and only the chosen ones are coloured", () => {
+    /*
+     * "편집포맷과 레이아웃은 항목 클릭하면 색칠 되도록(다수 가능) / 클릭으로 색/색없음 토글".
+     *
+     * Printing only the chosen ones would leave a cell reading "WORD", which cannot be told from a
+     * form on which HWP was never offered. The unchosen options being visible is what makes the
+     * chosen one read as a decision.
+     */
+    const mail = composeHandoverMail(project(), [job()], {
+      formats: ["HWP"],
+      layouts: ["DTP"],
+    } as const);
+    for (const option of [...HANDOVER_FORMATS, ...HANDOVER_LAYOUTS]) {
+      expect(mail.html).toContain(`>${option}</td>`);
+    }
+    expect(mail.html).toMatch(/background:#3b57c4[^>]*>HWP</);
+    expect(mail.html).toMatch(/background:#3b57c4[^>]*>DTP</);
+    expect(mail.html).toMatch(/#9aa0ad[^>]*>WORD</);
+
+    // Choosing all seven is legitimate, and must colour all seven.
+    expect(composeHandoverMail(project(), [job()], ALL).html.match(/background:#3b57c4/g) ?? [])
+      .toHaveLength(7);
+  });
+
+  test("기타요청 carries the project's 내용, with its line breaks and without its markup", () => {
+    /*
+     * The document says to leave 기타요청 blank for the PM to fill in. That was written for a
+     * copy-to-clipboard flow, where somebody saw the form before it was sent; this sends directly,
+     * so a blank cell would stay blank forever. The request redirected it to the project's 내용.
+     *
+     * The escaping half is the one that fails silently. `</td><td>` inside 내용 closes the cell
+     * early and shifts every later value one column left - a mail that looks fine and puts real
+     * figures under the wrong headings.
+     */
+    const mail = composeHandoverMail(
+      project({ prjContent: "원문 PDF 2종\n<b>급건</b></td><td>주입" }),
+      [job()],
+      WORD,
+    );
+    expect(mail.html).toContain("원문 PDF 2종<br>&lt;b&gt;급건&lt;/b&gt;&lt;/td&gt;&lt;td&gt;주입");
+    expect(mail.html).not.toContain("<b>급건</b>");
+    // Nine rows, whatever anyone types into 내용.
+    expect(mail.html.match(/<tr>/g) ?? []).toHaveLength(9);
+  });
+
+  test("담당PM is the jobs' PMs, and the project's PM only when no job names one", () => {
+    /*
+     * "담당PM: 상세 프로젝트 선택한 건에서 해당 되는 PM명을 ', '로 구분해서 입력". A handover
+     * happens per job, so the people receiving the work are the job PMs; the project header's
+     * single PM answers a different question - who owns the project.
+     */
+    const assigned = composeHandoverMail(
+      project(),
+      [job({ jobPmName: "이현정" }), job({ jobPmName: "서기쁨" }), job({ jobPmName: "이현정" })],
+      WORD,
+    );
+    expect(assigned.html).toContain("이현정, 서기쁨");
+    expect(assigned.html).not.toContain("김재윤");
+    expect(composeHandoverMail(project(), [job()], WORD).html).toContain("김재윤");
+  });
+
+  test("the mail table has one column count, and every cell carries its style inline", () => {
+    /*
+     * Six columns, set by the widest row (name + sub-heading + four formats). A row short of the
+     * count makes the client guess widths and the form comes out as a staircase - borders present,
+     * verticals not lining up. The 납품형태 block's second row is five because the first lends it a
+     * cell through `rowspan`.
+     *
+     * Inline styles because Gmail and Outlook strip `<style>`. Without the borders the form is a
+     * run of prose, and then nothing says which value belongs to which label.
+     */
+    const html = composeHandoverMail(project(), [job()], ALL).html;
+    expect(html).not.toContain("<style");
+    expect(html).not.toContain("class=");
+    for (const row of html.match(/<tr>[\s\S]*?<\/tr>/g) ?? []) {
+      const cells = [...row.matchAll(/<td style="([^"]*)"(?: colspan="(\d+)")?(?: rowspan="\d+")?>/g)];
+      expect(cells.length).toBeGreaterThan(0);
+      expect([5, 6]).toContain(cells.reduce((sum, c) => sum + Number(c[2] ?? 1), 0));
+      for (const cell of cells) expect(cell[1]).toContain("border:1px solid");
+    }
+  });
+
+  test("the two option lists are the same on both sides of the wire", () => {
+    /*
+     * The server's picklist is built from `HANDOVER_FORMATS` / `HANDOVER_LAYOUTS`, so an option the
+     * console offers and the server does not know is a 400 the user cannot act on, and one the
+     * server accepts and the console does not offer is unreachable. The two live in different build
+     * outputs and nothing reconciles them at runtime, so this is the reconciliation.
+     */
+    const types = readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "frontend",
+        "src",
+        "apis",
+        "neotms.types.ts",
+      ),
+      "utf8",
+    );
+    expect(types).toContain(
+      `export const HANDOVER_FORMATS = [${HANDOVER_FORMATS.map((f) => `'${f}'`).join(", ")}] as const`,
+    );
+    expect(types).toContain(
+      `export const HANDOVER_LAYOUTS = [${HANDOVER_LAYOUTS.map((l) => `'${l}'`).join(", ")}] as const`,
+    );
+  });
+
+  test("the route is declared on the project menu's read action, and stamps no audit columns", () => {
+    /*
+     * `PROJECT:read` rather than `update`, which looks wrong for an endpoint that sends mail and is
+     * argued at length in NeotmsHandoverManager's header: everything leaving the server is already
+     * readable by this caller, the project passes the same row scope a GET does, and the mail goes
+     * out through the CALLER'S OWN Hiworks account. It replaces a clipboard copy, which needed no
+     * authority beyond being able to look at the screen.
+     *
+     * The absent `writeContext` is the other half of the same claim. No row changes, so there is no
+     * `created_by` to stamp, and stamping one would assert a record exists that does not.
+     */
+    const source = lambdaSource("neotms.handler.ts");
+    const route = source
+      .split("\n")
+      .find((line) => line.includes("handleSendHandoverMail") && line.includes("path:"));
+    expect(route).toContain('method: "POST"');
+    expect(route).toContain("menu: NeotmsMenu.PROJECT");
+    expect(route).toContain('action: "read"');
+    expect(route).toContain("/handover-mail");
+
+    const block = /const handleSendHandoverMail[\s\S]*?\n};/.exec(source)?.[0] ?? "";
+    expect(block).not.toBe("");
+    expect(block).toContain("callerOf(request)");
+    expect(block).not.toContain("writeContext");
+  });
+
+  test("the Hiworks credentials are never stored, logged or echoed", () => {
+    /*
+     * The one thing in this feature that would be unforgivable to get wrong. Somebody types their
+     * own Hiworks password into a form; it may reach Hiworks and nowhere else.
+     *
+     * Four places it could leak, each asserted rather than trusted: the manager must not log it or
+     * put it in a response body, the response must carry only the subject and the recipient, the
+     * console must not persist it, and the composer must never see it at all - `composeHandoverMail`
+     * takes the two option arrays and nothing else, so the credentials cannot reach the HTML even
+     * by accident.
+     */
+    const manager = tsCode("handover/NeotmsHandoverManager.ts");
+    expect(manager).toContain("hiworksLogin(input.hiworksId, input.hiworksPassword)");
+    expect(manager).not.toMatch(/console\.(log|error|warn|info)/);
+    expect(manager).not.toMatch(/body:[^\n]*hiworks(Id|Password)/);
+    expect(manager).toContain("ok({ subject: mail.subject, recipient: input.recipient })");
+    expect(tsCode("handover/NeotmsHandoverMail.ts")).not.toContain("hiworks");
+
+    const modal = readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "frontend",
+        "src",
+        "features",
+        "projects",
+        "HandoverMailModal.tsx",
+      ),
+      "utf8",
+    )
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ");
+    expect(modal).not.toContain("localStorage");
+    expect(modal).not.toContain("sessionStorage");
+    // The success notice names the subject and the recipient. Not the ID, and not the password.
+    expect(modal).toContain("onSent(`${sent.recipient} 로 인계메일을 보냈습니다");
+    expect(modal).not.toMatch(/onSent\([^)]*hiworks/i);
+  });
+
+  test("the Hiworks client sits inside the typecheck gate, not in the LPX base code", () => {
+    /*
+     * It arrived in `lambdas/common/layers/nodejs/hiworks/`. `tsconfig.app.json` EXCLUDES
+     * `lambdas/common` on purpose - that tree is LPX base code importing SDK packages this project
+     * does not install, and it must not be able to block a NEOTMS deploy. A NEOTMS-only file left
+     * there would be re-synced away the next time that base code is refreshed, and this feature
+     * would go with it.
+     */
+    const appConfig = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "tsconfig.app.json"),
+      "utf8",
+    );
+    expect(appConfig).toContain('"lambdas/common"');
+    expect(() => lambdaSource("handover/HiworksClient.ts")).not.toThrow();
+    expect(tsCode("handover/NeotmsHandoverManager.ts")).toContain('from "./HiworksClient.js"');
   });
 });

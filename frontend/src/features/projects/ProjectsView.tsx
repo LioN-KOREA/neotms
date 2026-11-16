@@ -12,6 +12,7 @@ import { Icon } from '@/shared/ui/Icon'
 import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import ui from '@/shared/ui/ui.module.css'
+import { HandoverMailModal } from './HandoverMailModal'
 import { ProjectFormModal } from './ProjectFormModal'
 
 /**
@@ -79,6 +80,12 @@ export function ProjectsView() {
     to: filters.to,
   })
   const [editing, setEditing] = useState<ProjectRow | null | undefined>(undefined)
+  /*
+   * 인계메일을 보내려는 프로젝트. `editing` 과 따로 두는 이유는 두 대화상자가 **다른 일**을 하기
+   * 때문이다 — 서식은 프로젝트를 고치고, 이쪽은 아무것도 고치지 않고 메일을 보낸다. 하나로 합치면
+   * 메일을 보내려고 연 창이 프로젝트의 낡은 초안을 들고 있게 된다.
+   */
+  const [handingOver, setHandingOver] = useState<ProjectRow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   /*
@@ -337,7 +344,9 @@ export function ProjectsView() {
                 <th>기간</th>
                 <th>진행</th>
                 <th>입금</th>
-                <th>수정</th>
+                {/* '수정' 이었다. 이 칸에 인계메일 버튼이 들어왔으므로 머리글이 칸의 내용보다
+                    좁아졌다 — 버튼 셋 중 하나만 가리키는 머리글은 나머지 둘을 설명하지 못한다. */}
+                <th>관리</th>
               </tr>
             </thead>
             <tbody>
@@ -404,6 +413,24 @@ export function ProjectsView() {
                   </td>
                   <td>
                     <div className={ui.rowActions}>
+                      {/*
+                       * 인계메일. 권한을 따로 보지 않는다 — 서버의 라우트가 `PROJECT:read` 이고
+                       * (NeotmsHandoverManager 머리말: 밖으로 나가는 값이 전부 이 화면에서 이미
+                       * 읽을 수 있는 것이고, 메일은 보내는 사람 자신의 하이웍스 계정에서 나간다),
+                       * 이 표를 보고 있다는 것 자체가 그 권한이 있다는 뜻이다. 여기에만 조건을
+                       * 더 붙이면 화면이 숨긴 일을 서버는 허용하는 상태가 되고, 둘 중 어느 쪽이
+                       * 정답인지 다음 사람이 알 수 없다.
+                       *
+                       * 맨 앞에 둔다. 삭제는 계속 맨 뒤여야 하고(되돌릴 수 없는 것은 손이 자주
+                       * 가는 자리에서 멀수록 좋다), 수정 자리를 밀면 매일 쓰는 버튼이 움직인다.
+                       */}
+                      <button
+                        type="button"
+                        className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
+                        onClick={() => setHandingOver(row)}
+                      >
+                        인계메일
+                      </button>
                       {mayUpdate ? (
                         <button
                           type="button"
@@ -443,6 +470,14 @@ export function ProjectsView() {
           project={editing}
           onClose={() => setEditing(undefined)}
           onSaved={setNotice}
+        />
+      ) : null}
+
+      {handingOver ? (
+        <HandoverMailModal
+          project={handingOver}
+          onClose={() => setHandingOver(null)}
+          onSent={setNotice}
         />
       ) : null}
     </div>
