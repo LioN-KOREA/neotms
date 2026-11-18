@@ -51,9 +51,13 @@ export interface ListQuery {
 /* 내 정보 / 권한                                                              */
 /* -------------------------------------------------------------------------- */
 
-/** 메뉴에 대해 할 수 있는 다섯 가지. 서버의 MenuAction 과 같다. */
-export type MenuAction = 'read' | 'create' | 'update' | 'delete' | 'export'
-
+/**
+ * One menu, for navigation only.
+ *
+ * It used to carry five action flags per menu. Rights are a flat list of permission names now,
+ * sent once on the profile - so a menu says where a screen sits and nothing about whether it can
+ * be used, and there is no second answer that could disagree with the first.
+ */
 export interface MenuGrant {
   menuId: string
   name: string
@@ -61,8 +65,6 @@ export interface MenuGrant {
   depth: number
   url: string | null
   ordNo: number | null
-  /** 다섯 가지 동작 각각의 허용 여부. 권한이 하나도 없는 메뉴도 전부 false 로 들어온다. */
-  may: Record<MenuAction, boolean>
 }
 
 /**
@@ -105,9 +107,10 @@ export interface ProfilePrefill {
  * `created_by` 비교로 흘러 들어가면 "아무것도 내 것이 아니다" 로 조용히 틀린다. 없으면 쓰는
  * 쪽이 없음을 처리하게 된다.
  *
- * `menus` 만은 예외로 항상 있다. 등록 전에는 `[]` 다. 역할이 없으니 권한도 없다는 정직한
- * 답이고, 필드가 항상 있으면 `mayDo` 같은 권한 헬퍼에 예외 분기를 둘 필요가 없다 — 빈 배열에
- * 대해 자연히 닫힌다.
+ * `menus`, `permissions` and `attributes` are the exceptions: always present, `[]` before
+ * approval. No role therefore no grants is the honest answer, and a field that is always there
+ * means the permission helper needs no special case to fail closed - an empty list refuses
+ * everything by itself.
  */
 export interface ProfileView {
   registration: RegistrationStatus
@@ -131,6 +134,20 @@ export interface ProfileView {
    */
   seesEveryRow?: boolean
   menus: MenuGrant[]
+  /**
+   * The permission names this account holds.
+   *
+   * A superuser is sent the WHOLE list rather than a flag, so the console never has to implement
+   * the override rule a second time - what arrives is what they can actually do.
+   */
+  permissions: string[]
+  /**
+   * What this person may be named as: NEOTMS_USER_ATTRIBUTE_PM, _SALES_MANAGER, _SUPERUSER.
+   *
+   * Not a right over any screen. The project form reads it to explain why somebody's own name is
+   * missing from the 담당PM picker instead of leaving them to guess.
+   */
+  attributes: string[]
 }
 
 /**
@@ -277,6 +294,17 @@ export interface StaffRow {
    * 로그인하지 않은 행이라는 뜻이고, 그래서 역할은 있는데 연락처가 비어 있을 수 있다.
    */
   linked: boolean
+  /**
+   * What this person may BE named as — 담당영업, 담당PM — plus the superuser override.
+   *
+   * `NEOTMS_USER_ATTRIBUTE_*` names, from `staff_attribute`. Per person rather than per role,
+   * because "may be named as the PM of a project" is a fact about an individual: two people
+   * holding the same role can differ on it.
+   *
+   * Nothing here lets its holder open a screen. That is the role's job, and keeping the two apart
+   * is why there are two tables and two endpoints.
+   */
+  attributes: string[]
   createdAt: string | null
 }
 
@@ -293,6 +321,70 @@ export interface RoleOption {
 
 export interface RoleListView {
   items: RoleOption[]
+}
+
+/**
+ * One role as the 역할 관리 screen sees it: with its grants, and with how many people hold it.
+ *
+ * Richer than `RoleOption`, which is the assignment dropdown's shape, and read from a different
+ * endpoint for a different audience — `GET /api/v0/admin/role-grants`, superuser only.
+ */
+export interface RoleAdminRow {
+  id: string
+  /**
+   * The permanent identifier. NOT editable, and the omission is deliberate: the bootstrap function
+   * looks its role up by code, the seed re-asserts grants `ON CONFLICT (role_code)`, and
+   * `sys_role_grant_all_permissions(text)` takes one as an argument. Renaming the LABEL is what
+   * people actually want, and that is `roleName`.
+   */
+  roleCode: string
+  roleName: string | null
+  active: boolean
+  /** `NEOTMS_PERMISSION_*` names this role grants, sorted. */
+  permissions: string[]
+  /** Administrable holders: `deleted = false`, matching what the 사용자 관리 screen lists. */
+  staffCount: number
+  /**
+   * Every staff row pointing at this role, removed ones included — the number that decides whether
+   * it can be deleted.
+   *
+   * Different from `staffCount` and that difference is the confusing case: `staff.role_id` is
+   * `ON DELETE RESTRICT` and a removed staff row is still a row, so a role held only by leavers
+   * shows 0 above and still refuses to delete.
+   */
+  holders: number
+}
+
+export interface RoleAdminListView {
+  items: RoleAdminRow[]
+}
+
+export interface RoleCreateInput {
+  roleCode: string
+  roleName?: string | null
+  active?: boolean
+}
+
+/** `roleCode` is absent — see `RoleAdminRow.roleCode`. */
+export interface RoleUpdateInput {
+  roleName?: string | null
+  active?: boolean
+}
+
+/**
+ * The COMPLETE set, not a change list.
+ *
+ * A replace, so that two administrators editing one role in two tabs produce one of their
+ * intentions rather than the union of both. An empty array is valid and means the role grants
+ * nothing.
+ */
+export interface RolePermissionsInput {
+  permissions: string[]
+}
+
+/** The complete attribute set, same replace-the-set shape as `RolePermissionsInput`. */
+export interface StaffAttributesInput {
+  attributes: string[]
 }
 
 /**

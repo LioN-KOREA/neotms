@@ -28,39 +28,23 @@ import type { ResponseData } from "../reqres/RequestResponse.js";
 import { exceptionToErrorResponse, pgQuery } from "../utils/PostgresUtils.js";
 import { _resetTokenVerifier, verifyAccessToken } from "./NeotmsTokenVerifier.js";
 import {
-  RoleMenuPermissionsOps,
+  RolePermissionsOps,
+  StaffAttributesOps,
   StaffBootstrapSuperuserOps,
   StaffByLpxSubOps,
   StaffClaimOps,
   StaffUnclaimedByEmailOps,
-  type MenuPermissions,
+  type GrantedPermissions,
   type StaffRow,
 } from "./NeotmsStaff.dbops.js";
+import {
+  NEOTMS_USER_ATTRIBUTE_SUPERUSER,
+  type NeotmsPermission,
+} from "./NeotmsAuthorities.js";
 
 /* -------------------------------------------------------------------------- */
 /* What a permitted caller looks like                                         */
 /* -------------------------------------------------------------------------- */
-
-/**
- * The five action flags on `sys_role_auth`.
- *
- * UNCONFIRMED MAPPING. The legacy columns are ROLE_1..ROLE_5 and the order below is the likely one,
- * but it has not been verified against the ASP source. Nothing is renamed in the database for the
- * same reason: a wrong rename silently grants or revokes a right, and a silent authorization change
- * is the one bug class with no symptom until it matters.
- *
- * This enum is the single place the guess lives. Confirm against the legacy permission-check
- * includes, correct `ACTION_INDEX` below, and every call site follows.
- */
-export type MenuAction = "read" | "create" | "update" | "delete" | "export";
-
-const ACTION_INDEX: Record<MenuAction, 0 | 1 | 2 | 3 | 4> = {
-  read: 0,
-  create: 1,
-  update: 2,
-  delete: 3,
-  export: 4,
-};
 
 /**
  * Row-level visibility, derived from `staff.view_scope` (legacy MGR_VIEW, nvarchar(3)).
@@ -98,8 +82,45 @@ export type NeotmsCaller = {
   roleId: string | null;
   roleCode: string | null;
   roleName: string | null;
-  /** menu_id -> the five action flags. Absent from the map means no rights on that menu. */
-  permissions: Map<string, MenuPermissions>;
+  /** The permission names this caller's role has been granted. */
+  permissions: GrantedPermissions;
+  /**
+   * What this person may BE named as, and whether they override the permission set.
+   *
+   * Separate from `permissions` because it answers a different question. Nothing here lets its
+   * holder open a screen; `NEOTMS_USER_ATTRIBUTE_PM` lets somebody else put their name in
+   * `project.prj_pm_id`.
+   */
+  attributes: ReadonlySet<string>;
+  /**
+   * Passes every permission check, and may administer roles.
+   *
+   * TRUE FOR TWO REASONS, and the second one is what makes the first usable:
+   *
+   *   1. The `NEOTMS_USER_ATTRIBUTE_SUPERUSER` attribute, granted per person.
+   *   2. Holding the bootstrap authority (`lpx.admin.access`), the same test
+   *      `bootstrapSuperuser` uses.
+   *
+   * Without (2) this flag was false for every caller on every database. Nothing grants the
+   * attribute - not the ETL, not the seed, and not `staff_bootstrap_superuser()`, which assigns a
+   * role and no attributes - so the override existed and could not be reached, and the screen that
+   * repairs a misconfigured role was the screen a misconfigured role locked you out of.
+   *
+   * (2) grants nothing genuinely new, for the reason `holdsBootstrapAuthority` sets out at length:
+   * a holder of that authority can already rewrite LPX's authority tables, so they can already
+   * give themselves anything here and cannot be locked out of NEOTMS from inside NEOTMS. Making it
+   * explicit means the capability is visible on the caller rather than implied by what somebody
+   * could do if they went looking.
+   *
+   * Blanking `NEOTMS_BOOTSTRAP_AUTHORITY_ID` - which is what production should carry once real
+   * administrators exist - switches (2) off for everybody, and the attribute becomes the only path.
+   * So grant the attribute to a real person BEFORE blanking it, or the two steps together are the
+   * lockout this flag exists to prevent.
+   *
+   * Read once here rather than asked at each check, so that the override is a single decision made
+   * in one place and visible on the caller a log line can print.
+   */
+  isSuperuser: boolean;
   /** Raw `staff.view_scope`, kept for logging and for the admin screens. */
   viewScope: string | null;
   /** Whether this person may see every row, or only the ones they own. */
@@ -234,7 +255,8 @@ const toCaller = (
   sub: string,
   staff: StaffRow,
   account: AccountInfo,
-  permissions: Map<string, MenuPermissions>,
+  permissions: GrantedPermissions,
+  attributes: ReadonlySet<string>,
 ): NeotmsCaller => ({
   sub,
   staffId: staff.staffId,
@@ -248,6 +270,9 @@ const toCaller = (
   roleCode: staff.roleCode,
   roleName: staff.roleName,
   permissions,
+  attributes,
+  isSuperuser:
+    attributes.has(NEOTMS_USER_ATTRIBUTE_SUPERUSER) || holdsBootstrapAuthority(account),
   viewScope: staff.viewScope,
   seesEveryRow: staff.viewScope !== null && VIEW_SCOPE_ALL.has(staff.viewScope.trim().toUpperCase()),
 });
@@ -443,11 +468,18 @@ async function resolveCallerState(sub: string, account: AccountInfo): Promise<Ca
     return { kind: "inactive" };
   }
 
+  /*
+   * Two short reads, and the attributes are read even when the role is null. A staff row awaiting
+   * approval holds no permissions, but it may already have been marked as a PM - and the project
+   * pickers have to list them, because naming somebody as the PM of a project is not something
+   * they do, it is something done to them.
+   */
   const permissions = staff.roleId
-    ? (await pgQuery(RoleMenuPermissionsOps(staff.roleId))).data
-    : new Map<string, MenuPermissions>();
+    ? (await pgQuery(RolePermissionsOps(staff.roleId))).data
+    : (new Set<string>() as GrantedPermissions);
+  const attributes = (await pgQuery(StaffAttributesOps(staff.staffId))).data;
 
-  const caller = toCaller(sub, staff, account, permissions);
+  const caller = toCaller(sub, staff, account, permissions, attributes);
   callerCache.set(sub, { caller, expiresAt: Date.now() + CALLER_TTL_MS });
   return { kind: "ok", caller };
 }
@@ -631,17 +663,24 @@ export async function requireNeotmsAccess(
  * asked per route because that is the granularity the matrix has. A menu the role has no row for is
  * refused - absent means no rights, not unrestricted.
  */
-export function hasPermission(caller: NeotmsCaller, menuId: string, action: MenuAction): boolean {
-  const flags = caller.permissions.get(menuId);
-  if (!flags) return false;
-  return flags[ACTION_INDEX[action]];
+export function hasPermission(caller: NeotmsCaller, permission: NeotmsPermission): boolean {
+  /*
+   * The superuser override, checked before the grant set and not folded into it.
+   *
+   * Folding it in - seeding `permissions` with everything when the attribute is held - would read
+   * the same at every call site and be wrong in one place that matters: the administration screen
+   * shows a role's grants, and a superuser's role would then appear to hold permissions nobody
+   * granted it. The override belongs to the person, not to their role.
+   */
+  if (caller.isSuperuser) return true;
+  return caller.permissions.has(permission);
 }
 
 /** The 403 to return when `hasPermission` says no. Phrased so a user knows who to ask. */
-export function permissionRefusal(menuId: string, action: MenuAction): ResponseData<string> {
+export function permissionRefusal(permission: NeotmsPermission): ResponseData<string> {
   return {
     status: 403,
-    body: `Your role does not permit this action (${menuId}: ${action}). Please contact an administrator.`,
+    body: `Your role does not permit this action (${permission}). Please contact an administrator.`,
   };
 }
 

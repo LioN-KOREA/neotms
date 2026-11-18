@@ -35,6 +35,10 @@
 
 import * as v from "valibot";
 import { HANDOVER_FORMATS, HANDOVER_LAYOUTS } from "./handover/NeotmsHandoverMail.js";
+import {
+  NEOTMS_PERMISSIONS,
+  NEOTMS_USER_ATTRIBUTES,
+} from "../auth/NeotmsAuthorities.js";
 
 /* -------------------------------------------------------------------------- */
 /* Primitives                                                                 */
@@ -758,6 +762,89 @@ export const StaffAdminUpdateSchema = v.partial(
   }),
 );
 
+/* -------------------------------------------------------------------------- */
+/* sys_role - the role administration screen                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A role code. The stable identifier other things resolve a role by.
+ *
+ * Upper-case, letters, digits and underscores. Narrow on purpose: `staff_bootstrap_superuser()`
+ * finds its role with a literal `'NEOTMS_SYSADMIN'`, `sys_role_grant_all_permissions(text)` takes
+ * one as an argument, and the seed re-asserts grants `ON CONFLICT (role_code)` - so a code with a
+ * space or a quote in it is a code somebody has to remember to quote correctly in a migration a
+ * year from now. The shape is also what makes the codes legible in `created_by` audit values.
+ */
+const RoleCodeSchema = v.pipe(
+  v.string(),
+  v.trim(),
+  v.minLength(2),
+  v.maxLength(50),
+  v.regex(
+    /^[A-Z][A-Z0-9_]*$/u,
+    "A role code is upper-case letters, digits and underscores, starting with a letter",
+  ),
+);
+
+/**
+ * Creating a role.
+ *
+ * It grants nothing until permissions are written for it, and that is the safe direction - see
+ * `RoleCreateOps`. `active` defaults to true at the database rather than here, so omitting it
+ * means "a normal, assignable role".
+ */
+export const RoleAdminCreateSchema = v.object({
+  roleCode: RoleCodeSchema,
+  roleName: settable(text(100)),
+  active: v.optional(v.boolean()),
+});
+
+/**
+ * Editing a role. `roleCode` is absent, and the omission is the security-relevant part.
+ *
+ * `v.partial(v.omit(...))` rather than a hand-written object, so a field added above cannot be
+ * forgotten here - the same shape `CodeUpdateSchema` uses, for the same reason. What a rename would
+ * break is set out on `ROLE_ADMIN_FIELDS` in NeotmsRoleAdmin.dbops.ts.
+ */
+export const RoleAdminUpdateSchema = v.partial(v.omit(RoleAdminCreateSchema, ["roleCode"]));
+
+/**
+ * The complete permission set a role should have after this request.
+ *
+ * A REPLACE rather than a diff. The client sends what it wants to be true, and the server makes the
+ * table match; "add these two, remove that one" would put the diff in the client, and two
+ * administrators editing one role in two tabs would then produce the union of their intentions
+ * rather than one of them winning.
+ *
+ * An empty array is valid and means "this role grants nothing" - a placeholder role, or one being
+ * emptied before retirement. It is NOT an accidentally-blank request: a PATCH that mentions no
+ * fields is a 400 everywhere in this API, but `{"permissions": []}` names the field and says empty.
+ *
+ * `v.picklist(NEOTMS_PERMISSIONS)` rather than a string: an unknown name is refused here with a
+ * message naming the field, instead of arriving at the CHECK on `sys_role_permission` as a 23514
+ * mentioning a constraint. Both refuse it - and the table's CHECK is the one that cannot be
+ * bypassed - but only one of them produces a sentence worth showing somebody.
+ */
+export const RolePermissionsSchema = v.object({
+  permissions: v.array(v.picklist(NEOTMS_PERMISSIONS)),
+});
+
+/**
+ * The complete attribute set a person should have after this request.
+ *
+ * Same replace-the-set shape as `RolePermissionsSchema`. All three attributes are accepted here,
+ * `NEOTMS_USER_ATTRIBUTE_SUPERUSER` included - the route is superuser-only, so the caller already
+ * holds the override they would be handing out. `NEOTMS_ASSIGNABLE_ATTRIBUTES` is deliberately NOT
+ * the list used: that one means "may be named on a project", which is a different question from
+ * "may be granted to a person".
+ *
+ * The one refusal the schema cannot express is a caller removing their OWN superuser attribute,
+ * which is checked in the manager because it depends on who is asking.
+ */
+export const StaffAttributesSchema = v.object({
+  attributes: v.array(v.picklist(NEOTMS_USER_ATTRIBUTES)),
+});
+
 /**
  * What a user may say about themselves - at sign-up and afterwards.
  *
@@ -786,6 +873,10 @@ export const SelfProfileSchema = v.object({
 /* Inferred types                                                             */
 /* -------------------------------------------------------------------------- */
 
+export type RoleAdminCreate = v.InferOutput<typeof RoleAdminCreateSchema>;
+export type RoleAdminUpdate = v.InferOutput<typeof RoleAdminUpdateSchema>;
+export type RolePermissionsInput = v.InferOutput<typeof RolePermissionsSchema>;
+export type StaffAttributesInput = v.InferOutput<typeof StaffAttributesSchema>;
 export type CustomerCreate = v.InferOutput<typeof CustomerCreateSchema>;
 export type CustomerUpdate = v.InferOutput<typeof CustomerUpdateSchema>;
 export type TranslatorCreate = v.InferOutput<typeof TranslatorCreateSchema>;

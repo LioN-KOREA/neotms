@@ -10,8 +10,8 @@
 //
 // ## Two columns here decide everything else in the application
 //
-//   * `staff.role_id` -> `sys_role_auth` -> the menu x action matrix. Every permission in NEOTMS
-//     resolves from this column.
+//   * `staff.role_id` -> `sys_role_permission` -> the permission names the role holds. Every
+//     permission in NEOTMS resolves from this column.
 //   * `staff.view_scope` -> whether the person sees their own rows or all of them.
 //
 // In LKTMS both arrived in an unsigned cookie, so anybody who could edit a cookie could grant
@@ -41,6 +41,13 @@ import type { FieldSpec } from "../NeotmsWrite.js";
 import { updateFragments } from "../NeotmsWrite.js";
 import type { StaffAdminUpdate } from "../neotms.schemas.js";
 
+/** `text[]` from `array_agg`, as a string array. node-postgres hands these over already parsed. */
+const readTextArray = (row: SqlRow, column: string): string[] => {
+  const value = row[column];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+};
+
 export type StaffAdminRow = {
   /** `staff.id`. */
   id: string;
@@ -66,6 +73,15 @@ export type StaffAdminRow = {
    * might be set while its contact details are blank.
    */
   linked: boolean;
+  /**
+   * What this person may BE named as - 담당영업, 담당PM - and whether they hold the superuser
+   * override. From `staff_attribute`, which is per person rather than per role.
+   *
+   * On the row rather than fetched separately because the screen needs it for every person at
+   * once: a second request per row would be one call per employee, and a single call returning
+   * all of them would still have to be joined to this list on the client.
+   */
+  attributes: string[];
   createdAt: string | null;
 };
 
@@ -82,22 +98,44 @@ export type RoleOption = {
  * believing it to be a staff id - and role ids are small integers, so it would hit a real staff
  * row.
  */
-const STAFF_ADMIN_COLUMNS = `
-  s.id           AS staff_id,
-  s.mgr_id       AS staff_mgr_id,
-  s.mgr_name     AS staff_name,
-  s.mgr_name_eng AS staff_name_eng,
-  s.mgr_email    AS staff_email,
-  s.mgr_phone    AS staff_phone,
-  s.mgr_position AS staff_position,
-  s.role_id      AS staff_role_id,
-  s.view_scope   AS staff_view_scope,
-  s.active       AS staff_active,
-  s.created_at   AS staff_created_at,
-  (s.lpx_sub IS NOT NULL) AS staff_linked,
+/*
+ * `staff_attributes` is a SCALAR SUBQUERY and not a join, because `staff_attribute` is
+ * one-to-many: joining it would return one row per attribute, so a person holding both 담당영업
+ * and 담당PM would appear twice in the listing and every count taken over these rows would be too
+ * high by the number of attributes.
+ */
+/*
+ * Takes the alias, for the same reason `roleAdminColumns` does in NeotmsRoleAdmin.dbops.ts: the
+ * reads select from `staff s`, and the UPDATE has to select from its own `RETURNING` output
+ * instead, because a data-modifying CTE and the query around it share one pre-statement snapshot.
+ * `sys_role` and `staff_attribute` stay as a join and a subquery in both cases - the write touches
+ * neither, so the snapshot is right for them.
+ */
+const staffAdminColumns = (alias: string) => `
+  ${alias}.id           AS staff_id,
+  ${alias}.mgr_id       AS staff_mgr_id,
+  ${alias}.mgr_name     AS staff_name,
+  ${alias}.mgr_name_eng AS staff_name_eng,
+  ${alias}.mgr_email    AS staff_email,
+  ${alias}.mgr_phone    AS staff_phone,
+  ${alias}.mgr_position AS staff_position,
+  ${alias}.role_id      AS staff_role_id,
+  ${alias}.view_scope   AS staff_view_scope,
+  ${alias}.active       AS staff_active,
+  ${alias}.created_at   AS staff_created_at,
+  (${alias}.lpx_sub IS NOT NULL) AS staff_linked,
   r.role_code    AS role_code,
-  r.role_name    AS role_name
+  r.role_name    AS role_name,
+  -- Scalar subquery, not a join. See the note above this constant.
+  COALESCE(
+    (SELECT array_agg(sa.attribute ORDER BY sa.attribute)
+       FROM staff_attribute sa
+      WHERE sa.staff_id = ${alias}.id),
+    '{}'::text[]
+  ) AS staff_attributes
 `;
+
+const STAFF_ADMIN_COLUMNS = staffAdminColumns("s");
 
 const toStaffAdminRow = (row: SqlRow): StaffAdminRow => ({
   id: readId(row, "staff_id") ?? "",
@@ -113,6 +151,7 @@ const toStaffAdminRow = (row: SqlRow): StaffAdminRow => ({
   viewScope: readText(row, "staff_view_scope"),
   active: readBool(row, "staff_active") ?? false,
   linked: readBool(row, "staff_linked") ?? false,
+  attributes: readTextArray(row, "staff_attributes"),
   /*
    * `readText`, not a Date. The type parsers in PostgresUtils are overridden so that every
    * timestamptz arrives as the wire string, because `String(new Date())` is "Wed Oct 29 2026
@@ -185,9 +224,9 @@ export const StaffAdminGetOps: (id: string) => SqlOps<StaffAdminRow | null> = (i
  *
  * This is the first query in the codebase to read `sys_role` other than as a LEFT JOIN onto
  * `staff`, which is worth noticing: until there was a screen for assigning roles, nothing ever
- * needed to enumerate them. `sys_role_menu` is still read by nothing in TypeScript - only by
- * `sys_role_grant_all_menus()` in db/006_bootstrap.sql - because the guard resolves visibility from
- * `sys_role_auth` alone.
+ * needed to enumerate them. What a role may DO is a separate table, `sys_role_permission`, which
+ * this screen has no UI for yet - a role's grants are set in SQL, so adding a role here gives
+ * somebody a role that permits nothing until a grant is written for it.
  */
 export const RoleListOps: () => SqlOps<RoleOption[]> = () => ({
   sql: `
@@ -249,11 +288,20 @@ export const StaffAdminUpdateOps: (
   const fields = updateFragments(STAFF_ADMIN_FIELDS, input);
   return {
     /*
-     * A CTE, because `RETURNING` cannot join. The screen needs the role's NAME back - it has just
-     * changed, and re-rendering the row with the old label is exactly the moment a user concludes
-     * the save did not work - and `sys_role` is not in the UPDATE's scope. The alternative is a
-     * second SELECT, which under transaction-mode pooling is a second statement that could in
-     * principle run on another connection.
+     * A CTE, because `RETURNING` cannot join, and the screen needs the role's NAME back - it has
+     * just changed, and re-rendering the row with the old label is exactly the moment a user
+     * concludes the save did not work. A second SELECT would be a second statement, which under
+     * transaction-mode pooling could run on another connection.
+     *
+     * THE RETURNING LISTS EVERY COLUMN, and that is not verbosity. This used to end
+     * `RETURNING id` and then `JOIN staff s ON s.id = u.id`, which returned the row as it was
+     * BEFORE the update: a data-modifying CTE and the query around it share one snapshot taken
+     * before the statement began. So the response carried the old role, the old scope and the old
+     * active flag - the precise failure the paragraph above says this shape exists to avoid. The
+     * screen looked right only because it refetches the list straight afterwards.
+     *
+     * `sys_role` is still joined and `staff_attribute` still subqueried, because the UPDATE does
+     * not touch either, so the shared snapshot holds the correct rows for both.
      */
     sql: `
       WITH updated AS (
@@ -262,12 +310,12 @@ export const StaffAdminUpdateOps: (
                updated_at = now()
          WHERE id = :id
            AND deleted = false
-        RETURNING id
+        RETURNING id, mgr_id, mgr_name, mgr_name_eng, mgr_email, mgr_phone, mgr_position,
+                  role_id, view_scope, active, created_at, lpx_sub
       )
-      SELECT ${STAFF_ADMIN_COLUMNS}
+      SELECT ${staffAdminColumns("u")}
         FROM updated u
-        JOIN staff s ON s.id = u.id
-        LEFT JOIN sys_role r ON r.id = s.role_id
+        LEFT JOIN sys_role r ON r.id = u.role_id
     `,
     parameters: [...fields.parameters, param("id", id, "id")],
     mapper: (rows) => (rows.length > 0 ? toStaffAdminRow(rows[0]!) : null),

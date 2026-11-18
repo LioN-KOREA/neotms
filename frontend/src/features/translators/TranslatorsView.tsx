@@ -3,9 +3,14 @@ import { useCodeNames, useProfile, useTranslators } from '@/apis/queries/neotms.
 import { useDeleteTranslator } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN, codeOptions, COIN_CODES } from '@/apis/neotms.codes'
 import type { TranslatorRow } from '@/apis/neotms.types'
-import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { LIST_PAGE_SIZE } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
-import { mayDo } from '@/shared/permissions'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_TRANSLATOR_CREATE,
+  NEOTMS_PERMISSION_TRANSLATOR_DELETE,
+  NEOTMS_PERMISSION_TRANSLATOR_UPDATE,
+} from '@/apis/neotms.authorities'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
@@ -70,9 +75,9 @@ export function TranslatorsView() {
     [translatorsQuery.data],
   )
 
-  const mayCreate = mayDo(profile, NeotmsMenuId.TRANSLATOR, 'create')
-  const mayUpdate = mayDo(profile, NeotmsMenuId.TRANSLATOR, 'update')
-  const mayDelete = mayDo(profile, NeotmsMenuId.TRANSLATOR, 'delete')
+  const mayCreate = may(profile, NEOTMS_PERMISSION_TRANSLATOR_CREATE)
+  const mayUpdate = may(profile, NEOTMS_PERMISSION_TRANSLATOR_UPDATE)
+  const mayDelete = may(profile, NEOTMS_PERMISSION_TRANSLATOR_DELETE)
 
   const onSearch = (e: FormEvent) => {
     e.preventDefault()

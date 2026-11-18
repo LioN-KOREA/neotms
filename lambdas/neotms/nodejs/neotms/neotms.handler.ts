@@ -30,9 +30,46 @@ import {
   requireLpxAccountOnly,
   requireNeotmsAccess,
   type LpxIdentity,
-  type MenuAction,
   type NeotmsCaller,
 } from "../auth/NeotmsAuthGuard.js";
+import {
+  NEOTMS_PERMISSION_CUSTOMER_CREATE,
+  NEOTMS_PERMISSION_CUSTOMER_DELETE,
+  NEOTMS_PERMISSION_CUSTOMER_READ,
+  NEOTMS_PERMISSION_CUSTOMER_UPDATE,
+  NEOTMS_PERMISSION_DASHBOARD_PM_READ,
+  NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
+  NEOTMS_PERMISSION_INVOICE_CREATE,
+  NEOTMS_PERMISSION_INVOICE_DELETE,
+  NEOTMS_PERMISSION_INVOICE_READ,
+  NEOTMS_PERMISSION_INVOICE_UPDATE,
+  NEOTMS_PERMISSION_JOB_CREATE,
+  NEOTMS_PERMISSION_JOB_DELETE,
+  NEOTMS_PERMISSION_JOB_READ,
+  NEOTMS_PERMISSION_JOB_UPDATE,
+  NEOTMS_PERMISSION_MAINTENANCE_CREATE,
+  NEOTMS_PERMISSION_MAINTENANCE_DELETE,
+  NEOTMS_PERMISSION_MAINTENANCE_READ,
+  NEOTMS_PERMISSION_MAINTENANCE_UPDATE,
+  NEOTMS_PERMISSION_PO_APPROVE,
+  NEOTMS_PERMISSION_PO_CREATE,
+  NEOTMS_PERMISSION_PO_DELETE,
+  NEOTMS_PERMISSION_PO_READ,
+  NEOTMS_PERMISSION_PO_UPDATE,
+  NEOTMS_PERMISSION_PROJECT_CREATE,
+  NEOTMS_PERMISSION_PROJECT_DELETE,
+  NEOTMS_PERMISSION_PROJECT_EMAIL,
+  NEOTMS_PERMISSION_PROJECT_READ,
+  NEOTMS_PERMISSION_PROJECT_UPDATE,
+  NEOTMS_PERMISSION_REPORT_READ,
+  NEOTMS_PERMISSION_STAFF_READ,
+  NEOTMS_PERMISSION_STAFF_UPDATE,
+  NEOTMS_PERMISSION_TRANSLATOR_CREATE,
+  NEOTMS_PERMISSION_TRANSLATOR_DELETE,
+  NEOTMS_PERMISSION_TRANSLATOR_READ,
+  NEOTMS_PERMISSION_TRANSLATOR_UPDATE,
+  type NeotmsPermission,
+} from "../auth/NeotmsAuthorities.js";
 import { completeLogin, endSession, refreshSession, startLogin } from "../auth/NeotmsSessionManager.js";
 import { NEOTMS_ALLOWED_ORIGINS } from "../env/NeotmsEnv.js";
 import type { RRHandler, RequestData, ResponseData } from "../reqres/RequestResponse.js";
@@ -41,7 +78,6 @@ import {
   generateCorsHeadersActual,
   generateCorsHeadersPreflight,
 } from "../utils/CorsUtils.js";
-import { NeotmsMenu, type NeotmsMenuId } from "./NeotmsMenus.js";
 import { badRequest, parseBody } from "./NeotmsResult.js";
 import { clientInet, type WriteContext } from "./NeotmsWrite.js";
 import {
@@ -61,6 +97,10 @@ import {
   PurchaseOrderCreateSchema,
   PurchaseOrderUpdateSchema,
   SelfProfileSchema,
+  RoleAdminCreateSchema,
+  RoleAdminUpdateSchema,
+  RolePermissionsSchema,
+  StaffAttributesSchema,
   StaffAdminUpdateSchema,
   TranslatorCreateSchema,
   TranslatorUpdateSchema,
@@ -117,6 +157,14 @@ import {
 } from "./codes/NeotmsCodeManager.js";
 import { listFxRates } from "./fx/NeotmsFxRateManager.js";
 import { listRoles, listStaff, updateStaff } from "./staff/NeotmsStaffAdminManager.js";
+import {
+  createRole,
+  deleteRole,
+  listRolesForAdmin,
+  setRolePermissions,
+  setStaffAttributes,
+  updateRole,
+} from "./staff/NeotmsRoleAdminManager.js";
 
 /* -------------------------------------------------------------------------- */
 /* CORS                                                                       */
@@ -553,6 +601,51 @@ const handleUpdateStaff: RRHandler = async (request) => {
   return parsed.ok ? updateStaff(callerOf(request), id, parsed.value) : parsed.response;
 };
 
+/*
+ * Role administration - what a role MEANS, and what a person may BE named as.
+ *
+ * Every one of these is `superuser: true` rather than permission-gated, and the reason is on
+ * `NeotmsRoute.superuser`: a gate made of permissions would be editable through the endpoint it
+ * gates. The five writes here are the only statements in the API that touch `sys_role`,
+ * `sys_role_permission` or `staff_attribute`.
+ *
+ * Three of them pass the caller, and not for scoping. `createRole` and the two set-the-set
+ * endpoints need it for `created_by` - so a surprising grant can be traced to a person - and
+ * `setStaffAttributes` needs it to refuse a caller removing their own superuser override.
+ */
+const handleListRolesForAdmin: RRHandler = async () => listRolesForAdmin();
+
+const handleCreateRole: RRHandler = async (request) => {
+  const parsed = parseBody(RoleAdminCreateSchema, request.body);
+  return parsed.ok ? createRole(callerOf(request), parsed.value) : parsed.response;
+};
+
+const handleUpdateRole: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(RoleAdminUpdateSchema, request.body);
+  return parsed.ok ? updateRole(id, parsed.value) : parsed.response;
+};
+
+const handleDeleteRole: RRHandler = async (request) => {
+  const id = recordId(request);
+  return id ? deleteRole(id) : NOT_A_RECORD_ID;
+};
+
+const handleSetRolePermissions: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(RolePermissionsSchema, request.body);
+  return parsed.ok ? setRolePermissions(callerOf(request), id, parsed.value) : parsed.response;
+};
+
+const handleSetStaffAttributes: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(StaffAttributesSchema, request.body);
+  return parsed.ok ? setStaffAttributes(callerOf(request), id, parsed.value) : parsed.response;
+};
+
 /* -------------------------------------------------------------------------- */
 /* The routing table                                                          */
 /* -------------------------------------------------------------------------- */
@@ -560,16 +653,41 @@ const handleUpdateStaff: RRHandler = async (request) => {
 /**
  * One route: how to reach it, what to run, and what it may require.
  *
- * `menu` and `action` are what the per-route permission check reads. They are optional in the type
- * only so that the session routes - which are unauthenticated and belong to no menu - can be
- * declared in the same array; `routeAllows` refuses an authenticated route that omits them.
+ * Exactly one of `permission`, `superuser`, `anyStaff` and `account` is what authorizes a route.
+ * All four are optional in the type only so that the session routes - unauthenticated, belonging
+ * to no permission - can be declared in the same array; `routeAllows` refuses an authenticated
+ * route that declares none of them, because that is what a route whose author forgot looks like.
  */
 export type NeotmsRoute = {
   path: string;
   method: string;
   handler: RRHandler;
-  menu?: NeotmsMenuId;
-  action?: MenuAction;
+  /**
+   * The single permission this route requires.
+   *
+   * One name rather than the `menu` + `action` pair this used to be. The pair could not say what
+   * two of these routes actually need: approving a purchase order had to borrow the payment
+   * menu's `update`, which is also what records a payment, and the project handover mail had to
+   * borrow `PROJECT:read`, so anyone who could open a project could mail its contents out. Both
+   * now name a permission of their own.
+   */
+  permission?: NeotmsPermission;
+  /**
+   * Only a superuser may call this - `NeotmsCaller.isSuperuser`, which is the
+   * `NEOTMS_USER_ATTRIBUTE_SUPERUSER` attribute or the bootstrap authority.
+   *
+   * It exists because role administration cannot be gated on a permission without the gate being
+   * editable through the thing it gates. `NEOTMS_PERMISSION_STAFF_UPDATE` is the closest candidate
+   * and it is not good enough: a role holding it could grant itself every other permission in one
+   * request, so the only thing standing between a staff administrator and the whole system would be
+   * that nobody thought to try. The superuser flag is not grantable from inside the application at
+   * all, which is the property that makes it the right gate for editing grants.
+   *
+   * Everything that writes `sys_role`, `sys_role_permission` or `staff_attribute` carries this. The
+   * staff screens that merely READ roles stay on `NEOTMS_PERMISSION_STAFF_READ`: who holds which
+   * role is a staff administrator's daily business, and only deciding what a role MEANS is reserved.
+   */
+  superuser?: true;
   /**
    * Every signed-in staff member may call this, whatever their role grants.
    *
@@ -662,6 +780,14 @@ const FX_RATES = "/api/v0/fx-rates";
  */
 const ADMIN_STAFF = "/api/v0/admin/staff";
 const ADMIN_ROLES = "/api/v0/admin/roles";
+/**
+ * The role administration listing: every role, its grants, and how many people hold it.
+ *
+ * A path of its own rather than a flag on `ADMIN_ROLES`, because the two have different audiences
+ * and different authorization - the same reason `/codes` and `/admin/codes` are two paths. A query
+ * parameter that widens a response is a parameter somebody eventually sets.
+ */
+const ADMIN_ROLE_GRANTS = "/api/v0/admin/role-grants";
 
 export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // -- Sessions (open) ------------------------------------------------------
@@ -690,44 +816,44 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: FX_RATES, method: "GET", handler: handleListFxRates, anyStaff: true },
 
   // -- Customers ------------------------------------------------------------
-  { path: CUSTOMERS, method: "GET", handler: handleListCustomers, menu: NeotmsMenu.CUSTOMER, action: "read" },
-  { path: CUSTOMERS, method: "POST", handler: handleCreateCustomer, menu: NeotmsMenu.CUSTOMER, action: "create" },
-  { path: `${CUSTOMERS}/:id`, method: "GET", handler: handleGetCustomer, menu: NeotmsMenu.CUSTOMER, action: "read" },
-  { path: `${CUSTOMERS}/:id`, method: "PATCH", handler: handleUpdateCustomer, menu: NeotmsMenu.CUSTOMER, action: "update" },
-  { path: `${CUSTOMERS}/:id`, method: "DELETE", handler: handleDeleteCustomer, menu: NeotmsMenu.CUSTOMER, action: "delete" },
+  { path: CUSTOMERS, method: "GET", handler: handleListCustomers, permission: NEOTMS_PERMISSION_CUSTOMER_READ },
+  { path: CUSTOMERS, method: "POST", handler: handleCreateCustomer, permission: NEOTMS_PERMISSION_CUSTOMER_CREATE },
+  { path: `${CUSTOMERS}/:id`, method: "GET", handler: handleGetCustomer, permission: NEOTMS_PERMISSION_CUSTOMER_READ },
+  { path: `${CUSTOMERS}/:id`, method: "PATCH", handler: handleUpdateCustomer, permission: NEOTMS_PERMISSION_CUSTOMER_UPDATE },
+  { path: `${CUSTOMERS}/:id`, method: "DELETE", handler: handleDeleteCustomer, permission: NEOTMS_PERMISSION_CUSTOMER_DELETE },
 
   // -- Translators ----------------------------------------------------------
-  { path: TRANSLATORS, method: "GET", handler: handleListTranslators, menu: NeotmsMenu.TRANSLATOR, action: "read" },
-  { path: TRANSLATORS, method: "POST", handler: handleCreateTranslator, menu: NeotmsMenu.TRANSLATOR, action: "create" },
-  { path: `${TRANSLATORS}/:id`, method: "GET", handler: handleGetTranslator, menu: NeotmsMenu.TRANSLATOR, action: "read" },
-  { path: `${TRANSLATORS}/:id`, method: "PATCH", handler: handleUpdateTranslator, menu: NeotmsMenu.TRANSLATOR, action: "update" },
-  { path: `${TRANSLATORS}/:id`, method: "DELETE", handler: handleDeleteTranslator, menu: NeotmsMenu.TRANSLATOR, action: "delete" },
+  { path: TRANSLATORS, method: "GET", handler: handleListTranslators, permission: NEOTMS_PERMISSION_TRANSLATOR_READ },
+  { path: TRANSLATORS, method: "POST", handler: handleCreateTranslator, permission: NEOTMS_PERMISSION_TRANSLATOR_CREATE },
+  { path: `${TRANSLATORS}/:id`, method: "GET", handler: handleGetTranslator, permission: NEOTMS_PERMISSION_TRANSLATOR_READ },
+  { path: `${TRANSLATORS}/:id`, method: "PATCH", handler: handleUpdateTranslator, permission: NEOTMS_PERMISSION_TRANSLATOR_UPDATE },
+  { path: `${TRANSLATORS}/:id`, method: "DELETE", handler: handleDeleteTranslator, permission: NEOTMS_PERMISSION_TRANSLATOR_DELETE },
 
   // -- Projects -------------------------------------------------------------
-  { path: PROJECTS, method: "GET", handler: handleListProjects, menu: NeotmsMenu.PROJECT, action: "read" },
-  { path: PROJECTS, method: "POST", handler: handleCreateProject, menu: NeotmsMenu.PROJECT, action: "create" },
-  { path: `${PROJECTS}/:id`, method: "GET", handler: handleGetProject, menu: NeotmsMenu.PROJECT, action: "read" },
-  { path: `${PROJECTS}/:id`, method: "PATCH", handler: handleUpdateProject, menu: NeotmsMenu.PROJECT, action: "update" },
-  { path: `${PROJECTS}/:id`, method: "DELETE", handler: handleDeleteProject, menu: NeotmsMenu.PROJECT, action: "delete" },
+  { path: PROJECTS, method: "GET", handler: handleListProjects, permission: NEOTMS_PERMISSION_PROJECT_READ },
+  { path: PROJECTS, method: "POST", handler: handleCreateProject, permission: NEOTMS_PERMISSION_PROJECT_CREATE },
+  { path: `${PROJECTS}/:id`, method: "GET", handler: handleGetProject, permission: NEOTMS_PERMISSION_PROJECT_READ },
+  { path: `${PROJECTS}/:id`, method: "PATCH", handler: handleUpdateProject, permission: NEOTMS_PERMISSION_PROJECT_UPDATE },
+  { path: `${PROJECTS}/:id`, method: "DELETE", handler: handleDeleteProject, permission: NEOTMS_PERMISSION_PROJECT_DELETE },
   // Handover mail. A static trailing segment on the project resource, like
   // `/purchase-orders/:id/approval` above - the id in the path says which project is being handed
   // over. POST rather than PATCH because it changes nothing here; it performs an act whose result
   // is a mail, not a row.
-  { path: `${PROJECTS}/:id/handover-mail`, method: "POST", handler: handleSendHandoverMail, menu: NeotmsMenu.PROJECT, action: "read" },
+  { path: `${PROJECTS}/:id/handover-mail`, method: "POST", handler: handleSendHandoverMail, permission: NEOTMS_PERMISSION_PROJECT_EMAIL },
 
   // -- Jobs (revenue) -------------------------------------------------------
-  { path: JOBS, method: "GET", handler: handleListJobs, menu: NeotmsMenu.JOB, action: "read" },
-  { path: JOBS, method: "POST", handler: handleCreateJob, menu: NeotmsMenu.JOB, action: "create" },
-  { path: `${JOBS}/:id`, method: "GET", handler: handleGetJob, menu: NeotmsMenu.JOB, action: "read" },
-  { path: `${JOBS}/:id`, method: "PATCH", handler: handleUpdateJob, menu: NeotmsMenu.JOB, action: "update" },
-  { path: `${JOBS}/:id`, method: "DELETE", handler: handleDeleteJob, menu: NeotmsMenu.JOB, action: "delete" },
+  { path: JOBS, method: "GET", handler: handleListJobs, permission: NEOTMS_PERMISSION_JOB_READ },
+  { path: JOBS, method: "POST", handler: handleCreateJob, permission: NEOTMS_PERMISSION_JOB_CREATE },
+  { path: `${JOBS}/:id`, method: "GET", handler: handleGetJob, permission: NEOTMS_PERMISSION_JOB_READ },
+  { path: `${JOBS}/:id`, method: "PATCH", handler: handleUpdateJob, permission: NEOTMS_PERMISSION_JOB_UPDATE },
+  { path: `${JOBS}/:id`, method: "DELETE", handler: handleDeleteJob, permission: NEOTMS_PERMISSION_JOB_DELETE },
 
   // -- Purchase orders (cost) -----------------------------------------------
-  { path: PURCHASE_ORDERS, method: "GET", handler: handleListPurchaseOrders, menu: NeotmsMenu.PURCHASE_ORDER, action: "read" },
-  { path: PURCHASE_ORDERS, method: "POST", handler: handleCreatePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "create" },
-  { path: `${PURCHASE_ORDERS}/:id`, method: "GET", handler: handleGetPurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "read" },
-  { path: `${PURCHASE_ORDERS}/:id`, method: "PATCH", handler: handleUpdatePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "update" },
-  { path: `${PURCHASE_ORDERS}/:id`, method: "DELETE", handler: handleDeletePurchaseOrder, menu: NeotmsMenu.PURCHASE_ORDER, action: "delete" },
+  { path: PURCHASE_ORDERS, method: "GET", handler: handleListPurchaseOrders, permission: NEOTMS_PERMISSION_PO_READ },
+  { path: PURCHASE_ORDERS, method: "POST", handler: handleCreatePurchaseOrder, permission: NEOTMS_PERMISSION_PO_CREATE },
+  { path: `${PURCHASE_ORDERS}/:id`, method: "GET", handler: handleGetPurchaseOrder, permission: NEOTMS_PERMISSION_PO_READ },
+  { path: `${PURCHASE_ORDERS}/:id`, method: "PATCH", handler: handleUpdatePurchaseOrder, permission: NEOTMS_PERMISSION_PO_UPDATE },
+  { path: `${PURCHASE_ORDERS}/:id`, method: "DELETE", handler: handleDeletePurchaseOrder, permission: NEOTMS_PERMISSION_PO_DELETE },
 
   // -- Payment (approval, settlement, translator invoices) ------------------
   //
@@ -736,23 +862,23 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // menu's `update`. Same resource, same id, different grant - which is only expressible as
   // separate routes, because this table declares authorization per path.
   //
-  // The action mapping is the one NeotmsMenus.PAYMENT documents: `read` sees the screens and the
-  // printable documents, `update` approves and settles, `create` issues an invoice, `delete` voids
-  // one.
-  { path: `${PURCHASE_ORDERS}/:id/approval`, method: "PATCH", handler: handleApprovePurchaseOrder, menu: NeotmsMenu.PAYMENT, action: "update" },
-  { path: `${PURCHASE_ORDERS}/:id/settlement`, method: "PATCH", handler: handleSettlePurchaseOrder, menu: NeotmsMenu.PAYMENT, action: "update" },
-  { path: INVOICES, method: "GET", handler: handleListInvoices, menu: NeotmsMenu.PAYMENT, action: "read" },
-  { path: INVOICES, method: "POST", handler: handleCreateInvoice, menu: NeotmsMenu.PAYMENT, action: "create" },
-  { path: `${INVOICES}/:id`, method: "GET", handler: handleGetInvoice, menu: NeotmsMenu.PAYMENT, action: "read" },
-  { path: `${INVOICES}/:id`, method: "PATCH", handler: handleUpdateInvoice, menu: NeotmsMenu.PAYMENT, action: "update" },
-  { path: `${INVOICES}/:id`, method: "DELETE", handler: handleDeleteInvoice, menu: NeotmsMenu.PAYMENT, action: "delete" },
+  // The permissions are the ones NeotmsMenus.PAYMENT documents: `INVOICE_READ` sees the screens and
+  // the printable documents, `PO_APPROVE` signs off a purchase order, `INVOICE_UPDATE` settles one,
+  // `INVOICE_CREATE` issues an invoice and `INVOICE_DELETE` voids one.
+  { path: `${PURCHASE_ORDERS}/:id/approval`, method: "PATCH", handler: handleApprovePurchaseOrder, permission: NEOTMS_PERMISSION_PO_APPROVE },
+  { path: `${PURCHASE_ORDERS}/:id/settlement`, method: "PATCH", handler: handleSettlePurchaseOrder, permission: NEOTMS_PERMISSION_INVOICE_UPDATE },
+  { path: INVOICES, method: "GET", handler: handleListInvoices, permission: NEOTMS_PERMISSION_INVOICE_READ },
+  { path: INVOICES, method: "POST", handler: handleCreateInvoice, permission: NEOTMS_PERMISSION_INVOICE_CREATE },
+  { path: `${INVOICES}/:id`, method: "GET", handler: handleGetInvoice, permission: NEOTMS_PERMISSION_INVOICE_READ },
+  { path: `${INVOICES}/:id`, method: "PATCH", handler: handleUpdateInvoice, permission: NEOTMS_PERMISSION_INVOICE_UPDATE },
+  { path: `${INVOICES}/:id`, method: "DELETE", handler: handleDeleteInvoice, permission: NEOTMS_PERMISSION_INVOICE_DELETE },
 
   // -- Reports --------------------------------------------------------------
   //
   // Both are GETs with their parameters in the query string, so a report a manager cares about can
   // be bookmarked and mailed to a colleague - which is what people currently do with screenshots.
-  { path: "/api/v0/reports/summary", method: "GET", handler: handleRunReport, menu: NeotmsMenu.REPORT, action: "read" },
-  { path: "/api/v0/reports/workload", method: "GET", handler: handleGetWorkload, menu: NeotmsMenu.REPORT, action: "read" },
+  { path: "/api/v0/reports/summary", method: "GET", handler: handleRunReport, permission: NEOTMS_PERMISSION_REPORT_READ },
+  { path: "/api/v0/reports/workload", method: "GET", handler: handleGetWorkload, permission: NEOTMS_PERMISSION_REPORT_READ },
 
   // -- Dashboards -----------------------------------------------------------
   //
@@ -764,18 +890,18 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   //
   // Static trailing segments, like `/reports/summary` above - not `:id` params, so there is no
   // collision with `recordId` and nothing for rou3 to disambiguate.
-  { path: "/api/v0/dashboard/sales", method: "GET", handler: handleGetSalesDashboard, menu: NeotmsMenu.DASHBOARD_SALES, action: "read" },
-  { path: "/api/v0/dashboard/pm", method: "GET", handler: handleGetPmDashboard, menu: NeotmsMenu.DASHBOARD_PM, action: "read" },
+  { path: "/api/v0/dashboard/sales", method: "GET", handler: handleGetSalesDashboard, permission: NEOTMS_PERMISSION_DASHBOARD_SALES_READ },
+  { path: "/api/v0/dashboard/pm", method: "GET", handler: handleGetPmDashboard, permission: NEOTMS_PERMISSION_DASHBOARD_PM_READ },
 
   // -- Maintenance (the code tables) ----------------------------------------
   //
   // There is no `/admin/codes/:id` GET. The listing returns every code including the inactive ones
   // and the whole table is about sixty short rows, so a per-row read would only ever be used to
   // re-fetch something the client already has.
-  { path: ADMIN_CODES, method: "GET", handler: handleListCodesForAdmin, menu: NeotmsMenu.MAINTENANCE, action: "read" },
-  { path: ADMIN_CODES, method: "POST", handler: handleCreateCode, menu: NeotmsMenu.MAINTENANCE, action: "create" },
-  { path: `${ADMIN_CODES}/:id`, method: "PATCH", handler: handleUpdateCode, menu: NeotmsMenu.MAINTENANCE, action: "update" },
-  { path: `${ADMIN_CODES}/:id`, method: "DELETE", handler: handleDeleteCode, menu: NeotmsMenu.MAINTENANCE, action: "delete" },
+  { path: ADMIN_CODES, method: "GET", handler: handleListCodesForAdmin, permission: NEOTMS_PERMISSION_MAINTENANCE_READ },
+  { path: ADMIN_CODES, method: "POST", handler: handleCreateCode, permission: NEOTMS_PERMISSION_MAINTENANCE_CREATE },
+  { path: `${ADMIN_CODES}/:id`, method: "PATCH", handler: handleUpdateCode, permission: NEOTMS_PERMISSION_MAINTENANCE_UPDATE },
+  { path: `${ADMIN_CODES}/:id`, method: "DELETE", handler: handleDeleteCode, permission: NEOTMS_PERMISSION_MAINTENANCE_DELETE },
 
   // -- Staff administration (staff and roles) -------------------------------
   //
@@ -791,9 +917,38 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // `created_by`. Deactivating (`active: false`) is the supported way to end somebody's access and
   // is reachable through the PATCH. Soft-deleting a staff row is a database statement on purpose,
   // so that "remove an employee" is not a button next to "change their role".
-  { path: ADMIN_STAFF, method: "GET", handler: handleListStaff, menu: NeotmsMenu.STAFF, action: "read" },
-  { path: `${ADMIN_STAFF}/:id`, method: "PATCH", handler: handleUpdateStaff, menu: NeotmsMenu.STAFF, action: "update" },
-  { path: ADMIN_ROLES, method: "GET", handler: handleListRoles, menu: NeotmsMenu.STAFF, action: "read" },
+  { path: ADMIN_STAFF, method: "GET", handler: handleListStaff, permission: NEOTMS_PERMISSION_STAFF_READ },
+  { path: `${ADMIN_STAFF}/:id`, method: "PATCH", handler: handleUpdateStaff, permission: NEOTMS_PERMISSION_STAFF_UPDATE },
+  { path: ADMIN_ROLES, method: "GET", handler: handleListRoles, permission: NEOTMS_PERMISSION_STAFF_READ },
+
+  // -- Role administration (superuser only) ---------------------------------
+  //
+  // The two tiers on one path are deliberate. `GET /admin/roles` lists role NAMES for the
+  // assignment dropdown and stays on STAFF_READ, because handing somebody an existing role is a
+  // staff administrator's daily business. Everything that decides what a role MEANS is
+  // `superuser: true`, because a role that could edit grants could grant itself anything -
+  // see NeotmsRoute.superuser.
+  //
+  // `/admin/role-grants` is a second READ of the same resource rather than a parameter on the
+  // first, the way `/codes` and `/admin/codes` are split: it returns each role's permission list
+  // and how many people hold it, which the dropdown has no use for and should not be made to
+  // carry on every refresh of the staff screen.
+  //
+  // The two set-the-set endpoints are PATCH, though their bodies ARE the complete set and PUT
+  // would read better. Same trade the PO approval route records above: `ALLOWED_CORS_METHODS`
+  // deliberately omits PUT, and a verb the allow-list misses fails in the browser as a CORS error
+  // naming nothing about the route. The replace-the-whole-set contract is carried by the schema
+  // and by the `/permissions` and `/attributes` path segments instead.
+  //
+  // What the contract rules out is the shape a PATCH invites - "add this one permission" - because
+  // that puts the diff in the client, and two administrators editing one role in two tabs would
+  // then produce the union of their intentions rather than one of them winning.
+  { path: ADMIN_ROLE_GRANTS, method: "GET", handler: handleListRolesForAdmin, superuser: true },
+  { path: ADMIN_ROLES, method: "POST", handler: handleCreateRole, superuser: true },
+  { path: `${ADMIN_ROLES}/:id`, method: "PATCH", handler: handleUpdateRole, superuser: true },
+  { path: `${ADMIN_ROLES}/:id`, method: "DELETE", handler: handleDeleteRole, superuser: true },
+  { path: `${ADMIN_ROLES}/:id/permissions`, method: "PATCH", handler: handleSetRolePermissions, superuser: true },
+  { path: `${ADMIN_STAFF}/:id/attributes`, method: "PATCH", handler: handleSetStaffAttributes, superuser: true },
 ];
 
 const neotmsRouter = createRouter<NeotmsRoute>();
@@ -819,13 +974,28 @@ function routeAllows(route: NeotmsRoute, caller: NeotmsCaller): ResponseData<str
   // `account` before it gets here - a route on that tier has no caller to check.
   if (route.account) return null;
   if (route.anyStaff) return null;
-  if (!route.menu || !route.action) {
-    console.error(`The route ${route.method} ${route.path} declares no menu; refusing.`);
+  /*
+   * Before the permission check, not after, and not as a permission of its own: a superuser route
+   * names no permission, so asking `hasPermission` first would hit the "declares no permission"
+   * refusal below and answer 403 for everybody including the superuser.
+   */
+  if (route.superuser) {
+    return caller.isSuperuser
+      ? null
+      : {
+          status: 403,
+          body:
+            "This action is reserved for a system administrator. Editing what a role permits is " +
+            "not itself a role permission - see NeotmsRoute.superuser.",
+        };
+  }
+  if (!route.permission) {
+    console.error(`The route ${route.method} ${route.path} declares no permission; refusing.`);
     return { status: 403, body: "This endpoint is not configured for authorization" };
   }
-  return hasPermission(caller, route.menu, route.action)
+  return hasPermission(caller, route.permission)
     ? null
-    : permissionRefusal(route.menu, route.action);
+    : permissionRefusal(route.permission);
 }
 
 export const handleRequest: RRHandler = async (request) => {

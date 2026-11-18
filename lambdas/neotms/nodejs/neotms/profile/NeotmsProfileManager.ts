@@ -31,25 +31,21 @@ import { pgQuery } from "../../utils/PostgresUtils.js";
 import {
   resolveRegistration,
   type LpxIdentity,
-  type MenuAction,
   type NeotmsCaller,
 } from "../../auth/NeotmsAuthGuard.js";
 import type { ResponseData } from "../../reqres/RequestResponse.js";
 import { ok, runDb } from "../NeotmsResult.js";
 import { MenuTreeOps, type MenuNode } from "./NeotmsProfile.dbops.js";
+import { NEOTMS_PERMISSIONS } from "../../auth/NeotmsAuthorities.js";
 
-/** One menu as the UI needs it: where it sits in the tree, and what may be done in it. */
-export type MenuGrant = MenuNode & {
-  /**
-   * The five flags, named.
-   *
-   * Named rather than sent as the raw `role_1..role_5` array on purpose: the mapping from column to
-   * action is UNCONFIRMED (see `MenuAction`), so if it turns out to be wrong it has to be
-   * correctable in one place. A client that received the array would have baked the guess into its
-   * own code.
-   */
-  may: Record<MenuAction, boolean>;
-};
+/**
+ * One menu as the console needs it: where it sits in the tree.
+ *
+ * It used to carry this caller's five action flags as well. Rights are a flat permission list
+ * now, sent once on the profile rather than repeated per menu - so a menu is navigation and
+ * nothing else, and there is no second place that can disagree about whether a screen is usable.
+ */
+export type MenuGrant = MenuNode;
 
 /**
  * How far this identity has got into NEOTMS. The SPA renders a different screen for each.
@@ -109,47 +105,37 @@ export type ProfileView = {
    */
   seesEveryRow?: boolean;
   /**
-   * Every active menu, each carrying this caller's rights on it.
+   * Every menu, for navigation: its label, its parent and its order.
    *
-   * Always present, and `[]` for the two pre-approval states. An empty array is the honest answer
-   * there - no role, therefore no grants - and keeping the field present means the client's
-   * permission helpers need no special case to fail closed.
+   * Rights are NOT on these any more. The console decides whether to show a menu by asking whether
+   * the matching read permission is held, so there is no longer a second answer to "is this screen
+   * reachable" that could disagree with the first.
    */
   menus: MenuGrant[];
+  /**
+   * The permission names this caller holds.
+   *
+   * Always present, and `[]` for the two pre-approval states - no role, therefore no grants. The
+   * field being present either way means the console's permission helper needs no special case to
+   * fail closed.
+   *
+   * A SUPERUSER IS SENT THE WHOLE LIST rather than a flag. The console would otherwise need the
+   * override rule as well, in a second implementation that could drift from the server's; sending
+   * what they can actually do keeps one answer to the question.
+   */
+  permissions: string[];
+  /**
+   * What this person may be named as: the attributes on their staff row.
+   *
+   * Sent so the project form can tell somebody they are not selectable as a PM, rather than
+   * leaving them to wonder why their own name is missing from the picker.
+   */
+  attributes: string[];
 };
 
-const NO_RIGHTS: Record<MenuAction, boolean> = {
-  read: false,
-  create: false,
-  update: false,
-  delete: false,
-  export: false,
-};
-
-/**
- * The whole menu tree, each entry carrying this caller's rights on it.
- *
- * Menus the role holds no rights on are returned with every flag false rather than omitted. The UI
- * needs the full tree to render a disabled entry and to keep the navigation order stable, and a
- * menu silently missing from this response is indistinguishable from a menu that was deleted.
- */
-async function grantsFor(caller: NeotmsCaller): Promise<MenuGrant[]> {
-  const menus = (await pgQuery(MenuTreeOps())).data;
-  return menus.map((menu) => {
-    const flags = caller.permissions.get(menu.menuId);
-    return {
-      ...menu,
-      may: flags
-        ? {
-            read: flags[0],
-            create: flags[1],
-            update: flags[2],
-            delete: flags[3],
-            export: flags[4],
-          }
-        : NO_RIGHTS,
-    };
-  });
+/** The navigation tree. Order and labels only - what may be done is the permission list. */
+async function menuTree(): Promise<MenuGrant[]> {
+  return (await pgQuery(MenuTreeOps())).data;
 }
 
 /**
@@ -194,6 +180,8 @@ export async function getProfile(
         prefill,
         sub: identity.sub,
         menus: [],
+        permissions: [],
+        attributes: [],
       });
     }
 
@@ -211,7 +199,16 @@ export async function getProfile(
       roleCode: caller.roleCode,
       roleName: caller.roleName,
       seesEveryRow: caller.seesEveryRow,
-      menus: approved ? await grantsFor(caller) : [],
+      menus: approved ? await menuTree() : [],
+      /*
+       * A superuser is sent every permission rather than a flag - see the field's comment. Sorted,
+       * so two calls by the same person produce the same response and a diff of two profiles is
+       * about what changed rather than about set iteration order.
+       */
+      permissions: approved
+        ? [...(caller.isSuperuser ? NEOTMS_PERMISSIONS : caller.permissions)].sort()
+        : [],
+      attributes: [...caller.attributes].sort(),
     });
   });
 }

@@ -4,9 +4,14 @@ import { useProfile, useProjects } from '@/apis/queries/neotms.query'
 import { useDeleteProject } from '@/apis/queries/neotms.mutation'
 import { codeOptions, MONEY_STATES, PROJECT_STATES } from '@/apis/neotms.codes'
 import type { ProjectRow } from '@/apis/neotms.types'
-import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { LIST_PAGE_SIZE } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
-import { mayDo } from '@/shared/permissions'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_PROJECT_CREATE,
+  NEOTMS_PERMISSION_PROJECT_DELETE,
+  NEOTMS_PERMISSION_PROJECT_UPDATE,
+} from '@/apis/neotms.authorities'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
 import { StatusChip } from '@/shared/ui/StatusChip'
@@ -121,9 +126,9 @@ export function ProjectsView() {
     [projectsQuery.data],
   )
 
-  const mayCreate = mayDo(profile, NeotmsMenuId.PROJECT, 'create')
-  const mayUpdate = mayDo(profile, NeotmsMenuId.PROJECT, 'update')
-  const mayDelete = mayDo(profile, NeotmsMenuId.PROJECT, 'delete')
+  const mayCreate = may(profile, NEOTMS_PERMISSION_PROJECT_CREATE)
+  const mayUpdate = may(profile, NEOTMS_PERMISSION_PROJECT_UPDATE)
+  const mayDelete = may(profile, NEOTMS_PERMISSION_PROJECT_DELETE)
 
   /*
    * 기간의 앞뒤가 뒤집혔는지. `YYYY-MM-DD` 는 사전순 비교가 곧 날짜순 비교다.

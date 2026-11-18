@@ -16,6 +16,7 @@ import {
   fetchPurchaseOrder,
   fetchPurchaseOrders,
   fetchReportSummary,
+  fetchRoleGrants,
   fetchRoles,
   fetchStaff,
   fetchTranslator,
@@ -128,17 +129,39 @@ export function useStaff(enabled = true) {
 }
 
 /**
- * 배정 가능한 역할.
+ * 배정 가능한 역할. 직원 화면의 배정 드롭다운이 쓴다.
  *
- * 길게 잡는다. `sys_role` 은 역할을 새로 만들 때만 바뀌고, 그건 이 앱에 화면이 없는 작업이다
- * (SQL 로 한다) — 즉 앱을 쓰는 동안에는 사실상 바뀌지 않는 목록이다.
+ * **수명을 30분에서 줄였다.** 이전 주석은 "`sys_role` 은 역할을 새로 만들 때만 바뀌고, 그건 이
+ * 앱에 화면이 없는 작업이다" 라고 적고 30분을 잡고 있었다. 이제 화면이 있다(역할 관리) — 그래서
+ * 그 30분은 **버그**가 된다: 역할을 하나 만들고 직원 화면으로 가면 드롭다운에 30분 동안
+ * 나타나지 않고, 그건 사용자에게 "역할 생성이 실패했다" 로 읽힌다.
+ *
+ * 쓰기 쪽에서 `neotmsKeys.roles` 접두사를 무효화하므로 같은 탭에서는 즉시 갱신된다. 이 수명은
+ * **다른 탭·다른 관리자**가 만든 역할이 얼마나 늦게 보이는지를 정하는 값이고, 목록 자체는
+ * 몇 행짜리이므로 길게 잡아 아낄 것이 없다.
  */
 export function useRoles(enabled = true) {
   return useQuery({
-    queryKey: neotmsKeys.roles,
+    queryKey: neotmsKeys.rolesActive,
     queryFn: ({ signal }) => fetchRoles(signal),
     enabled,
-    staleTime: 1000 * 60 * 30,
+    staleTime: DETAIL_STALE_MS,
+  })
+}
+
+/**
+ * 역할 전체와 각 역할의 권한 목록. 역할 관리 화면의 목록이다.
+ *
+ * 서버가 시스템관리자(superuser)만 허용하므로, `enabled` 로 꺼 둘 책임이 호출하는 쪽에 있다 —
+ * 권한이 없는 계정에서 이 쿼리가 돌면 403 이 콘솔에 남고 화면에는 오류 상자가 뜬다. 라우트가
+ * 이미 막고 있지만, 쿼리도 같이 꺼 두는 쪽이 "막혀 있다" 를 두 곳에서 말하게 되어 안전하다.
+ */
+export function useRoleGrants(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.roleGrants,
+    queryFn: ({ signal }) => fetchRoleGrants(signal),
+    enabled,
+    staleTime: DETAIL_STALE_MS,
   })
 }
 

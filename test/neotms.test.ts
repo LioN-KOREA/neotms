@@ -31,6 +31,16 @@ import { NeotmsStack } from "../infra/stacks/neotms-stack.js";
 // and does not trip the Lambda's environment validation. It is imported rather than retyped because
 // the test below is precisely an assertion that these two lists agree.
 import { NeotmsMenu } from "../lambdas/neotms/nodejs/neotms/NeotmsMenus.js";
+/*
+ * The permission vocabulary, imported rather than retyped. Two assertions below are precisely that
+ * this list and the CHECK on `sys_role_permission` are the same set - one is what the application
+ * compares against, the other is what the database will store, and nothing reconciles them at
+ * runtime. A file of constant strings with no imports of its own, so pulling it in costs nothing.
+ */
+import {
+  NEOTMS_PERMISSIONS,
+  NEOTMS_USER_ATTRIBUTES,
+} from "../lambdas/neotms/nodejs/auth/NeotmsAuthorities.js";
 // Likewise importable for free - a frozen list of seven strings with no imports of its own. It is
 // the third member of a set of three lists that have to agree and that nothing reconciles at
 // runtime; see `describe("the currency seed")`.
@@ -762,11 +772,318 @@ const sqlCode = (file: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/--[^\n]*/g, " ");
 
+/*
+ * db/003_access_control.sql moves a database that already has data from the menu x action matrix
+ * to named permissions. It was rehearsed against two real PostgreSQL databases - a migrated one
+ * dumped and diffed against a fresh install, and a fixture set covering mixed flag patterns, an
+ * inactive role, a legacy ETL menu and PMs named only on soft-deleted rows. These tests pin the
+ * decisions that rehearsal cannot see from the outside: the ones where being wrong is silent.
+ */
+describe("the migration to named permissions", () => {
+  const MIGRATION = "003_access_control.sql";
+
+  /*
+   * The section banners, used to ask questions of one section rather than of the whole file.
+   * Asking the whole file would make "PO_APPROVE is granted from PAYMENT's flag 3" pass on the
+   * strength of the header paragraph that explains it, which is the opposite of a test.
+   */
+  const BANNERS = [
+    "-- 1. The new tables",
+    "-- 2. Translate",
+    "-- 3. Derive",
+    "-- 4. Refuse",
+    "-- 5. Verification",
+    "-- 6. OPTIONAL",
+    "-- 7. The point of no return",
+  ];
+
+  const section = (n: number): string => {
+    const raw = sql(MIGRATION);
+    for (const banner of BANNERS) {
+      expect(raw.split(banner).length - 1).toBe(1);
+    }
+    const start = raw.indexOf(BANNERS[n - 1]!);
+    const end = n < BANNERS.length ? raw.indexOf(BANNERS[n]!) : raw.length;
+    return raw.slice(start, end);
+  };
+
+  /** One section with its prose removed, so an assertion cannot be satisfied by a comment. */
+  const code = (n: number): string =>
+    section(n)
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/--[^\n]*/g, " ");
+
+  const permissionsIn = (text: string): string[] =>
+    [...new Set([...text.matchAll(/'(NEOTMS_PERMISSION_[A-Z_]+)'/g)].map((m) => m[1]!))].sort();
+
+  test("every permission is either granted by the translation or withheld on purpose", () => {
+    /*
+     * The complete accounting, and the reason it is a test: adding a permission to
+     * NeotmsAuthorities.ts is a two-line change that silently does nothing to this file. A role
+     * that should have been given the new right simply does not get it, and the symptom is a
+     * screen refusing somebody whose role looks correct on the admin page.
+     *
+     * NEOTMS_PERMISSION_PO_EMAIL is the one deliberate omission - there is no feature behind it,
+     * so granting it would hand out the ability to do nothing, which then reads as a right
+     * somebody chose to give. It has to be NAMED in the file for that to be a decision rather
+     * than an oversight, so the prose is checked for it too.
+     */
+    const granted = permissionsIn(code(2));
+    const withheld = "NEOTMS_PERMISSION_PO_EMAIL";
+
+    expect(granted).toEqual([...NEOTMS_PERMISSIONS].filter((p) => p !== withheld).sort());
+    expect(granted).not.toContain(withheld);
+    expect(section(2)).toContain(withheld);
+  });
+
+  test("the two permissions that never had a flag go to whoever could already do the action", () => {
+    /*
+     * These two are where a migration is most likely to change behaviour while looking like it
+     * preserved it. Neither existed as a grant, so there is no column to copy, and any choice is
+     * a decision:
+     *
+     *   * PO_APPROVE went to PAYMENT's flag 3, because approving a purchase order WAS that grant.
+     *   * PROJECT_EMAIL went to PROJECT's flag 1, because sending a handover mail was gated on
+     *     being able to open the project.
+     *
+     * Both are deliberately too broad, and that breadth is why the permissions were split out in
+     * the first place. Narrowing them is section 6's job, for an administrator, after the fact.
+     * What must not happen is this file quietly choosing a narrower rule and presenting the
+     * result as "nothing changed".
+     */
+    /*
+     * `(?!INSERT INTO)` so the match cannot run from one statement into another. Without it the
+     * span starts at the big VALUES mapping and swallows everything up to the permission - and the
+     * mapping mentions both 'PAYMENT' and every flag, so the assertions below passed on a file
+     * where PO_APPROVE had been repointed at the wrong flag. A tempered match is the difference
+     * between testing this statement and testing the section.
+     */
+    const statementFor = (permission: string): string => {
+      const re = new RegExp(
+        `INSERT INTO sys_role_permission(?:(?!INSERT INTO).)*?` +
+          `'${permission}'(?:(?!INSERT INTO).)*?;`,
+        // dotAll, so `.` crosses newlines. Written this way rather than with a character
+        // class because a template literal drops the backslash in `\s`, which turns
+        // [\s\S] into [sS] -- a pattern that matches, just not what was meant.
+        "s",
+      );
+      const found = re.exec(code(2));
+      expect(found).not.toBeNull();
+      return found![0];
+    };
+
+    const approve = statementFor("NEOTMS_PERMISSION_PO_APPROVE");
+    expect(approve).toContain("'PAYMENT'");
+    expect(approve).toMatch(/a\.role_3/);
+    expect(approve).not.toMatch(/a\.role_[1245]/);
+
+    const email = statementFor("NEOTMS_PERMISSION_PROJECT_EMAIL");
+    expect(email).toContain("'PROJECT'");
+    expect(email).toMatch(/a\.role_1/);
+    expect(email).not.toMatch(/a\.role_[2345]/);
+
+    // And section 6 offers the narrowing without performing it. A DELETE that runs on paste is a
+    // migration that takes a capability away from people who had it this morning.
+    expect(code(6).trim()).toBe("");
+    expect(section(6)).toContain("DELETE FROM sys_role_permission");
+  });
+
+  test("the read-only menus do not acquire write permissions on the way across", () => {
+    /*
+     * REPORT and the two dashboards have one action in the route table; STAFF has read and update
+     * and has never had create or delete. A role holding flag 2 or 4 on those menus held a right
+     * the application never offered, so there is nothing to carry over - and inventing
+     * REPORT_CREATE here would put a permission in the admin screen that no route consults, which
+     * is worse than absent because it looks grantable.
+     */
+    const mapping = code(2);
+    for (const [menu, flags] of [
+      ["REPORT", ["1"]],
+      ["DASHBOARD_SALES", ["1"]],
+      ["DASHBOARD_PM", ["1"]],
+      ["STAFF", ["1", "3"]],
+    ] as const) {
+      const rows = [...mapping.matchAll(new RegExp(`\\('${menu}',\\s*(\\d)`, "g"))].map((m) => m[1]!);
+      expect(rows.sort()).toEqual([...flags]);
+    }
+
+    // Flag 5 maps to nothing anywhere: there is no export permission, and the five-flag mapping
+    // is unconfirmed, so a guess that invents a right is the one guess with a victim.
+    expect(mapping).not.toMatch(/,\s*5,\s*'NEOTMS_PERMISSION/);
+  });
+
+  test("the attributes are derived from every column that names a person", () => {
+    /*
+     * The server is about to start refusing a prj_pm_id that names somebody without the PM
+     * attribute. Derived from all four columns, every project and job that exists today still
+     * validates tomorrow; derived from fewer, the next edit of an old record fails on a field
+     * nobody touched, and the error names a constraint rather than a cause.
+     */
+    const derive = code(3);
+    expect(derive).toContain("p.prj_mgr_id");
+    expect(derive).toContain("prj_pm_id");
+    expect(derive).toContain("job_pm_id");
+    expect(derive).toContain("po_pm_id");
+
+    /*
+     * And soft-deleted rows are included, which is the counter-intuitive half. A cancelled project
+     * can be the only evidence that somebody was a PM; dropping it would take the attribute away
+     * from a person still doing the job, as a side effect of a project being cancelled.
+     */
+    expect(derive).not.toMatch(/NOT\s+p?\.?deleted/);
+
+    /*
+     * Nobody is given SUPERUSER. It overrides every permission check, and the rule is that it
+     * belongs to accounts holding lpx.admin.access - which the database cannot see. A migration
+     * that hands out an override nobody asked for is not recoverable by noticing.
+     */
+    expect(derive).not.toContain("NEOTMS_USER_ATTRIBUTE_SUPERUSER");
+    expect(section(3)).toContain("NEOTMS_USER_ATTRIBUTE_SUPERUSER");
+    for (const attribute of NEOTMS_USER_ATTRIBUTES) {
+      expect(sql(MIGRATION)).toContain(attribute);
+    }
+  });
+
+  test("it refuses to finish if it would leave nobody able to administer users", () => {
+    /*
+     * The failure this exists for: the unconfirmed flag mapping is wrong in a way that drops
+     * STAFF_UPDATE, the application deploys, and the only screen that could restore anyone's
+     * access is the one nobody can now open. There is no way back from inside the application.
+     *
+     * Rehearsed both ways - it refused a database with one active staff member and no STAFF
+     * rights, and allowed a seeded database with no staff at all. That second branch matters:
+     * aborting there would block every staging database before its first ETL, where nobody can
+     * be locked out and staff_bootstrap_superuser() is the documented way in.
+     */
+    const guard = code(4);
+    expect(guard).toContain("NEOTMS_PERMISSION_STAFF_UPDATE");
+    expect(guard).toMatch(/v_staff\s*=\s*0/);
+    expect(guard).toMatch(/RAISE EXCEPTION/);
+    expect(guard).toMatch(/s\.active/);
+    expect(guard).toMatch(/NOT s\.deleted/);
+
+    /*
+     * And the abort can only undo anything because sections 1 to 4 are one transaction. psql
+     * commits each statement on its own otherwise, so without this the refusal would leave new
+     * tables, translated grants and no administrator - the exact state being guarded against.
+     */
+    const raw = sql(MIGRATION);
+    const begin = raw.indexOf("\nBEGIN;");
+    const commit = raw.indexOf("\nCOMMIT;");
+    expect(begin).toBeGreaterThan(-1);
+    expect(commit).toBeGreaterThan(begin);
+    expect(commit).toBeLessThan(raw.indexOf(BANNERS[4]!));
+  });
+
+  test("the destructive step cannot run by being pasted", () => {
+    /*
+     * Dropping sys_role_auth is the point of no return: until it happens, rolling the application
+     * back is a deploy, and afterwards it is a restore from backup. The file has to describe the
+     * step - an operator who cannot find it will improvise - without the step executing when
+     * somebody pastes the whole file, which is how every other file in db/ is applied.
+     */
+    expect(code(7).trim()).toBe("");
+    for (const dropped of ["sys_role_auth", "sys_role_menu", "sys_role_grant_all_menus"]) {
+      expect(section(7)).toContain(`IF EXISTS ${dropped}`.replace("IF EXISTS ", "IF EXISTS "));
+      expect(section(7)).toContain(dropped);
+    }
+    // Nothing earlier may drop them either: sections 1-4 run on paste.
+    for (const n of [1, 2, 3, 4]) {
+      expect(code(n)).not.toMatch(/DROP TABLE/);
+    }
+  });
+
+  test("a migrated database documents the model it has, not the one it had", () => {
+    /*
+     * Caught by diffing a migrated database against a fresh one: everything matched except two
+     * table comments, which still said sys_menu was what permissions are granted on and that
+     * sys_role carried a menu x action matrix. `pg_dump` carries that text forward forever, so the
+     * stale description outlives the schema it described - and it sits in the place somebody
+     * reaching for \d sys_role looks first.
+     *
+     * The texts must be character-identical to the install files', because that identity is the
+     * whole claim: 001 and 003 are two routes to one database, not two databases.
+     */
+    const install = sql("001_schemas.sql") + "\n" + sql("002_initial_seeding.sql");
+
+    /** The comment that WINS for one table - the last statement, since each overwrites the last. */
+    const tableComment = (text: string, table: string): string | null => {
+      const re = new RegExp(
+        `^COMMENT ON TABLE\\s+${table}\\s+IS\\s*((?:'(?:[^']|'')*'\\s*)+);`,
+        "gm",
+      );
+      let winner: string | null = null;
+      for (const m of text.matchAll(re)) {
+        winner = [...m[1]!.matchAll(/'((?:[^']|'')*)'/g)].map((x) => x[1]!).join("");
+      }
+      return winner;
+    };
+
+    for (const table of ["sys_menu", "sys_role"]) {
+      const installed = tableComment(install, table);
+      expect(installed).not.toBeNull();
+      expect(tableComment(sql(MIGRATION), table)).toBe(installed);
+    }
+
+    /*
+     * And the install files say it once each. Three copies of the sys_menu comment used to be
+     * written as the menus were seeded in stages, and the one that survived was the stalest -
+     * it still cited db/006_bootstrap.sql and three other files the consolidation deleted.
+     */
+    expect(
+      (sql("002_initial_seeding.sql").match(/^COMMENT ON TABLE sys_menu/gm) ?? []).length,
+    ).toBe(0);
+  });
+
+  test("the new objects are created exactly as a fresh install creates them", () => {
+    /*
+     * Section 1 is 001's definitions again, with IF NOT EXISTS. They have to stay in step: a CHECK
+     * that differs by one name is a database that accepts a permission the application will never
+     * ask for, or refuses one it will - and the diff would only show up on whichever database was
+     * built the other way.
+     */
+    const created = code(1);
+    for (const object of [
+      "sys_role_permission",
+      "staff_attribute",
+      "ix_role_permission_role",
+      "ix_staff_attribute_staff",
+      "ix_staff_attribute_attr",
+      "neotms_known_permissions",
+      "sys_role_grant_all_permissions",
+    ]) {
+      expect(created).toContain(object);
+    }
+    // Re-runnable: a database that has already been moved can be given this file again.
+    expect((created.match(/CREATE TABLE IF NOT EXISTS/g) ?? []).length).toBe(2);
+    expect((created.match(/CREATE INDEX IF NOT EXISTS/g) ?? []).length).toBe(3);
+
+    // The CHECK is the same vocabulary the install file and the application use.
+    const check = /CHECK \(permission IN \(([\s\S]*?)\)\)/.exec(created);
+    expect(check).not.toBeNull();
+    expect([...check![1]!.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort()).toEqual(
+      [...NEOTMS_PERMISSIONS].sort(),
+    );
+  });
+
+  test("every grant it writes is attributed, and re-running it changes nothing", () => {
+    /*
+     * `created_by` is how somebody looking at a surprising grant next year can tell whether a
+     * person gave it or this file inferred it. Rehearsed: applying the file twice leaves the same
+     * grants, which is what makes a run interrupted halfway recoverable by repeating it.
+     */
+    for (const n of [2, 3]) {
+      expect(code(n)).toContain("'neotms-003-migration'");
+      expect(code(n)).toMatch(/ON CONFLICT \([^)]*\) DO NOTHING/);
+    }
+  });
+});
+
 describe("the empty-database bootstrap", () => {
   test("every menu the API gates permissions on is seeded", () => {
     /*
      * The coupling this guards is invisible and total. `hasPermission` refuses any menu id the
-     * role's matrix has no row for, and `sys_role_grant_all_menus` builds that matrix by iterating
+     * role's matrix has no row for, and `sys_role_grant_all_permissions` builds that matrix by iterating
      * over `sys_menu` - so a menu id that exists in `NeotmsMenu` but not in this INSERT is a route
      * that refuses the superuser, with the message "your role does not permit this action". Nothing
      * errors, nothing logs, and the natural reading of that message is that the role is wrong.
@@ -807,7 +1124,7 @@ describe("the empty-database bootstrap", () => {
      * again is the correct response to any doubt.
      */
     const code = sqlAll();
-    expect(code).toMatch(/SELECT sys_role_grant_all_menus\('NEOTMS_SYSADMIN'\)/);
+    expect(code).toMatch(/SELECT sys_role_grant_all_permissions\('NEOTMS_SYSADMIN'\)/);
     // The INSERT must not reset a label an operator has corrected - same rule as 006's menu seed.
     expect(code).toMatch(/INSERT INTO sys_menu[\s\S]*?ON CONFLICT \(menu_id\) DO NOTHING/);
     expect(code).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/m);
@@ -820,7 +1137,7 @@ describe("the empty-database bootstrap", () => {
      * The two dashboards exist as separate menus **in order to be granted separately** - a PM holds
      * DASHBOARD_PM, a 영업담당자 holds DASHBOARD_SALES, and that assignment is made on the 사용자
      * 관리 screen. A seed file that handed both to every existing role, or that called
-     * `sys_role_grant_all_menus` for anything other than the bootstrap superuser, would undo the
+     * `sys_role_grant_all_permissions` for anything other than the bootstrap superuser, would undo the
      * split on the way in - and silently, because the symptom is a screen appearing for someone it
      * was meant to be withheld from, which nobody reports.
      *
@@ -838,16 +1155,16 @@ describe("the empty-database bootstrap", () => {
 
     // Exactly one grant call, and for NEOTMS_SYSADMIN. Grants written by 006 and 008 do not cover
     // rows added here, so without this the superuser sees two tabs that both answer 403.
-    const grants = [...code.matchAll(/sys_role_grant_all_menus\('([A-Z_]+)'\)/g)].map((m) => m[1]);
+    const grants = [...code.matchAll(/sys_role_grant_all_permissions\('([A-Z_]+)'\)/g)].map((m) => m[1]);
     expect(grants).toEqual(["NEOTMS_SYSADMIN"]);
     /*
      * The seed grants through the function and never by hand. A literal INSERT into
      * sys_role_auth would be a grant that the function's own list does not know about, so
      * adding a menu later would silently leave that one row behind - which is the drift
-     * `sys_role_grant_all_menus` exists to make impossible.
+     * `sys_role_grant_all_permissions` exists to make impossible.
      *
      * Asked of the SEED file only. The one `INSERT INTO sys_role_auth` in this schema is
-     * inside `sys_role_grant_all_menus` itself, in 001 - which is the point: the grant
+     * inside `sys_role_grant_all_permissions` itself, in 001 - which is the point: the grant
      * exists in exactly one place, and the seed calls it.
      */
     expect(sqlCode("002_initial_seeding.sql")).not.toMatch(/INSERT INTO sys_role_auth\s*\(/);
@@ -870,21 +1187,41 @@ describe("the empty-database bootstrap", () => {
     expect(code).not.toMatch(/role_code\s*=\s*'SYSADMIN'|VALUES\s*\(\s*'SYSADMIN'/);
   });
 
-  test("the superuser is granted both the action matrix and menu visibility", () => {
+  test("the superuser is granted every permission this build knows", () => {
     // Two tables, and granting one without the other is a role that is permitted to use a screen it
     // cannot navigate to - or worse, one that appears in the sidebar and then refuses every click.
     // `\$\w*\$;` closes the body whatever the dollar-quote tag is - `$fn$` today. Anchoring on the
     // tag itself would make renaming it look like a missing grant.
-    const grant = /CREATE OR REPLACE FUNCTION sys_role_grant_all_menus[\s\S]*?\n\$\w*\$;/.exec(
+    const grant = /CREATE OR REPLACE FUNCTION sys_role_grant_all_permissions[\s\S]*?\n\$\w*\$;/.exec(
       sqlAll(),
     );
     expect(grant).not.toBeNull();
-    expect(grant![0]).toContain("INSERT INTO sys_role_auth");
-    expect(grant![0]).toContain("INSERT INTO sys_role_menu");
-    // All five action flags. Four would be a superuser who cannot, say, export.
-    for (const flag of ["role_1", "role_2", "role_3", "role_4", "role_5"]) {
-      expect(grant![0]).toContain(flag);
-    }
+    /*
+     * ONE table now, and that is the change worth pinning. The old pair - a matrix of action flags
+     * and a separate visibility list - could disagree, and when they did the symptom was a menu
+     * that appears in the sidebar and then refuses every click.
+     */
+    expect(grant![0]).toContain("INSERT INTO sys_role_permission");
+    expect(grant![0]).not.toContain("sys_role_auth");
+    expect(grant![0]).not.toContain("sys_role_menu");
+    /*
+     * It grants from `neotms_known_permissions()`, which reads the CHECK. Spelling the names out
+     * in the function would be a third copy of the vocabulary - after NeotmsAuthorities.ts and the
+     * CHECK - and the copy that goes stale is always the one that grants too little, which
+     * presents as a screen refusing somebody who was given everything.
+     */
+    expect(grant![0]).toContain("neotms_known_permissions()");
+
+    /*
+     * And the two vocabularies that do exist agree. The CHECK is what the database will store;
+     * NEOTMS_PERMISSIONS is what the application compares against. A name in one and not the other
+     * is either a grant that matches nothing or a permission the admin screen cannot give.
+     */
+    const check = /CHECK \(permission IN \(([\s\S]*?)\)\)/.exec(sqlAll());
+    expect(check).not.toBeNull();
+    expect([...check![1]!.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort()).toEqual(
+      [...NEOTMS_PERMISSIONS].sort(),
+    );
   });
 
   test("the bootstrap authority is wired from the config into the function", () => {
@@ -941,7 +1278,14 @@ describe("the empty-database bootstrap", () => {
      * psql-only (it needs `\set ON_ERROR_STOP on` to stop on a failed assertion) and its header says
      * so. Naming it means a second psql-only file cannot join it silently.
      */
-    const editorFiles = ["001_schemas.sql", "002_initial_seeding.sql"];
+    const editorFiles = [
+      "001_schemas.sql",
+      "002_initial_seeding.sql",
+      // The migration is pasted into the same editor, by the same person, on the one occasion
+      // when a syntax error is most expensive: against live data, with the old tables still
+      // there and the application already deployed against the new ones.
+      "003_access_control.sql",
+    ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
       expect(code).not.toMatch(/^\s*\\\w+/m);
@@ -965,7 +1309,7 @@ describe("the empty-database bootstrap", () => {
     // so it is re-asserted.
     expect(code).toMatch(/INSERT INTO sys_menu[\s\S]*?ON CONFLICT \(menu_id\) DO NOTHING/);
     expect(code).toMatch(/INSERT INTO sys_role[\s\S]*?ON CONFLICT \(role_code\) DO UPDATE/);
-    for (const fn of ["sys_role_grant_all_menus", "staff_bootstrap_superuser"]) {
+    for (const fn of ["sys_role_grant_all_permissions", "staff_bootstrap_superuser"]) {
       expect(code).toContain(`CREATE OR REPLACE FUNCTION ${fn}`);
     }
   });
@@ -1040,23 +1384,83 @@ describe("사용자 관리 route gating", () => {
    */
   const handler = () => lambdaSource("neotms.handler.ts");
 
-  test("every staff and role route is gated on the STAFF menu", () => {
+  test("every staff and role route is reserved, and the reservation is one of two kinds", () => {
     /*
      * Not `anyStaff`. The role listing is the one that could plausibly be argued into being open -
      * a role's name is not a secret - and that is exactly why it is pinned: the argument is easy to
      * make in review, and the consequence is that any signed-in account can enumerate the company's
      * privilege tiers. If a non-admin screen ever needs role names, the answer is a second path the
      * way `/codes` and `/admin/codes` are split, not a flag on this one.
+     *
+     * TWO ACCEPTABLE GATES, not one, and the second is the point of the distinction:
+     *
+     *   * `NEOTMS_PERMISSION_STAFF_*` - reading the directory, and assigning an existing role to
+     *     somebody. A staff administrator's daily business.
+     *   * `superuser: true` - deciding what a role MEANS, and what a person may BE named as. This
+     *     one cannot be a permission. A role holding "may edit grants" could grant itself the
+     *     other thirty-five permissions in a single request, so the gate would be editable through
+     *     the endpoint it gates, and the only thing standing between a staff administrator and the
+     *     whole system would be that nobody thought to try.
+     *
+     * What must never appear is a third kind: `anyStaff` or `account` on any of these paths.
      */
-    for (const line of handler()
+    const lines = handler()
       .split("\n")
-      .filter((l) => /path: (ADMIN_STAFF|ADMIN_ROLES|`\$\{ADMIN_STAFF\})/.test(l))) {
-      expect(line).toContain("menu: NeotmsMenu.STAFF");
+      .filter((l) =>
+        /path: (ADMIN_STAFF|ADMIN_ROLES|ADMIN_ROLE_GRANTS|`\$\{ADMIN_STAFF\}|`\$\{ADMIN_ROLES\})/.test(l),
+      );
+    // A guard against the filter silently matching nothing after a rename of the constants.
+    expect(lines.length).toBeGreaterThanOrEqual(8);
+
+    for (const line of lines) {
+      const staffPermission = line.includes("permission: NEOTMS_PERMISSION_STAFF_");
+      const superuser = line.includes("superuser: true");
+      // Exactly one, so a route cannot carry both and leave a reader guessing which one decides.
+      expect(staffPermission !== superuser).toBe(true);
       expect(line).not.toContain("anyStaff");
+      expect(line).not.toContain("account: true");
     }
   });
 
-  test("there are exactly three staff routes, and none of them creates or deletes", () => {
+  test("everything that writes a role, a grant or an attribute is superuser-only", () => {
+    /*
+     * The complement of the test above, stated as a whitelist so that a NEW write cannot join this
+     * group on a permission gate. The listing of grants is included: it reports which permissions
+     * every role holds, which is the map somebody probing the system would want first.
+     *
+     * All PATCH, including the two whose bodies ARE a complete set and would read better as PUT:
+     * `ALLOWED_CORS_METHODS` deliberately omits PUT, and the handler records that trade on the PO
+     * approval route - a verb the allow-list misses fails in the browser as a CORS error naming
+     * nothing about the route. What the replace-the-whole-set contract rules out is the shape a
+     * PATCH invites, "add this one permission", because that puts the diff in the client.
+     *
+     * The list is sorted, so a route joining this group has to be added here deliberately.
+     */
+    const superuserRoutes = handler()
+      .split("\n")
+      // `path:` and `method:` as well, so the two prose comments that name the flag in order to
+      // explain it are not read as routes. A comment matching a scan of the source is the same
+      // mistake twice in this suite now; the fix is to require the shape, not the words.
+      .filter((l) => l.includes("superuser: true") && /path:/.test(l) && /method:/.test(l))
+      .map((l) => {
+        const method = /method: "(\w+)"/.exec(l)?.[1] ?? "?";
+        const route = /path: ([^,]+),/.exec(l)?.[1] ?? "?";
+        return `${method} ${route.trim()}`;
+      });
+
+    expect(superuserRoutes.sort()).toEqual([
+      "DELETE `${ADMIN_ROLES}/:id`",
+      "GET ADMIN_ROLE_GRANTS",
+      // `/permissions` sorts BEFORE the bare `:id` route: both share the prefix, and the next
+      // character is "/" (0x2F) against the closing backtick (0x60).
+      "PATCH `${ADMIN_ROLES}/:id/permissions`",
+      "PATCH `${ADMIN_ROLES}/:id`",
+      "PATCH `${ADMIN_STAFF}/:id/attributes`",
+      "POST ADMIN_ROLES",
+    ]);
+  });
+
+  test("nothing creates or deletes a staff row, whatever else these paths gained", () => {
     /*
      * The absences are the design, and both are the kind of symmetry a later contributor "completes"
      * without realising what it costs:
@@ -1068,12 +1472,21 @@ describe("사용자 관리 route gating", () => {
      *   * No DELETE. Every historical project, job and purchase order carries this person's
      *     `mgr_id` in `created_by`. Ending access is `active: false`, which the PATCH already does.
      */
-    const routes = handler()
+    /*
+     * Scoped to the STAFF paths only. Roles are a different resource and genuinely need a POST and
+     * a DELETE - a company adds and removes job titles - so folding them into one count would
+     * either forbid what roles need or permit what staff rows must not have. The rule being pinned
+     * is about rows representing PEOPLE.
+     */
+    const staffRoutes = handler()
       .split("\n")
-      .filter((l) => /path: (ADMIN_STAFF|ADMIN_ROLES|`\$\{ADMIN_STAFF\})/.test(l));
-    expect(routes).toHaveLength(3);
-    const methods = routes.map((l) => /method: "(\w+)"/.exec(l)?.[1]);
-    expect(methods.sort()).toEqual(["GET", "GET", "PATCH"]);
+      .filter((l) => /path: (ADMIN_STAFF|`\$\{ADMIN_STAFF\})/.test(l));
+    const methods = (staffRoutes.map((l) => /method: "(\w+)"/.exec(l)?.[1]) ?? []).sort();
+
+    expect(methods).not.toContain("POST");
+    expect(methods).not.toContain("DELETE");
+    // GET the directory, PATCH a person's role/scope/active, PATCH their attribute set.
+    expect(methods).toEqual(["GET", "PATCH", "PATCH"]);
   });
 
   test("the admin-writable staff columns are exactly role, scope and active", () => {
@@ -1109,19 +1522,371 @@ describe("사용자 관리 route gating", () => {
      * auditable rather than hopeful is that the write has one site, so this is the assertion that
      * keeps it that way.
      *
-     * Looks for `role_id =` written as literal SQL anywhere under neotms/. The admin path does not
-     * match it, because it builds the SET clause from `STAFF_ADMIN_FIELDS` (asserted above) rather
-     * than spelling the assignment out - so the expected set here is empty, and anything that turns
-     * up is a second write site that needs the same scrutiny as the first.
+     * Finds every statement under neotms/ that WRITES the `staff` table, and looks for `role_id`
+     * in the part before the WHERE - which is where an assignment would be. The admin path does not
+     * match, because it builds the SET clause from `STAFF_ADMIN_FIELDS` (asserted above) rather
+     * than spelling the assignment out, so the expected set is empty and anything appearing is a
+     * second write site needing the same scrutiny as the first.
+     *
+     * This used to be `/role_id\s*=\s*:/` over the whole file, which was two kinds of wrong in
+     * the same regex. Too loose: it matched `WHERE p.role_id = :role_id`, so merely READING the
+     * column counted as writing it - and the role administration queries do read it, which is how
+     * the test came to be looked at. Too tight: it only noticed PARAMETERIZED assignments, so a
+     * hand-written `SET role_id = 1` would have sailed past the test whose entire job is to catch
+     * exactly that.
+     *
+     * `UPDATE staff\b` and `INSERT INTO staff (` do not match `staff_attribute`: `_` is a word
+     * character, so there is no word boundary between `staff` and `_attribute`. The attribute
+     * writes are a different table and a different question.
      *
      * `staff_self_register()` is in SQL, not here, and it is also the reason this test matters: that
      * function is allowed to set `role_id` because it forces it to NULL. A TypeScript statement that
      * set it to anything else would be the hole this whole design closes.
      */
+    const STAFF_WRITE = /(?:UPDATE\s+staff\b|INSERT\s+INTO\s+staff\s*\()[\s\S]*?(?=`)/gi;
     const offenders = walkTs(neotmsLambdaDir)
-      .filter((file) => /role_id\s*=\s*:/.test(readFileSync(file, "utf8")))
+      .filter((file) =>
+        [...readFileSync(file, "utf8").matchAll(STAFF_WRITE)].some((match) => {
+          // Everything before the WHERE: the column list, the SET clause, the VALUES.
+          const assigning = match[0].split(/\bWHERE\b/i)[0] ?? "";
+          return /role_id/.test(assigning);
+        }),
+      )
       .map((file) => path.relative(neotmsLambdaDir, file));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("data-modifying CTEs", () => {
+  /*
+   * `WITH x AS (INSERT/UPDATE ... RETURNING) SELECT ... FROM <the same table>` cannot work, and the
+   * two ways it fails are both silent.
+   *
+   * PostgreSQL executes every part of such a statement against ONE snapshot, taken before the
+   * statement began, so the outer query cannot see its own sub-statement's effects. Verified
+   * against PostgreSQL 17:
+   *
+   *   * After an INSERT the outer join finds NOTHING. The statement returns zero rows while the
+   *     row is committed - which is how `createRole` came to answer "The role was not created"
+   *     with a 500 while the role sat in the table. A 500 on a request that succeeded is the worst
+   *     shape of failure: the obvious response is to retry, and retrying hits a unique violation.
+   *   * After an UPDATE the outer join finds the row with its OLD values. `StaffAdminUpdateOps`
+   *     had this and nobody noticed, because the screen refetches the list immediately afterwards
+   *     and overwrites the stale response. Its own comment said the shape existed to avoid
+   *     re-rendering a row with the old label, which is precisely what it was doing.
+   *
+   * A fourth instance was correct BY ACCIDENT - `StaffClaimOps` in the auth path, whose UPDATE
+   * writes only `lpx_sub` and `updated_at`, neither of which its column list selected. Adding
+   * `lpx_sub` to that list would have broken every first sign-in with no error anywhere. That is
+   * why this is a test about the pattern rather than three fixes.
+   *
+   * The correct shape: the written row's own columns come from RETURNING, and only columns from
+   * OTHER tables are joined or subqueried - those the sub-statement did not touch, so the shared
+   * snapshot is right for them.
+   */
+  test("no data-modifying CTE reads back the table it just wrote", () => {
+    const offenders: string[] = [];
+
+    /*
+     * `lambdas/neotms/nodejs`, which is one level above `neotmsLambdaDir` and so covers both
+     * `neotms/` and its sibling `auth/` - the auth module is where the fourth instance was. Not
+     * `lambdas/` itself: that also holds `lambdas/common`, the LPX base code this repo does not
+     * own and should not police.
+     */
+    for (const file of walkTs(path.join(neotmsLambdaDir, ".."))) {
+      const source = readFileSync(file, "utf8");
+      /*
+       * Each `WITH <name> AS ( INSERT INTO <t> | UPDATE <t>` and the rest of its template literal.
+       * Read from the raw source rather than from `tsCode`, because a comment explaining the
+       * hazard is not an instance of it - and every one of these files now has such a comment.
+       */
+      for (const match of source.matchAll(
+        /sql: `[\s\S]*?WITH\s+\w+\s+AS\s*\(\s*(INSERT INTO|UPDATE)\s+(\w+)([\s\S]*?)`/g,
+      )) {
+        const table = match[2]!;
+        const afterReturning = (match[3] ?? "").split(/RETURNING/i).slice(1).join("RETURNING");
+        /*
+         * `\b` after the table name matters: `staff_attribute` must not count as `staff`. An
+         * underscore is a word character, so there is no boundary between the two - which is what
+         * makes this safe rather than lucky.
+         */
+        if (new RegExp(`\\b(?:JOIN|FROM)\\s+${table}\\b`).test(afterReturning)) {
+          offenders.push(`${path.basename(file)}: ${match[1]} ${table}`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("역할 관리 - editing what a role means", () => {
+  const src = (...segments: string[]) =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  test("the superuser override is reachable, by two routes", () => {
+    /*
+     * The bug this pins: `isSuperuser` read only `staff_attribute`, and NOTHING grants that row -
+     * not the ETL, not the seed, and not `staff_bootstrap_superuser()`, which assigns a role and no
+     * attributes. So the override was false for every caller on every database, and the screen that
+     * repairs a misconfigured role was the screen a misconfigured role locked you out of.
+     *
+     * The second route is the bootstrap authority, which grants nothing genuinely new: a holder of
+     * `lpx.admin.access` can already rewrite LPX's authority tables, so they could already give
+     * themselves anything here. Making it explicit puts the capability on the caller instead of
+     * leaving it implied by what somebody could do if they went looking.
+     */
+    const guard = tsCode("../auth/NeotmsAuthGuard.ts");
+    const assignment = /isSuperuser:[\s\S]{0,200}?,\n/.exec(guard);
+    expect(assignment).not.toBeNull();
+    expect(assignment![0]).toContain("NEOTMS_USER_ATTRIBUTE_SUPERUSER");
+    expect(assignment![0]).toContain("holdsBootstrapAuthority(account)");
+  });
+
+  test("a role's code cannot be renamed, by any route", () => {
+    /*
+     * Three things resolve a role BY CODE: `staff_bootstrap_superuser()` finds the role to give the
+     * first administrator, the seed re-asserts grants `ON CONFLICT (role_code)`, and
+     * `sys_role_grant_all_permissions(text)` takes one as its argument. A rename leaves all three
+     * looking for a row that no longer answers - and the bootstrap's failure is silent until the
+     * day somebody needs it.
+     *
+     * Pinned in all three places it could be let back in: the writable-column list, the request
+     * schema, and the form.
+     */
+    const dbops = tsCode("staff/NeotmsRoleAdmin.dbops.ts");
+    const fields = /const ROLE_ADMIN_FIELDS[\s\S]*?\];/.exec(dbops);
+    expect(fields).not.toBeNull();
+    expect(fields![0]).toContain("role_name");
+    expect(fields![0]).toContain("active");
+    expect(fields![0]).not.toContain("role_code");
+
+    // The update schema is derived by omission, so a field added to create cannot be forgotten.
+    const schemas = tsCode("neotms.schemas.ts");
+    expect(schemas).toContain(
+      'export const RoleAdminUpdateSchema = v.partial(v.omit(RoleAdminCreateSchema, ["roleCode"]))',
+    );
+
+    // And the form shows it as text when editing rather than as a disabled input.
+    const form = src("features", "roles", "RoleFormModal.tsx");
+    expect(form).toContain("isEdit ? (");
+    expect(form).toContain("역할 코드는 변경할 수 없습니다");
+  });
+
+  test("the permission and attribute editors are a replace, not a diff", () => {
+    /*
+     * The failure a diff produces: two administrators open one role in two tabs, each ticks one
+     * box, and the result is the UNION of their intentions - both believe they saved what they
+     * meant, and the role holds a combination neither chose. Sending the whole set makes the later
+     * save win, which is at least a state somebody chose.
+     *
+     * Pinned on both sides. The server must prune what is not in the set, and the client must send
+     * the set rather than a change list.
+     */
+    const dbops = tsCode("staff/NeotmsRoleAdmin.dbops.ts");
+    const prune = /RolePermissionsPruneOps[\s\S]*?mapper/.exec(dbops);
+    expect(prune).not.toBeNull();
+    expect(prune![0]).toContain("DELETE FROM sys_role_permission");
+    expect(prune![0]).toMatch(/NOT \(permission = ANY\(:keep\)\)/);
+
+    for (const [file, field] of [
+      ["RolePermissionsModal.tsx", "permissions"],
+      ["../staff/StaffAttributesModal.tsx", "attributes"],
+    ] as const) {
+      const modal = src("features", "roles", file);
+      // The whole picked set, sorted, and nothing resembling an add/remove pair.
+      expect(modal).toContain(`${field}: [...picked].sort()`);
+      expect(modal).not.toContain("added");
+      expect(modal).not.toContain("removed");
+    }
+  });
+
+  test("the two writes are refused when they would close the door behind the caller", () => {
+    /*
+     * The failure: an administrator empties the only role holding STAFF_UPDATE, or drops their own
+     * superuser attribute, and the screen that would undo it is the one they just closed. Recovery
+     * is then a SQL session run by whoever has database credentials - one person, on this
+     * deployment.
+     *
+     * `NeotmsStaffAdminManager` used to record the first of these as deliberately NOT implemented,
+     * because counting it needed the unconfirmed ROLE_1..ROLE_5 flag mapping. A flat permission
+     * list has no mapping to be wrong about, so it is implemented - and this is the test that it
+     * stays implemented.
+     */
+    const manager = tsCode("staff/NeotmsRoleAdminManager.ts");
+
+    // Asked BEFORE the write, and with this role's own grants discounted - counting after the
+    // prune would see the answer the prune created.
+    expect(manager).toContain("lockoutRefusal");
+    expect(manager).toMatch(/const refusal = await lockoutRefusal\([\s\S]{0,80}?\);/);
+    expect(manager).toMatch(/if \(refusal\) return \{ status: 409/);
+    expect(manager).toContain("AdminReachCountsOps");
+
+    // A superuser passes every permission check, so one existing means nobody is locked out.
+    const counts = /AdminReachCountsOps[\s\S]*?mapper/.exec(
+      tsCode("staff/NeotmsRoleAdmin.dbops.ts"),
+    );
+    expect(counts).not.toBeNull();
+    expect(counts![0]).toContain("NEOTMS_PERMISSION_STAFF_UPDATE");
+    expect(counts![0]).toContain("NEOTMS_USER_ATTRIBUTE_SUPERUSER");
+    expect(counts![0]).toContain("s.active");
+
+    // And the caller cannot drop their own override.
+    expect(manager).toMatch(/id === caller\.staffId/);
+    expect(manager).toContain("You cannot remove your own superuser attribute");
+  });
+
+  test("the bootstrap role cannot be deleted or retired", () => {
+    /*
+     * `staff_bootstrap_superuser()` looks this role up by name to admit the first administrator
+     * into an empty or locked-out database. Deleting it removes the way back in at the moment it
+     * would be needed; retiring it leaves the function handing out a role the assignment dropdown
+     * no longer offers, which is a confusing half-state.
+     */
+    const manager = tsCode("staff/NeotmsRoleAdminManager.ts");
+    expect(manager).toContain("BOOTSTRAP_ROLE_CODE");
+    expect(tsCode("staff/NeotmsRoleAdmin.dbops.ts")).toContain(
+      'export const BOOTSTRAP_ROLE_CODE = "NEOTMS_SYSADMIN"',
+    );
+    // Both refusals, and both 409 rather than a silent no-op.
+    expect((manager.match(/existing\.roleCode === BOOTSTRAP_ROLE_CODE/g) ?? []).length).toBe(2);
+  });
+
+  test("the screen can label every permission the server knows, and no others", () => {
+    /*
+     * Two failures, one in each direction, and both silent:
+     *
+     *   * A permission added to the server and not here renders as nothing at all - the checkbox
+     *     is absent, so the permission cannot be granted or revoked from the only screen for it.
+     *   * One removed from the server and left here is a tickable box that no route consults,
+     *     which reads as a capability somebody has when they do not.
+     *
+     * The screen also warns at runtime about names it cannot label, because the two halves deploy
+     * separately - but a warning is the fallback, and this is the check.
+     */
+    const labels = src("shared", "permissionLabels.ts");
+    const named = [...labels.matchAll(/name: (NEOTMS_PERMISSION_[A-Z_]+),/g)].map((m) => m[1]!);
+    expect(named.sort()).toEqual([...NEOTMS_PERMISSIONS].sort());
+
+    const attributes = [...labels.matchAll(/name: (NEOTMS_USER_ATTRIBUTE_[A-Z_]+),/g)].map(
+      (m) => m[1]!,
+    );
+    expect(attributes.sort()).toEqual([...NEOTMS_USER_ATTRIBUTES].sort());
+
+    /*
+     * Every permission carries a sentence, not just a label. The reader is deciding what a job
+     * title may do, and `NEOTMS_PERMISSION_PO_APPROVE` does not say that approving is separate
+     * from raising - a list of thirty-six constant names is a list somebody ticks by shape, which
+     * is how a role ends up able to approve its own purchase orders.
+     */
+    const hints = (labels.match(/hint: '/g) ?? []).length;
+    expect(hints).toBeGreaterThanOrEqual(NEOTMS_PERMISSIONS.length);
+  });
+
+  test("the role screen is gated on the attribute, not on a permission", () => {
+    /*
+     * The whole reason this screen is separate. A permission-shaped gate on grant editing is
+     * editable through the endpoint it gates: a role holding "may edit grants" could grant itself
+     * the other thirty-five in one request, and the only thing standing between a staff
+     * administrator and the whole system would be that nobody thought to try.
+     *
+     * Three places have to agree - the route, the router and the sidebar - because disagreement is
+     * silent in the worst direction: a nav entry shown to somebody the server will refuse looks
+     * like the app is broken, and a route left open relies on the entry being hidden.
+     */
+    const routes = src("routes.tsx");
+    expect(routes).toContain("function RequireSuperuser");
+    expect(routes).toMatch(/hasAttribute\(profile, NEOTMS_USER_ATTRIBUTE_SUPERUSER\)/);
+    expect(routes).toMatch(/<RequireSuperuser>\s*<RolesView \/>/);
+
+    const permissions = src("shared", "permissions.ts");
+    expect(permissions).toContain("superuserOnly?: true");
+    expect(permissions).toContain("superuserOnly: true");
+    // readableNav asks for the attribute as well as the permission.
+    const nav = /export function readableNav[\s\S]*?\n}/.exec(permissions);
+    expect(nav).not.toBeNull();
+    expect(nav![0]).toContain("item.superuserOnly");
+    expect(nav![0]).toContain("NEOTMS_USER_ATTRIBUTE_SUPERUSER");
+
+    // The attribute editor on the staff screen is hidden the same way, for the same reason: it can
+    // grant the superuser attribute, so a permission could not be allowed to open it.
+    const staffView = src("features", "staff", "StaffView.tsx");
+    expect(staffView).toContain("hasAttribute(profile, NEOTMS_USER_ATTRIBUTE_SUPERUSER)");
+    expect(staffView).toContain("mayEditAttributes");
+  });
+
+  test("creating a role no longer leaves the assignment dropdown stale for half an hour", () => {
+    /*
+     * A real regression introduced by this screen existing. `useRoles` cached for thirty minutes on
+     * the stated grounds that `sys_role` "only changes when a role is created, and that is an
+     * operation this app has no screen for". It has one now - so creating a role and walking to
+     * 사용자 관리 would show a dropdown without it, for up to thirty minutes, which reads as the
+     * create having failed.
+     *
+     * Two things fix it and both are pinned: the write invalidates the `roles` prefix, and the two
+     * role queries sit under that one prefix so a single invalidation reaches both.
+     */
+    const query = src("apis", "queries", "neotms.query.ts");
+    const useRoles = /export function useRoles[\s\S]*?\n}/.exec(query);
+    expect(useRoles).not.toBeNull();
+    expect(useRoles![0]).toContain("neotmsKeys.rolesActive");
+    expect(useRoles![0]).not.toContain("1000 * 60 * 30");
+
+    const keys = src("apis", "queries", "neotms.keys.ts");
+    expect(keys).toContain("roles: ['roles'] as const");
+    expect(keys).toContain("rolesActive: ['roles', 'active'] as const");
+    expect(keys).toContain("roleGrants: ['roles', 'grants'] as const");
+
+    const mutation = src("apis", "queries", "neotms.mutation.ts");
+    const affects = /const ROLE_AFFECTS[\s\S]*?as const/.exec(mutation);
+    expect(affects).not.toBeNull();
+    expect(affects![0]).toContain("neotmsKeys.roles");
+    /*
+     * `profile` too. A role's permissions decide what `/api/v0/me` returns, which is where the
+     * sidebar and `may()` come from - so an administrator editing their own role would otherwise
+     * keep a sidebar the server now refuses, and every click would 403.
+     */
+    expect(affects![0]).toContain("neotmsKeys.profile");
+  });
+
+  test("a role is created with no permissions, and the screen says so", () => {
+    /*
+     * The safe direction, deliberately. A new role that permits nothing presents as "the screens
+     * are empty", which somebody reports within the hour. A new role that inherited a
+     * sensible-looking default presents as nothing at all - nobody reports a permission they were
+     * not supposed to have.
+     *
+     * The cost is that creating a usable role is two steps, so the screen opens the permission
+     * editor straight after a create and the listing warns about roles with no grants.
+     */
+    const dbops = tsCode("staff/NeotmsRoleAdmin.dbops.ts");
+    const create = /RoleCreateOps[\s\S]*?mapper/.exec(dbops);
+    expect(create).not.toBeNull();
+    expect(create![0]).toContain("INSERT INTO sys_role");
+    expect(create![0]).not.toContain("sys_role_permission");
+
+    const view = src("features", "roles", "RolesView.tsx");
+    expect(view).toContain("if (created) setPermissionsFor(created)");
+    expect(view).toContain("권한이 하나도 없는 역할");
+  });
+
+  test("counting holders and permissions cannot fan out", () => {
+    /*
+     * A role has many permissions AND many staff. One SELECT joining both multiplies them - a role
+     * with 36 permissions and 4 holders reports 144 of each - and the wrong number is plausible
+     * enough to ship. Scalar subqueries cannot fan out; a join plus GROUP BY can.
+     *
+     * The same hazard on the staff side: `staff` x `staff_attribute` is one-to-many, so a join
+     * there would list somebody once per attribute.
+     */
+    for (const file of ["staff/NeotmsRoleAdmin.dbops.ts", "staff/NeotmsStaffAdmin.dbops.ts"]) {
+      const code = tsCode(file);
+      expect(code).toContain("array_agg");
+      expect(code).not.toMatch(/GROUP BY/i);
+    }
   });
 });
 
@@ -1326,7 +2091,7 @@ describe("self-registration", () => {
      */
     const manager = lambdaSource("profile/NeotmsProfileManager.ts");
     expect(manager).toMatch(/registration: "unregistered",[\s\S]*?menus: \[\],/);
-    expect(manager).toMatch(/menus: approved \? await grantsFor\(caller\) : \[\],/);
+    expect(manager).toMatch(/permissions: approved[\s\S]{0,120}: \[\],/);
     // The menu tree is not read at all for an unapproved caller. The whole company is unapproved on
     // the first morning, and each polling tab would otherwise cost a Supavisor connection.
     expect(manager).not.toMatch(/const menus = await grantsFor/);
@@ -1994,13 +2759,13 @@ describe("the 대시보드 aggregate", () => {
      * organisation can reasonably withhold from a PM who should still see their own book.
      */
     const lines = lambdaSource("neotms.handler.ts").split("\n");
-    for (const [role, menu] of [
-      ["sales", "DASHBOARD_SALES"],
-      ["pm", "DASHBOARD_PM"],
+    for (const [role, permission] of [
+      ["sales", "NEOTMS_PERMISSION_DASHBOARD_SALES_READ"],
+      ["pm", "NEOTMS_PERMISSION_DASHBOARD_PM_READ"],
     ]) {
       const routes = lines.filter((l) => l.includes(`path: "/api/v0/dashboard/${role}"`));
       expect(routes).toHaveLength(1);
-      expect(routes[0]).toContain(`menu: NeotmsMenu.${menu}`);
+      expect(routes[0]).toContain(`permission: ${permission}`);
       expect(routes[0]).toContain('method: "GET"');
     }
     /*
@@ -2171,13 +2936,13 @@ describe("the 대시보드 aggregate", () => {
      * than as a mistake in this table.
      */
     const routes = frontendFile("routes.tsx").replace(/\s+/g, " ");
-    for (const [role, menu] of [
-      ["sales", "DASHBOARD_SALES"],
-      ["pm", "DASHBOARD_PM"],
+    for (const [role, permission] of [
+      ["sales", "NEOTMS_PERMISSION_DASHBOARD_SALES_READ"],
+      ["pm", "NEOTMS_PERMISSION_DASHBOARD_PM_READ"],
     ]) {
       expect(routes).toMatch(
         new RegExp(
-          `path: 'dashboard/${role}'[^}]*?RequireMenu menuId=\\{NeotmsMenuId\\.${menu}\\}` +
+          `path: 'dashboard/${role}'[^}]*?RequireMenu permission=\\{${permission}\\}` +
             `[^}]*?DashboardView role="${role!}"`,
         ),
       );
@@ -2205,12 +2970,17 @@ describe("the 대시보드 aggregate", () => {
     const groups = [...nav.matchAll(/\{ id: '(\w+)', label: '([^']+)'/g)].map((m) => [m[1], m[2]]);
     expect(groups[0]).toEqual(["dashboard", "대시보드"]);
 
-    const items = [...nav.matchAll(/menuId: NeotmsMenuId\.(\w+),\s*\n\s*path: '([^']+)'/g)].map(
-      (m) => [m[2], m[1]],
-    );
+    /*
+     * Matched on `readPermission`, which is what now decides whether the entry appears. The
+     * `menuId` beside it is still the screen's name but no longer gates anything, so asserting it
+     * here would pin the label rather than the rule.
+     */
+    const items = [
+      ...nav.matchAll(/readPermission: (\w+),\s*\n\s*path: '([^']+)'/g),
+    ].map((m) => [m[2], m[1]]);
     expect(items.slice(0, 2)).toEqual([
-      ["/dashboard/sales", "DASHBOARD_SALES"],
-      ["/dashboard/pm", "DASHBOARD_PM"],
+      ["/dashboard/sales", "NEOTMS_PERMISSION_DASHBOARD_SALES_READ"],
+      ["/dashboard/pm", "NEOTMS_PERMISSION_DASHBOARD_PM_READ"],
     ]);
 
     // Both in the 'dashboard' group, and nothing else in it - a 업무 screen landing there would take
@@ -2787,7 +3557,7 @@ describe("the 결제 print documents", () => {
      * The two screens answer different questions, so one address must mean one screen - hence two
      * nav items and two routes. But they share `PAYMENT` as the menu id, which is deliberate: the
      * id is the permission unit, and splitting it would need another db/0NN migration plus a
-     * `sys_role_grant_all_menus` re-grant (the hazard 008, 013 and 015 all carry a warning about).
+     * `sys_role_grant_all_permissions` re-grant (the hazard 008, 013 and 015 all carry a warning about).
      * The five action flags already separate seeing the screens from approving a PO from issuing an
      * invoice.
      *
@@ -4398,8 +5168,13 @@ describe("the handover mail", () => {
       .split("\n")
       .find((line) => line.includes("handleSendHandoverMail") && line.includes("path:"));
     expect(route).toContain('method: "POST"');
-    expect(route).toContain("menu: NeotmsMenu.PROJECT");
-    expect(route).toContain('action: "read"');
+    /*
+     * `PROJECT_EMAIL`, not `PROJECT_READ`, which is what this borrowed while the permission model
+     * was a menu x action matrix with nothing finer to say. The mail carries the customer, the
+     * languages, the deadline and the project's notes to an address the sender types; "may open
+     * this project" was never the same decision, and now it does not have to be.
+     */
+    expect(route).toContain("permission: NEOTMS_PERMISSION_PROJECT_EMAIL");
     expect(route).toContain("/handover-mail");
 
     const block = /const handleSendHandoverMail[\s\S]*?\n};/.exec(source)?.[0] ?? "";
@@ -4571,11 +5346,15 @@ describe("approving purchase orders in bulk", () => {
      * The delete button is the mirror image - a payment clerk may approve an amount without
      * thereby being able to destroy the order it was for.
      */
-    expect(project()).toContain("mayApprovePo = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')");
-    expect(payment()).toContain("mayWrite = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')");
-    expect(payment()).toContain(
-      "mayDelete = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')",
-    );
+    /*
+     * Approval is its own permission now. It used to borrow the payment menu's `update` bit, which
+     * is also what records a payment - so "may sign off an amount" and "may confirm the money
+     * left" could not be told apart. Deleting the order it was for is a third thing again, and
+     * still belongs to whoever owns purchase orders.
+     */
+    expect(project()).toContain("mayApprovePo = may(profile, NEOTMS_PERMISSION_PO_APPROVE)");
+    expect(payment()).toContain("mayWrite = may(profile, NEOTMS_PERMISSION_PO_APPROVE)");
+    expect(payment()).toContain("mayDelete = may(profile, NEOTMS_PERMISSION_PO_DELETE)");
     // The buttons read those flags, not each other's.
     expect(project()).toMatch(/poSel\.selected\.length > 0 && mayApprovePo/);
     expect(payment()).toMatch(/sel\.selected\.length > 0 && mayDelete/);

@@ -334,6 +334,7 @@ because Supavisor routes on the tenant encoded in the username.
 |---|---|
 | `001_schemas.sql` | **the whole structure.** Extensions, the five code sequences plus the invoice-code one, all 32 tables with their table and column comments, the constraints that cannot be written inline, the three functions the application calls by name, `fx_rate_latest`, and all 82 indexes |
 | `002_initial_seeding.sql` | **the rows the application will not run without.** The `sys_code` domains (분야, 세부 분야, 작업 종류, 단가 단위, 언어, 사용 프로그램, 업무 구분, 업무 분류), the eight currencies, the eleven `sys_menu` rows, and the 시스템관리자 role granted over all of them |
+| `003_access_control.sql` | **only for a database that already has data.** Moves it from the legacy menu × action matrix (`sys_role_auth`) to named permissions (`sys_role_permission`), and derives who may be named as a 담당영업 or 담당PM (`staff_attribute`). A database built from `001` has the new shape already and must **not** be given this file. See §6.3 |
 | `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
 
 These two replace the sixteen numbered migrations that used to build the schema a step
@@ -374,20 +375,20 @@ PGPASSWORD=$NEOTMS_DB_PASSWORD psql \
   -v ON_ERROR_STOP=1 -f db/001_schemas.sql
 ```
 
-Repeat for `002` … `012` **in order**; `001` must complete before `002`. Pass
-`-v ON_ERROR_STOP=1` every time — without it `psql` reports a failed statement and carries on, so a
-half-applied schema looks like a successful run. That flag matters most on `011` and `012`, the two
-files that migrate existing data: each reads a column it then drops — `job.job_slang` in `011`,
-`job.job_volume` in `012` — so a run that carries on past a failure can get as far as the drop with
-the detail rows still unwritten. Both are **re-runnable** by construction, which is the mitigation:
-every backfill is guarded by an `information_schema` check on the column it reads, so repeating an
-interrupted file is the correct response and does not need the half-done state unpicked first.
+Then `002`, which needs `001` to have completed. Pass `-v ON_ERROR_STOP=1` every time — without it
+`psql` reports a failed statement and carries on, so a half-applied schema looks like a successful
+run. Both files are `ON CONFLICT DO NOTHING` throughout and re-runnable by construction, so
+repeating an interrupted one is the correct response and does not need the half-done state unpicked
+first.
 
-**The last seven files are not pure schema, and none of them is optional.** `001`…`005` leave a
-database that is structurally correct and cannot be used by anybody; `006`…`012` are what turn it
-into a running system, and each one is the sole source of something the application assumes exists.
-Stopping early does not raise an error on apply — with the exception of `011` and `012`, it produces
-a specific, silent symptom later, and those symptoms are listed in §6.1 and §6.2.
+**`003_access_control.sql` is not part of this sequence.** It migrates a database that already
+holds data, and `001` builds the shape it produces — so on a new database it is not merely
+unnecessary, it fails: its sections 2 and 3 read `sys_role_auth`, which `001` no longer creates. Give
+it only to an existing database, and read §6.3 before you do, because its last section is not
+reversible.
+
+Neither `001` nor `002` is optional, and stopping between them does not raise an error on apply: it
+produces a specific, silent symptom later, listed in the table below.
 
 A note on failure messages, since none of them name the field that is wrong: a bad host is
 `ENOTFOUND`, a bare `postgres` username is `Tenant or user not found`, and port 5432 on the direct
@@ -464,8 +465,18 @@ as well as dev, because the failure it prevents — an empty database nobody can
 recoverable only with the database password and a `psql` client.
 
 **To close it** once real administrators exist, set `bootstrapAuthorityId: ""` for the stage in
-`infra/config/NeotmsConfig.ts` and redeploy. Nothing in the database needs changing, and the staff
-rows already created keep working normally.
+`infra/config/NeotmsConfig.ts` and redeploy. The staff rows already created keep working normally.
+
+> ⚠ **Grant the superuser attribute to a real person first.** Holding `lpx.admin.access` is one of
+> the two things that make a caller a superuser (the other is the
+> `NEOTMS_USER_ATTRIBUTE_SUPERUSER` attribute), and a superuser is the only one who can open
+> **역할 관리** — the screen that edits what a role permits. Blanking this setting while nobody holds
+> the attribute leaves that screen unreachable by everybody, and no screen can grant the attribute
+> because granting it needs the screen. Recovery is then a `psql` session.
+>
+> Do it in this order: on **사용자 관리**, open a real administrator's 속성 and tick 시스템관리자;
+> confirm they can open 역할 관리; then blank `bootstrapAuthorityId`. The by-hand equivalent, if you
+> have already closed the door, is the `INSERT` at the foot of §3 in `db/003_access_control.sql`.
 
 It is **not** a `-c` override, on purpose — and the trap is worth knowing: `-c bootstrapAuthorityId=`
 is *silently ignored*, not rejected, so a deploy that appears to have closed the door has not.
@@ -497,7 +508,9 @@ of the symptom points away from the cause.
 | `001_schemas.sql` | every table, index, sequence, function and view | nothing works. The API answers `42P01` on the first query of every screen |
 | `002_initial_seeding.sql` | the `sys_code` domains, the currencies, the menus and the one role | **the loud part is loud and the quiet part is quiet.** Without the currencies **every create in the system fails**, on a field nobody touched, reporting a constraint name. Without the menus every screen is unreachable *including for the superuser*, because the permission system is per menu. Without the codes every dropdown on the project, customer and translator forms is empty and `GET /api/v0/codes` answers `200 []` — a project still saves, so this one is only noticed by somebody looking for a 분야 that is not there |
 
-Both files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
+| `003_access_control.sql` | **on an existing database only** — the permission rows and the PM / 담당영업 attributes | every screen answers 403, for everybody. The deployed application asks `sys_role_permission` what a role may do; until this runs that table does not exist, so the answer is "nothing" and the message blames the role. The reverse mistake is louder and better: running it against a *new* database fails on apply, because `sys_role_auth` is not there to read |
+
+Both install files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
 applying `002` to a database that already has some of these rows adds only what is missing.
 
 `013` is the one of these an operator is most likely to defer, because the screens it unlocks are
@@ -1151,6 +1164,69 @@ No resume stall to work around: Supabase bills a flat monthly compute price and 
 pause, so the first query of the day is as fast as any other. Note that on port 6543 you are in
 transaction mode — no prepared statements, no `SET` that outlives a statement, no advisory locks held
 across one.
+
+### 6.3 `003_access_control.sql` — moving a live database to named permissions
+
+The only file in `db/` that changes an existing database rather than building a new one, and the
+only one with a step you cannot take back. It replaces the legacy matrix — `sys_role_auth`, 11
+menus × `role_1`…`role_5` — with a flat list of permission names in `sys_role_permission`, and
+derives `staff_attribute` so the application can start enforcing who may be named as a 담당영업 or a
+담당PM.
+
+**Who can do what does not change.** Two permissions had no flag of their own and are granted to
+exactly the people who could already perform the action: `PO_APPROVE` to whoever held the payment
+menu's update flag, because approving a purchase order *was* that grant, and `PROJECT_EMAIL` to
+whoever could open a project, because sending a handover mail was gated on nothing narrower. Both
+are deliberately broader than they should be — splitting them is why the permissions exist — and
+section 6 of the file has the two `DELETE`s to narrow them, commented out, for an administrator to
+run afterwards.
+
+**The `role_1`…`role_5` mapping is still unconfirmed** against the legacy ASP source. Where all five
+flags are set the translation is the same whatever they meant, and that is the case for the seeded
+시스템관리자 role. Where they are mixed, the result depends on the guess — so section 5b lists every
+such role, and that is the query to read before anyone relies on the result.
+
+Order of operations:
+
+1. **Apply `003`.** Sections 1–4 are one transaction; if it refuses, nothing was applied.
+2. **Read section 5's output.** 5b is the one that matters (mixed-flag roles); 5a lists grants on
+   legacy ETL menus the application has no permission for, which is expected and is reported rather
+   than silently dropped; 5e must be empty.
+3. **Deploy the application.** Between steps 1 and 3 the deployed code is still reading
+   `sys_role_auth`, which is still there and still correct, so there is no window where the system
+   is broken.
+4. **Confirm people can sign in and use their screens.** Until step 5, rolling back is a deploy.
+5. **Only then, section 7's three `DROP`s.** Afterwards, rolling back is a restore from backup.
+
+It refuses to finish if the translation would leave active staff with nobody holding
+`STAFF_UPDATE` — the failure where the only screen that could restore access is the one nobody can
+open any more. A database with no staff rows yet is allowed through, because nobody can be locked out
+of it and `staff_bootstrap_superuser()` is the way in (§6.1).
+
+Nobody is granted `NEOTMS_USER_ATTRIBUTE_SUPERUSER`: it overrides every permission check, and the
+rule is that it belongs to accounts carrying `lpx.admin.access`, which the database cannot see. The
+file ends with the `INSERT` to grant it by hand, to a person you have confirmed.
+
+That the migration grants it to nobody is safe only because holding `lpx.admin.access` *also* makes
+a caller a superuser, so **역할 관리** is reachable straight after this runs without any SQL. The two
+paths and the order they matter in are in §6.1's warning about blanking `bootstrapAuthorityId` —
+read it before you close that door, because closing it while nobody holds the attribute is the
+lockout this file spent four sections avoiding.
+
+**Rehearsing it** needs the *old* shape, which the current `001` no longer builds — so take it from
+git history:
+
+```bash
+git show 9aa89fb:db/001_schemas.sql > /tmp/old001.sql
+git show 9aa89fb:db/002_initial_seeding.sql > /tmp/old002.sql
+```
+
+Apply those two to a throwaway database, load a copy of real rows if you have one, then apply
+`db/003_access_control.sql` and compare the result against a database built from the current `001`
++ `002`. That comparison is how this file was checked: columns, constraints, indexes, sequences,
+functions, views, table and column comments and the seeded rows all match, which is the claim —
+`001` and `003` are two routes to one database, not two databases. It is also what caught the two
+table comments that still described the matrix after everything else had moved.
 
 ---
 

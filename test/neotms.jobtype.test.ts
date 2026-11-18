@@ -73,7 +73,11 @@ const caller: NeotmsCaller = {
   roleId: "1",
   roleCode: "PM",
   roleName: "PM",
-  permissions: new Map(),
+  // The permission set and the attributes are empty here: these fixtures exercise SQL
+  // building, which reads the caller for its row scope and nothing else.
+  permissions: new Set<string>(),
+  attributes: new Set<string>(),
+  isSuperuser: false,
   viewScope: "OWN",
   seesEveryRow: false,
 };

@@ -1,4 +1,18 @@
-import type { MenuAction, ProfileView } from '@/apis/neotms.types'
+import type { ProfileView } from '@/apis/neotms.types'
+import {
+  NEOTMS_PERMISSION_CUSTOMER_READ,
+  NEOTMS_PERMISSION_DASHBOARD_PM_READ,
+  NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
+  NEOTMS_PERMISSION_INVOICE_READ,
+  NEOTMS_PERMISSION_JOB_READ,
+  NEOTMS_PERMISSION_MAINTENANCE_READ,
+  NEOTMS_PERMISSION_PO_READ,
+  NEOTMS_PERMISSION_PROJECT_READ,
+  NEOTMS_PERMISSION_REPORT_READ,
+  NEOTMS_PERMISSION_STAFF_READ,
+  NEOTMS_USER_ATTRIBUTE_SUPERUSER,
+  NEOTMS_PERMISSION_TRANSLATOR_READ,
+} from '@/apis/neotms.authorities'
 import { NeotmsMenuId, type NeotmsMenuIdValue } from '@/shared/config'
 import type { IconName } from '@/shared/ui/Icon'
 
@@ -28,9 +42,28 @@ export type NeotmsNavGroupId =
   | 'trn'
   | 'payment'
 
-/** 사이드바 메뉴. `menuId` 는 서버가 권한을 부여하는 단위이고, `path` 는 라우터의 경로다. */
+/**
+ * One sidebar entry. `readPermission` is what the server grants and what decides whether this
+ * entry appears; `path` is the router's path. `menuId` is only the id the screen is known by --
+ * see the field comments below, which is where the two used to be the same thing.
+ */
 export interface NeotmsNavItem {
+  /**
+   * Still here, and still the id the screen is known by - but it no longer decides anything.
+   * Permissions are granted by name now, so visibility reads `readPermission` below.
+   */
   menuId: NeotmsMenuIdValue
+  /** Holding this is what makes the entry appear. One permission, not a menu plus an action. */
+  readPermission: string
+  /**
+   * Set when the entry is for superusers only, and no permission can stand in for it.
+   *
+   * One entry carries it: 역할 관리, which edits what a role permits. A permission-shaped gate
+   * there would be editable through the screen it gates, so `readableNav` asks for the attribute
+   * instead — and `readPermission` is still required on the type, so an entry cannot accidentally
+   * have no gate at all.
+   */
+  superuserOnly?: true
   path: string
   label: string
   /** 2차 패널에서 메뉴 이름 아래에 한 줄로 붙는다. 비워 두지 않는다 — 아래 주석 참고. */
@@ -120,6 +153,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
    */
   {
     menuId: NeotmsMenuId.DASHBOARD_SALES,
+    readPermission: NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
     path: '/dashboard/sales',
     label: '대시보드(영업)',
     hint: '영업 담당자용 대시보드',
@@ -127,6 +161,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.DASHBOARD_PM,
+    readPermission: NEOTMS_PERMISSION_DASHBOARD_PM_READ,
     path: '/dashboard/pm',
     label: '대시보드(PM)',
     hint: 'PM용 대시보드',
@@ -134,6 +169,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.PROJECT,
+    readPermission: NEOTMS_PERMISSION_PROJECT_READ,
     path: '/projects',
     label: '프로젝트',
     hint: '번역·MICE 등 프로젝트 관리',
@@ -141,6 +177,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.JOB,
+    readPermission: NEOTMS_PERMISSION_JOB_READ,
     path: '/jobs',
     label: '작업',
     hint: '프로젝트 작업(JOB)목록',
@@ -148,6 +185,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.PURCHASE_ORDER,
+    readPermission: NEOTMS_PERMISSION_PO_READ,
     path: '/purchase-orders',
     label: 'PO',
     hint: 'PO목록 조회',
@@ -155,6 +193,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.CUSTOMER,
+    readPermission: NEOTMS_PERMISSION_CUSTOMER_READ,
     path: '/customers',
     label: '고객사',
     hint: '고객사 목록 및 정보 조회',
@@ -162,6 +201,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.TRANSLATOR,
+    readPermission: NEOTMS_PERMISSION_TRANSLATOR_READ,
     path: '/translators',
     label: '번역가',
     hint: '언어·분야·단가',
@@ -193,6 +233,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
    */
   {
     menuId: NeotmsMenuId.PAYMENT,
+    readPermission: NEOTMS_PERMISSION_INVOICE_READ,
     path: '/payment/purchase-orders',
     label: 'PO 승인·정산',
     hint: 'PO 금액 승인과 지급 기록',
@@ -200,6 +241,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.PAYMENT,
+    readPermission: NEOTMS_PERMISSION_INVOICE_READ,
     path: '/payment/invoices',
     label: '번역가 인보이스',
     hint: '인보이스 발행·입금 기록',
@@ -207,6 +249,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.REPORT,
+    readPermission: NEOTMS_PERMISSION_REPORT_READ,
     path: '/reports',
     label: '보고서',
     hint: '기간별 매출과 수익',
@@ -222,6 +265,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
    */
   {
     menuId: NeotmsMenuId.MAINTENANCE,
+    readPermission: NEOTMS_PERMISSION_MAINTENANCE_READ,
     path: '/maintenance',
     label: '각종 코드 및 변수 관리',
     hint: '분야·언어 등',
@@ -229,9 +273,36 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
   },
   {
     menuId: NeotmsMenuId.STAFF,
+    readPermission: NEOTMS_PERMISSION_STAFF_READ,
     path: '/staff',
     label: '사용자 관리',
-    hint: '가입 승인·권한 관리',
+    hint: '가입 승인·역할 배정',
+    group: 'admin',
+  },
+  /*
+   * 역할 관리. 사용자 관리와 **다른 메뉴**인 이유가 이 앱의 권한 설계 그 자체다.
+   *
+   * 사용자 관리는 "이 사람에게 어떤 역할을 줄까" 를 정하고, 이 화면은 "그 역할이 무엇을
+   * 뜻하는지" 를 정한다. 영향 범위가 다르다 — 앞의 것은 한 사람을, 뒤의 것은 그 역할을 가진
+   * 모든 사람을 한 번에 바꾼다. 한 화면에 두 탭으로 넣으면 그 차이가 사라지고, '역할 배정'
+   * 권한만 가진 관리자에게 누르면 403 이 나는 탭이 보인다.
+   *
+   * **`menuId` 는 STAFF 를 재사용한다.** 새 `sys_menu` 행을 넣지 않는다 — 이 항목은 메뉴 권한이
+   * 아니라 `superuserOnly` 로 걸러지므로 서버가 내려주는 메뉴 목록에 들어갈 이유가 없고, 행을
+   * 하나 넣으면 마이그레이션과 재부여가 따라붙는다(db/003_access_control.sql 의 같은 경고).
+   * `menuId` 는 이제 아무것도 결정하지 않는 식별자일 뿐이다 — `NeotmsNavItem` 의 주석 참고.
+   *
+   * `readPermission` 도 STAFF_READ 로 둔다. 타입이 요구하므로 비울 수 없고, 비워 둘 수 있게
+   * 만들면 "게이트가 아예 없는 항목" 이 표현 가능해진다. 시스템관리자는 모든 권한 검사를
+   * 통과하므로 이 값은 실질적으로 쓰이지 않지만, 둘 다 통과해야 보이게 두는 쪽이 안전하다.
+   */
+  {
+    menuId: NeotmsMenuId.STAFF,
+    readPermission: NEOTMS_PERMISSION_STAFF_READ,
+    superuserOnly: true,
+    path: '/roles',
+    label: '역할 관리',
+    hint: '역할별 권한 설정',
     group: 'admin',
   },
 ]
@@ -246,17 +317,35 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
  * 프로필이 아직 없을 때(`undefined`) 도 false 다. 그래서 목록 화면은 프로필을 기다리는 동안
  * 등록 버튼을 그리지 않는다 — 누를 수 없는 버튼을 먼저 보여 주는 것보다 낫다.
  */
-export function mayDo(
-  profile: ProfileView | undefined,
-  menuId: NeotmsMenuIdValue,
-  action: MenuAction,
-): boolean {
-  return profile?.menus.find((m) => m.menuId === menuId)?.may[action] ?? false
+export function may(profile: ProfileView | undefined, permission: string): boolean {
+  return profile?.permissions.includes(permission) ?? false
 }
+
+/**
+ * Whether this person holds an attribute - what they may be NAMED as.
+ *
+ * Separate from `may` because it answers a different question. Nothing here opens a screen;
+ * `NEOTMS_USER_ATTRIBUTE_PM` is what lets somebody else put this person's name in a project's
+ * 담당PM column.
+ */
+export function hasAttribute(
+  profile: ProfileView | undefined,
+  attribute: string,
+): boolean {
+  return profile?.attributes.includes(attribute) ?? false
+}
+
 
 /** 읽을 수 있는 메뉴만. 순서는 NEOTMS_NAV 가 정한다(서버의 `ordNo` 는 레거시 값이라 신뢰하지 않는다). */
 export function readableNav(profile: ProfileView | undefined): readonly NeotmsNavItem[] {
-  return NEOTMS_NAV.filter((item) => mayDo(profile, item.menuId, 'read'))
+  return NEOTMS_NAV.filter(
+    (item) =>
+      may(profile, item.readPermission) &&
+      // `superuserOnly` 항목은 권한을 통과해도 속성이 없으면 보이지 않는다. 시스템관리자는
+      // 모든 권한 검사를 통과하므로 실제로는 이 조건이 혼자 결정하지만, 두 조건을 모두 보게
+      // 두면 `superuserOnly` 를 빼먹은 항목이 권한만으로 열리는 쪽으로 실수하게 된다.
+      (!item.superuserOnly || hasAttribute(profile, NEOTMS_USER_ATTRIBUTE_SUPERUSER)),
+  )
 }
 
 /** 레일에 그릴 묶음과 그 안의 메뉴. */

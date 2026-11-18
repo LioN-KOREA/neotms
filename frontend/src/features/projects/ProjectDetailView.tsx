@@ -18,9 +18,21 @@ import {
 } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN, codeOptions, JOB_STATES, PO_STATES } from '@/apis/neotms.codes'
 import type { JobRow, PurchaseOrderRow } from '@/apis/neotms.types'
-import { DETAIL_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { DETAIL_PAGE_SIZE } from '@/shared/config'
 import { useRowSelection } from '@/shared/hooks/useRowSelection'
-import { mayDo } from '@/shared/permissions'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_JOB_CREATE,
+  NEOTMS_PERMISSION_JOB_DELETE,
+  NEOTMS_PERMISSION_JOB_READ,
+  NEOTMS_PERMISSION_JOB_UPDATE,
+  NEOTMS_PERMISSION_PO_APPROVE,
+  NEOTMS_PERMISSION_PO_CREATE,
+  NEOTMS_PERMISSION_PO_DELETE,
+  NEOTMS_PERMISSION_PO_READ,
+  NEOTMS_PERMISSION_PO_UPDATE,
+  NEOTMS_PERMISSION_PROJECT_UPDATE,
+} from '@/apis/neotms.authorities'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, InfoNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
@@ -202,22 +214,22 @@ export function ProjectDetailView() {
     return out
   }, [pos])
 
-  const mayUpdateProject = mayDo(profile, NeotmsMenuId.PROJECT, 'update')
-  const mayReadJob = mayDo(profile, NeotmsMenuId.JOB, 'read')
-  const mayCreateJob = mayDo(profile, NeotmsMenuId.JOB, 'create')
-  const mayUpdateJob = mayDo(profile, NeotmsMenuId.JOB, 'update')
-  const mayDeleteJob = mayDo(profile, NeotmsMenuId.JOB, 'delete')
-  const mayReadPo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'read')
-  const mayCreatePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'create')
-  const mayUpdatePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'update')
-  const mayDeletePo = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')
+  const mayUpdateProject = may(profile, NEOTMS_PERMISSION_PROJECT_UPDATE)
+  const mayReadJob = may(profile, NEOTMS_PERMISSION_JOB_READ)
+  const mayCreateJob = may(profile, NEOTMS_PERMISSION_JOB_CREATE)
+  const mayUpdateJob = may(profile, NEOTMS_PERMISSION_JOB_UPDATE)
+  const mayDeleteJob = may(profile, NEOTMS_PERMISSION_JOB_DELETE)
+  const mayReadPo = may(profile, NEOTMS_PERMISSION_PO_READ)
+  const mayCreatePo = may(profile, NEOTMS_PERMISSION_PO_CREATE)
+  const mayUpdatePo = may(profile, NEOTMS_PERMISSION_PO_UPDATE)
+  const mayDeletePo = may(profile, NEOTMS_PERMISSION_PO_DELETE)
   /*
    * Approving a PO's amount is PAYMENT:update, not a purchase-order right - the same split the
    * route table makes and the same one the payment screen checks. Someone who may raise and edit
    * POs here is not thereby someone who may sign off what they cost; that is the whole point of
    * the approval gate, and it would be defeated by reading `mayUpdatePo` instead.
    */
-  const mayApprovePo = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')
+  const mayApprovePo = may(profile, NEOTMS_PERMISSION_PO_APPROVE)
 
   /*
    * 삭제 두 개. 문구는 각 목록 화면의 것과 **같은 문장**이다(JobsView·PurchaseOrdersView) —

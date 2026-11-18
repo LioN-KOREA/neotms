@@ -35,11 +35,18 @@ export const neotmsKeys = {
   fxRates: ['fx-rates'] as const,
 
   /*
-   * 직원과 역할. 역할 목록은 직원 목록 아래가 아니라 따로다 — `sys_role` 은 직원을 고쳐도
-   * 변하지 않으므로, 역할 배정 한 번에 역할 목록까지 다시 읽을 이유가 없다.
+   * 직원과 역할. 역할은 직원 목록 아래가 아니라 따로다 — `sys_role` 은 직원을 고쳐도 변하지
+   * 않으므로, 역할 배정 한 번에 역할 목록까지 다시 읽을 이유가 없다.
+   *
+   * 역할 쪽 두 목록이 같은 접두사 아래 있는 것이 중요하다. `codes` 와 같은 이유다:
+   * `roleGrants` 는 역할 관리 화면의 목록이고 `rolesActive` 는 **직원 화면의 배정 드롭다운**
+   * 이다. 역할을 하나 만들면 둘 다 낡는다 — 접두사 하나를 무효화하면 둘 다 처리되고, 따로
+   * 두면 역할을 만든 관리자에게는 바로 보이는데 배정 드롭다운에는 나타나지 않는다.
    */
   staff: ['staff'] as const,
   roles: ['roles'] as const,
+  rolesActive: ['roles', 'active'] as const,
+  roleGrants: ['roles', 'grants'] as const,
 
   customers: ['customers'] as const,
   customerList: (query: unknown) => ['customers', 'list', query] as const,

@@ -24,6 +24,11 @@ import {
   updateJob,
   updateProject,
   updatePurchaseOrder,
+  createRole,
+  deleteRole,
+  setRolePermissions,
+  setStaffAttributes,
+  updateRole,
   updateStaff,
   updateTranslator,
 } from '../neotms.api'
@@ -42,6 +47,10 @@ import type {
   PurchaseOrderInput,
   PurchaseOrderUpdate,
   SelfProfileInput,
+  RoleCreateInput,
+  RolePermissionsInput,
+  RoleUpdateInput,
+  StaffAttributesInput,
   StaffUpdateInput,
   TranslatorInput,
 } from '../neotms.types'
@@ -213,6 +222,98 @@ export function useUpdateStaff() {
   return useMutation({
     mutationFn: ({ id, input }: { id: string; input: StaffUpdateInput }) => updateStaff(id, input),
     onSuccess: () => invalidateAll(qc, STAFF_AFFECTS),
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 역할 관리                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 역할을 고치면 무효화해야 하는 것들. **`profile` 이 여기 있는 것이 핵심이다.**
+ *
+ * 역할의 권한을 바꾸면 그 역할을 가진 사람의 `/api/v0/me` 응답이 달라진다 — 사이드바 구성과
+ * `may()` 의 답이 거기서 나온다. 무효화하지 않으면 자기 역할을 고친 관리자의 화면이 옛 메뉴를
+ * 그리고, 누르면 서버가 403 을 준다. 사용자에게는 앱이 고장 난 것으로 보인다.
+ *
+ * `staff` 도 넣는다. 직원 목록이 역할 이름을 함께 보여 주므로 이름을 고치면 같이 낡는다.
+ *
+ * **다른 사람의 화면은 여기서 고칠 수 없다.** 다른 관리자의 브라우저 캐시는 이 무효화가 닿지
+ * 않는 곳이고, 서버의 `callerCache`(60초)도 따로 돈다 — 즉 권한 변경이 모두에게 보이기까지는
+ * 최대 1분 정도 걸린다. 그건 캐시 설계의 결과이고, 역할 관리 화면이 그렇게 적어 둔다.
+ */
+const ROLE_AFFECTS = [neotmsKeys.roles, neotmsKeys.profile, neotmsKeys.staff] as const
+
+export function useCreateRole() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: RoleCreateInput) => createRole(input),
+    onSuccess: () => invalidateAll(qc, ROLE_AFFECTS),
+  })
+}
+
+export function useUpdateRole() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: RoleUpdateInput }) => updateRole(id, input),
+    onSuccess: () => invalidateAll(qc, ROLE_AFFECTS),
+  })
+}
+
+/**
+ * 역할을 삭제한다.
+ *
+ * 서버가 409 로 거절하는 경우가 **정상 동작**이다(보유자가 있는 역할, 부트스트랩 역할). 그래서
+ * 화면은 이 오류 본문을 읽을 수 있게 보여 줘야 한다 — `useDeleteCode` 와 같은 이유로, 본문에
+ * 몇 명이 들고 있고 대신 무엇을 하면 되는지가 적혀 있다.
+ */
+export function useDeleteRole() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deleteRole(id),
+    onSuccess: () => invalidateAll(qc, ROLE_AFFECTS),
+  })
+}
+
+/**
+ * 역할의 권한 전체를 바꾼다. **이 앱에서 가장 넓은 범위의 쓰기다.**
+ *
+ * 한 사람이 아니라 그 역할을 가진 **모든 사람**의 권한이 이 한 번의 저장으로 바뀌고, 그들에게는
+ * 아무 알림도 가지 않는다. 그래서 무효화 목록이 `ROLE_AFFECTS` 로 넓고, 화면은 저장 전에 몇 명이
+ * 영향을 받는지 보여 준다.
+ *
+ * 서버는 마지막 `STAFF_UPDATE` 를 거두는 저장을 409 로 거절한다.
+ */
+export function useSetRolePermissions() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: RolePermissionsInput }) =>
+      setRolePermissions(id, input),
+    onSuccess: () => invalidateAll(qc, ROLE_AFFECTS),
+  })
+}
+
+/**
+ * 한 사람의 속성 전체를 바꾼다.
+ *
+ * 역할과 달리 이 사람 한 명에게만 영향이 있다. 다만 담당영업·담당PM 속성은 프로젝트 폼의
+ * 담당자 피커가 읽는 값이므로, 속성을 떼면 그 사람이 피커에서 사라진다 — 이미 그 사람이 적혀
+ * 있는 프로젝트는 그대로지만, 다음 수정에서 서버가 거절할 수 있다. 그래서 `projects` 와 `jobs`
+ * 까지 무효화한다.
+ */
+export function useSetStaffAttributes() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: StaffAttributesInput }) =>
+      setStaffAttributes(id, input),
+    onSuccess: () =>
+      invalidateAll(qc, [
+        neotmsKeys.staff,
+        neotmsKeys.profile,
+        neotmsKeys.roles,
+        neotmsKeys.projects,
+        neotmsKeys.jobs,
+      ]),
   })
 }
 

@@ -4,7 +4,7 @@
 //
 // The access token says which LPX account is calling. It does not and cannot say which NEOTMS staff
 // member that is, which role they hold, or which rows they may see - those are facts about this
-// company, kept in `staff`, `sys_role` and `sys_role_auth`. This module reads them.
+// company, kept in `staff`, `sys_role` and `sys_role_permission`. This module reads them.
 //
 // Two columns here are the whole point of the exercise, and both are load-bearing security values
 // that must only ever be read from the server:
@@ -19,8 +19,14 @@
 
 import { param, readBool, readId, readText, type SqlOps, type SqlRow } from "../utils/PostgresUtils.js";
 
-/** One menu's five action flags, in `sys_role_auth.role_1 .. role_5` order. */
-export type MenuPermissions = [boolean, boolean, boolean, boolean, boolean];
+/**
+ * What one role may do: the permission names it has been granted.
+ *
+ * A set rather than the 48-menu x 5-flag matrix this used to be. The matrix could not express
+ * "may approve a purchase order" separately from "may record that it was paid", and it carried a
+ * fifth flag whose meaning was a documented guess. See NeotmsAuthorities.ts.
+ */
+export type GrantedPermissions = ReadonlySet<string>;
 
 export type StaffRow = {
   staffId: string;
@@ -46,20 +52,26 @@ export type StaffRow = {
  * and `sys_role.id` are exactly that case. Aliasing the lot means a column added to either table
  * later cannot introduce the collision by accident.
  */
-const STAFF_COLUMNS = `
-  s.id            AS staff_id,
-  s.mgr_id        AS staff_mgr_id,
-  s.mgr_name      AS staff_name,
-  s.mgr_email     AS staff_email,
-  s.mgr_position  AS staff_position,
-  s.corp_code     AS staff_corp_code,
-  s.role_id       AS staff_role_id,
-  s.view_scope    AS staff_view_scope,
-  s.active        AS staff_active,
-  s.deleted       AS staff_deleted,
+/*
+ * Takes the alias, so that `StaffClaimOps` can select from its own `RETURNING` output rather than
+ * joining `staff` back - see the comment on that op for what the join was quietly doing.
+ */
+const staffColumns = (alias: string) => `
+  ${alias}.id            AS staff_id,
+  ${alias}.mgr_id        AS staff_mgr_id,
+  ${alias}.mgr_name      AS staff_name,
+  ${alias}.mgr_email     AS staff_email,
+  ${alias}.mgr_position  AS staff_position,
+  ${alias}.corp_code     AS staff_corp_code,
+  ${alias}.role_id       AS staff_role_id,
+  ${alias}.view_scope    AS staff_view_scope,
+  ${alias}.active        AS staff_active,
+  ${alias}.deleted       AS staff_deleted,
   r.role_code     AS role_code,
   r.role_name     AS role_name
 `;
+
+const STAFF_COLUMNS = staffColumns("s");
 
 const toStaffRow = (row: SqlRow): StaffRow => ({
   staffId: readId(row, "staff_id") ?? "",
@@ -146,6 +158,19 @@ export const StaffClaimOps: (staffId: string, sub: string) => SqlOps<StaffRow | 
   staffId,
   sub,
 ) => ({
+  /*
+   * The RETURNING carries the columns, rather than the outer query joining `staff` back.
+   *
+   * This one was CORRECT BY ACCIDENT and is the reason the others are being fixed with it. A
+   * data-modifying CTE and the query around it share one snapshot taken before the statement, so
+   * the join read this row as it was before the claim - and that happened not to matter, because
+   * the only columns the UPDATE changes are `lpx_sub` and `updated_at`, and `STAFF_COLUMNS`
+   * selects neither. Adding `lpx_sub` to that list later - to carry the `linked` flag the
+   * administration screen has, say - would have made every first sign-in read it as still
+   * unclaimed, in the authentication path, with no error anywhere.
+   *
+   * `sys_role` is still joined: the UPDATE does not touch it, so the snapshot is right for it.
+   */
   sql: `
     WITH claimed AS (
       UPDATE staff
@@ -154,12 +179,12 @@ export const StaffClaimOps: (staffId: string, sub: string) => SqlOps<StaffRow | 
          AND lpx_sub IS NULL
          AND deleted = false
          AND active = true
-      RETURNING id
+      RETURNING id, mgr_id, mgr_name, mgr_email, mgr_position, corp_code,
+                role_id, view_scope, active, deleted
     )
-    SELECT ${STAFF_COLUMNS}
+    SELECT ${staffColumns("c")}
       FROM claimed c
-      JOIN staff s ON s.id = c.id
-      LEFT JOIN sys_role r ON r.id = s.role_id
+      LEFT JOIN sys_role r ON r.id = c.role_id
   `,
   parameters: [param("sub", sub, "text"), param("staff_id", staffId, "id")],
   mapper: firstStaffRow,
@@ -311,44 +336,53 @@ export const StaffSelfRegisterOps: (
 });
 
 /**
- * The permission matrix for one role: one row per menu, five action flags each.
+ * Everything one role has been granted.
  *
- * Read in full rather than per-menu-per-request. It is 48 rows of booleans - one round trip for the
- * whole answer is cheaper than one round trip per check, and it means a handler cannot cause a
- * database call by asking a permission question.
+ * Read in full rather than per-permission-per-request: it is a few dozen short strings, one round
+ * trip answers every question a request will ask, and it means a handler cannot cause a database
+ * call by asking a permission question.
  *
- * `sys_role_auth.active` is filtered here. Its legacy column was `nvarchar(20)`, not `(3)`, so the
- * ETL may find values other than Y/N; the schema's rule is that anything but an explicit 'N' is
- * active, and this query trusts the boolean the ETL produced.
+ * There is no `active` filter because there is no active column. A grant is a row; revoking it is
+ * deleting the row. A disabled grant that still exists would be a second way to say "not granted",
+ * and two ways to say one thing is how the old pair of tables came to disagree.
  */
-export const RoleMenuPermissionsOps: (roleId: string) => SqlOps<Map<string, MenuPermissions>> = (
-  roleId,
-) => ({
+export const RolePermissionsOps: (roleId: string) => SqlOps<GrantedPermissions> = (roleId) => ({
   sql: `
-    SELECT a.menu_id AS menu_id,
-           a.role_1  AS action_1,
-           a.role_2  AS action_2,
-           a.role_3  AS action_3,
-           a.role_4  AS action_4,
-           a.role_5  AS action_5
-      FROM sys_role_auth a
-     WHERE a.role_id = :role_id
-       AND a.active = true
+    SELECT p.permission AS permission
+      FROM sys_role_permission p
+     WHERE p.role_id = :role_id
   `,
   parameters: [param("role_id", roleId, "id")],
   mapper: (rows) => {
-    const permissions = new Map<string, MenuPermissions>();
+    const granted = new Set<string>();
     for (const row of rows) {
-      const menuId = readText(row, "menu_id");
-      if (!menuId) continue;
-      permissions.set(menuId, [
-        readBool(row, "action_1") ?? false,
-        readBool(row, "action_2") ?? false,
-        readBool(row, "action_3") ?? false,
-        readBool(row, "action_4") ?? false,
-        readBool(row, "action_5") ?? false,
-      ]);
+      const permission = readText(row, "permission");
+      if (permission) granted.add(permission);
     }
-    return permissions;
+    return granted;
+  },
+});
+
+/**
+ * What one person may BE: the attributes on their staff row.
+ *
+ * Per-person, not per-role, and that is the distinction the old schema could not draw at all. A
+ * role says what may be done; an attribute says what somebody may be named as, which is a property
+ * of the human. The two people who may be a PM here hold the same role as everybody else.
+ */
+export const StaffAttributesOps: (staffId: string) => SqlOps<ReadonlySet<string>> = (staffId) => ({
+  sql: `
+    SELECT a.attribute AS attribute
+      FROM staff_attribute a
+     WHERE a.staff_id = :staff_id
+  `,
+  parameters: [param("staff_id", staffId, "id")],
+  mapper: (rows) => {
+    const held = new Set<string>();
+    for (const row of rows) {
+      const attribute = readText(row, "attribute");
+      if (attribute) held.add(attribute);
+    }
+    return held;
   },
 });

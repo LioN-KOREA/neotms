@@ -29,8 +29,14 @@ import type {
   PurchaseOrderUpdate,
   ReportQuery,
   ReportResult,
+  RoleAdminListView,
+  RoleAdminRow,
+  RoleCreateInput,
   RoleListView,
+  RolePermissionsInput,
+  RoleUpdateInput,
   SelfProfileInput,
+  StaffAttributesInput,
   StaffListView,
   StaffRow,
   StaffUpdateInput,
@@ -171,6 +177,83 @@ export const fetchRoles = (signal?: AbortSignal) =>
  */
 export const updateStaff = (id: string, input: StaffUpdateInput) =>
   neotmsApi<StaffRow>(`/api/v0/admin/staff/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+  })
+
+/* -------------------------------------------------------------------------- */
+/* 역할 관리 — what a role means, and what a person may be named as            */
+/* -------------------------------------------------------------------------- */
+//
+// Every call below is superuser-only on the server. That is not the same gate as the staff screen's
+// `NEOTMS_PERMISSION_STAFF_UPDATE`, and the difference is the point: handing somebody an existing
+// role affects that person, while changing what the role permits affects everybody who holds it,
+// retroactively and without any of them being told. A role that could edit grants could grant
+// itself everything, so the gate cannot itself be a grant.
+
+/** Every role with its permission list and holder counts. The 역할 관리 screen's listing. */
+export const fetchRoleGrants = (signal?: AbortSignal) =>
+  neotmsApi<RoleAdminListView>('/api/v0/admin/role-grants', { signal })
+
+/**
+ * 역할을 만든다. **권한은 하나도 없는 상태로 만들어진다.**
+ *
+ * 서버가 그렇게 설계되어 있고, 그게 안전한 방향이다 — 권한이 없는 새 역할은 "화면이 비어 있다"
+ * 로 나타나서 한 시간 안에 신고가 들어온다. 반대로 그럴듯한 기본 권한을 물려받은 새 역할은
+ * 아무 증상도 내지 않는다. 받지 않았어야 할 권한을 받은 사람은 그걸 신고하지 않는다.
+ */
+export const createRole = (input: RoleCreateInput) =>
+  neotmsApi<RoleAdminRow>('/api/v0/admin/roles', { method: 'POST', body: input })
+
+/** 이름을 고치거나 사용을 중지한다. `roleCode` 는 바꿀 수 없다. */
+export const updateRole = (id: string, input: RoleUpdateInput) =>
+  neotmsApi<RoleAdminRow>(`/api/v0/admin/roles/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+  })
+
+/**
+ * 역할을 삭제한다. 아무도 쓰고 있지 않을 때만 된다.
+ *
+ * `staff.role_id` 가 `ON DELETE RESTRICT` 이므로 보유자가 있으면 서버가 409 로 거절하고, 그
+ * 본문에 몇 명이 들고 있는지가 적혀 있다 — 화면에 그대로 보여 주면 된다. 퇴사 처리된 행도
+ * 역할을 들고 있어서 거절 사유가 되는데, 그건 직원 목록에 보이지 않으므로 그 숫자를 따로
+ * 적어 준다.
+ */
+export const deleteRole = (id: string) =>
+  neotmsApi<{ id: string }>(`/api/v0/admin/roles/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/**
+ * 이 역할이 가질 권한 **전체**를 보낸다.
+ *
+ * 추가·삭제 목록이 아니라 "저장 후의 상태" 를 보낸다. PUT 이 더 맞는 동사지만 서버의 CORS
+ * 허용 목록이 PUT 을 일부러 빼고 있다(neotms.handler.ts 의 PO 승인 라우트 주석) — 허용 목록에
+ * 없는 동사는 브라우저에서 CORS 오류로 실패하고, 그 오류에는 어느 라우트인지가 적히지 않는다. 서버가 트랜잭션 안에서 테이블을 그 상태로
+ * 맞춘다. 차이 계산을 클라이언트가 하면, 두 관리자가 두 탭에서 같은 역할을 고쳤을 때 결과가
+ * 둘 중 하나가 아니라 **둘의 합집합**이 된다.
+ *
+ * 서버는 마지막 `STAFF_UPDATE` 권한을 거두는 저장을 409 로 거절한다 — 그 저장을 되돌릴 화면이
+ * 바로 그 권한으로 열리는 화면이기 때문이다.
+ */
+export const setRolePermissions = (id: string, input: RolePermissionsInput) =>
+  neotmsApi<RoleAdminRow>(`/api/v0/admin/roles/${encodeURIComponent(id)}/permissions`, {
+    method: 'PATCH',
+    body: input,
+  })
+
+/**
+ * 이 사람이 가질 속성 **전체**를 보낸다.
+ *
+ * 역할과 다른 질문이다. 역할은 "무엇을 할 수 있는가" 이고 속성은 "무엇으로 지명될 수 있는가"
+ * 다 — 담당영업·담당PM 피커가 이 속성을 가진 사람만 보여 주고, 서버는 그 밖의 사람이 적힌
+ * `prj_pm_id` 를 거절한다.
+ *
+ * 서버는 호출자가 **자기 자신의** 시스템관리자 속성을 떼는 것을 409 로 거절한다. 역할이 잘못
+ * 설정됐을 때도 작동하는 우회로가 그 속성이므로, 그걸 스스로 내려놓는 것은 이 화면이 되돌려
+ * 줄 수 없는 유일한 변경이다.
+ */
+export const setStaffAttributes = (id: string, input: StaffAttributesInput) =>
+  neotmsApi<StaffRow>(`/api/v0/admin/staff/${encodeURIComponent(id)}/attributes`, {
     method: 'PATCH',
     body: input,
   })

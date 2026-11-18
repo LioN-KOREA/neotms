@@ -1,11 +1,16 @@
 import { useMemo, useState } from 'react'
 import { useProfile, useStaff } from '@/apis/queries/neotms.query'
 import type { StaffRow } from '@/apis/neotms.types'
-import { NeotmsMenuId } from '@/shared/config'
-import { mayDo } from '@/shared/permissions'
+import { hasAttribute, may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_STAFF_UPDATE,
+  NEOTMS_USER_ATTRIBUTE_SUPERUSER,
+} from '@/apis/neotms.authorities'
+import { ATTRIBUTE_LABELS } from '@/shared/permissionLabels'
 import { ErrorNotice, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { ActiveChip } from '@/shared/ui/StatusChip'
 import ui from '@/shared/ui/ui.module.css'
+import { StaffAttributesModal } from './StaffAttributesModal'
 import { StaffRoleModal } from './StaffRoleModal'
 
 /**
@@ -40,9 +45,20 @@ export function StaffView() {
   const { data: profile } = useProfile()
   const staffQuery = useStaff()
   const [editing, setEditing] = useState<StaffRow | null>(null)
+  const [attributesFor, setAttributesFor] = useState<StaffRow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
-  const mayUpdate = mayDo(profile, NeotmsMenuId.STAFF, 'update')
+  const mayUpdate = may(profile, NEOTMS_PERMISSION_STAFF_UPDATE)
+  /*
+   * 속성 편집은 **권한이 아니라 속성**으로 막는다. 서버가 그렇게 막고 있으므로 화면도 같은
+   * 질문을 해야 한다 — '역할 배정' 권한만 가진 관리자에게 이 버튼을 보여 주면 누를 때마다
+   * 403 이 나고, 사용자에게는 앱이 고장 난 것으로 보인다.
+   *
+   * 왜 권한이 아닌가: 속성 중 하나가 시스템관리자이고, 그건 모든 권한 검사를 통과하는 값이다.
+   * 권한으로 막으면 그 권한을 가진 역할이 자기에게 시스템관리자를 줄 수 있고, 그러면 문을
+   * 지키는 자물쇠가 문 안쪽에 있는 셈이 된다.
+   */
+  const mayEditAttributes = hasAttribute(profile, NEOTMS_USER_ATTRIBUTE_SUPERUSER)
 
   const items = useMemo(() => staffQuery.data?.items ?? [], [staffQuery.data])
   const pendingCount = useMemo(() => items.filter(isPending).length, [items])
@@ -134,6 +150,27 @@ export function StaffView() {
                        * 포함)은 본인 담당분만으로 **안전한 쪽으로** 해석된다.
                        */}
                       {row.viewScope === 'Y' ? '회사 전체' : '본인 담당분'}
+                      {/*
+                       * 속성을 역할 옆이 아니라 열람 범위 밑에 적는다. 역할 칸 옆에 두면 둘이
+                       * 같은 종류의 값으로 읽히는데, 역할은 "무엇을 할 수 있는가" 이고 속성은
+                       * "무엇으로 지명될 수 있는가" 다. 아무 속성도 없는 사람에게는 아무것도
+                       * 적지 않는다 — 대부분이 그렇고, '-' 가 줄마다 늘어서면 읽을 것이 없는
+                       * 칸에 눈이 간다.
+                       */}
+                      {row.attributes.length > 0 ? (
+                        <div className={ui.badgeList}>
+                          {ATTRIBUTE_LABELS.filter((attribute) =>
+                            row.attributes.includes(attribute.name),
+                          ).map((attribute) => (
+                            <span
+                              className={`${ui.badge} ${attribute.sensitive ? ui.badgeWarn : ''}`}
+                              key={attribute.name}
+                            >
+                              {attribute.label}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                     </td>
                     {/*
                      * '사용 중지' 가 더 이상 빨강이 아니다.
@@ -161,6 +198,15 @@ export function StaffView() {
                             {isPending(row) ? '승인' : '권한 변경'}
                           </button>
                         ) : null}
+                        {mayEditAttributes ? (
+                          <button
+                            type="button"
+                            className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
+                            onClick={() => setAttributesFor(row)}
+                          >
+                            속성
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -176,6 +222,15 @@ export function StaffView() {
           staff={editing}
           isSelf={editing.id === profile?.staffId}
           onClose={() => setEditing(null)}
+          onSaved={setNotice}
+        />
+      ) : null}
+
+      {attributesFor ? (
+        <StaffAttributesModal
+          staff={attributesFor}
+          isSelf={attributesFor.id === profile?.staffId}
+          onClose={() => setAttributesFor(null)}
           onSaved={setNotice}
         />
       ) : null}

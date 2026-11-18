@@ -7,10 +7,14 @@ import {
 } from '@/apis/queries/neotms.mutation'
 import { codeOptions, MONEY_STATES, PO_STATES } from '@/apis/neotms.codes'
 import type { PurchaseOrderRow } from '@/apis/neotms.types'
-import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { LIST_PAGE_SIZE } from '@/shared/config'
 import { useRowSelection } from '@/shared/hooks/useRowSelection'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
-import { mayDo } from '@/shared/permissions'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_PO_APPROVE,
+  NEOTMS_PERMISSION_PO_DELETE,
+} from '@/apis/neotms.authorities'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { ApprovalChip, StatusChip } from '@/shared/ui/StatusChip'
@@ -121,7 +125,7 @@ export function PoPaymentView() {
    * `RequireMenu` 가 이미 `read` 를 지켰으므로 여기 온 사람은 최소한 조회 권한이 있다. 이 화면이
    * 보는 동작은 `update` 하나다 — PO 승인과 입금 기록이 그것이다.
    */
-  const mayWrite = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')
+  const mayWrite = may(profile, NEOTMS_PERMISSION_PO_APPROVE)
   /*
    * Deleting a PO is PURCHASE_ORDER:delete, NOT a payment right, and the two are deliberately
    * different people. Approving money is this screen's own authority; destroying the record of
@@ -129,7 +133,7 @@ export function PoPaymentView() {
    * the same button. A payment clerk who may sign off an amount does not thereby get to remove
    * the order it was for.
    */
-  const mayDelete = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')
+  const mayDelete = may(profile, NEOTMS_PERMISSION_PO_DELETE)
 
   /**
    * 주소에 조건이 하나도 없으면 기본값으로 조회한다 — 머리글의 '기본값' 절 참고. 하나라도 있으면

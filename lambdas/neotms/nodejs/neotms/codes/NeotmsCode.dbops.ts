@@ -205,7 +205,7 @@ export const CodeAllOps: () => SqlOps<CodeRow[]> = () => ({
   * Every code, including inactive ones. The maintenance screen's listing.
  *
  * Separate from `CodeAllOps` rather than a parameter on it, so that "may see retired codes" is
- * decided by which route was reached - and therefore by `sys_role_auth` - instead of by a query
+ * decided by which route was reached - and therefore by the permission that route names - instead of by a query
  * string a caller controls. A boolean in the URL that widens a result set is a boolean somebody
  * will eventually set.
  */

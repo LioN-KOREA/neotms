@@ -5,11 +5,11 @@
 // ## This is the most dangerous endpoint in the application
 //
 // `PATCH /api/v0/admin/staff/:id` writes `staff.role_id`, and every permission in NEOTMS resolves
-// from that column through `sys_role_auth`. A caller who can reach this route can grant themselves
-// or anybody else the full menu x action matrix. That is not a flaw - somebody has to be able to
-// approve a new colleague - but it does mean the gate on the route table (
-// `menu: NeotmsMenu.STAFF`, `action: "update"`) is the single thing standing between a PM and total
-// control of the system.
+// from that column through `sys_role_permission`. A caller who can reach this route can grant
+// themselves or anybody else every permission there is. That is not a flaw - somebody has to be
+// able to approve a new colleague - but it does mean the gate on the route table
+// (`permission: NEOTMS_PERMISSION_STAFF_UPDATE`) is the single thing standing between a PM and
+// total control of the system.
 //
 // In LKTMS the equivalent value arrived in an unsigned cookie. The improvement is not merely that
 // it now lives in a table; it is that the write has exactly one statement (`StaffAdminUpdateOps`),
@@ -31,18 +31,26 @@
 // stop the last administrator demoting a DIFFERENT administrator. Either can leave the company with
 // nobody able to assign roles.
 //
-// A complete guard would be "refuse if this change leaves no active staff holding STAFF.update",
-// which needs a count over `sys_role_auth`. It is deliberately not implemented here, for one
-// specific reason: that count would have to read `role_3` as "update", and the ROLE_1..ROLE_5 ->
-// action mapping inherited from LKTMS is still UNCONFIRMED (see `ACTION_INDEX` in
-// NeotmsAuthGuard.ts). A security refusal built on an unverified column mapping either blocks
-// legitimate changes or permits the lockout it was written to prevent, and both are worse than the
-// documented recovery path:
+// A complete guard would be "refuse if this change leaves no active staff holding
+// NEOTMS_PERMISSION_STAFF_UPDATE". It is NOT implemented here, and the reason it used to give no
+// longer holds: the count needed a flag mapping (`role_3` read as "update") that was never
+// confirmed against the legacy source, and a security refusal built on an unverified mapping
+// either blocks legitimate changes or permits the lockout it was written to prevent.
 //
-//   SELECT staff_bootstrap_superuser(...); -- db/006_bootstrap.sql
+// With a flat permission list there is no mapping to be wrong about. The guard is now one query:
 //
-// which re-mints or repairs a superuser from the SQL editor. Confirm the action mapping and this
-// becomes a short query worth adding.
+//   SELECT count(*) FROM staff s
+//     JOIN sys_role_permission p ON p.role_id = s.role_id
+//    WHERE s.active AND NOT s.deleted
+//      AND p.permission = 'NEOTMS_PERMISSION_STAFF_UPDATE'
+//
+// db/003_access_control.sql section 4 runs exactly that check, as a migration-time abort, which is
+// where it was first needed. Adding it here is outstanding work, not a decision against it. Until
+// then the recovery path is the documented one:
+//
+//   SELECT staff_bootstrap_superuser(...); -- db/001_schemas.sql
+//
+// which re-mints or repairs a superuser from the SQL editor.
 
 import { pgExecute, pgQuery, sqlState } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";

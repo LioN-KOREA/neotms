@@ -3,9 +3,14 @@ import { useInvoices, useProfile } from '@/apis/queries/neotms.query'
 import { useDeleteInvoice } from '@/apis/queries/neotms.mutation'
 import { codeOptions, COIN_CODES, INVOICE_STATES, MONEY_STATES } from '@/apis/neotms.codes'
 import type { InvoiceRow } from '@/apis/neotms.types'
-import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { LIST_PAGE_SIZE } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
-import { mayDo } from '@/shared/permissions'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_INVOICE_CREATE,
+  NEOTMS_PERMISSION_INVOICE_DELETE,
+  NEOTMS_PERMISSION_INVOICE_UPDATE,
+} from '@/apis/neotms.authorities'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
@@ -89,9 +94,9 @@ export function InvoicePaymentView() {
    * 이 화면이 보는 동작은 셋이다 — `create` 가 인보이스 발행, `update` 가 수정, `delete` 가 취소.
    * PO 화면과 같은 `PAYMENT` 메뉴를 쓰고, 다섯 동작이 두 화면의 권한을 가른다(permissions.ts).
    */
-  const mayCreate = mayDo(profile, NeotmsMenuId.PAYMENT, 'create')
-  const mayUpdate = mayDo(profile, NeotmsMenuId.PAYMENT, 'update')
-  const mayDelete = mayDo(profile, NeotmsMenuId.PAYMENT, 'delete')
+  const mayCreate = may(profile, NEOTMS_PERMISSION_INVOICE_CREATE)
+  const mayUpdate = may(profile, NEOTMS_PERMISSION_INVOICE_UPDATE)
+  const mayDelete = may(profile, NEOTMS_PERMISSION_INVOICE_DELETE)
 
   /** 주소에 조건이 하나도 없을 때만 기본값 — `PoPaymentView` 의 '기본값' 절 참고. */
   const pristine = activeCount === 0

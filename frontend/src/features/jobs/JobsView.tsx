@@ -4,9 +4,14 @@ import { useCodeNames, useJobs, useProfile } from '@/apis/queries/neotms.query'
 import { useDeleteJob } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN, codeOptions, isLinguistic, JOB_STATES } from '@/apis/neotms.codes'
 import type { JobRow } from '@/apis/neotms.types'
-import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { LIST_PAGE_SIZE } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
-import { mayDo } from '@/shared/permissions'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_JOB_CREATE,
+  NEOTMS_PERMISSION_JOB_DELETE,
+  NEOTMS_PERMISSION_JOB_UPDATE,
+} from '@/apis/neotms.authorities'
 import { Amount } from '@/shared/ui/Amount'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
@@ -110,9 +115,9 @@ export function JobsView() {
     [rows],
   )
 
-  const mayCreate = mayDo(profile, NeotmsMenuId.JOB, 'create')
-  const mayUpdate = mayDo(profile, NeotmsMenuId.JOB, 'update')
-  const mayDelete = mayDo(profile, NeotmsMenuId.JOB, 'delete')
+  const mayCreate = may(profile, NEOTMS_PERMISSION_JOB_CREATE)
+  const mayUpdate = may(profile, NEOTMS_PERMISSION_JOB_UPDATE)
+  const mayDelete = may(profile, NEOTMS_PERMISSION_JOB_DELETE)
 
   const onSearch = (e: FormEvent) => {
     e.preventDefault()

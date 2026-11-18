@@ -4,9 +4,14 @@ import { useProfile, usePurchaseOrders } from '@/apis/queries/neotms.query'
 import { useDeletePurchaseOrder } from '@/apis/queries/neotms.mutation'
 import { codeOptions, INVOICE_STATES, MONEY_STATES, PO_STATES } from '@/apis/neotms.codes'
 import type { PurchaseOrderRow } from '@/apis/neotms.types'
-import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
+import { LIST_PAGE_SIZE } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
-import { mayDo } from '@/shared/permissions'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_PO_CREATE,
+  NEOTMS_PERMISSION_PO_DELETE,
+  NEOTMS_PERMISSION_PO_UPDATE,
+} from '@/apis/neotms.authorities'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
@@ -91,9 +96,9 @@ export function PurchaseOrdersView() {
     [rows],
   )
 
-  const mayCreate = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'create')
-  const mayUpdate = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'update')
-  const mayDelete = mayDo(profile, NeotmsMenuId.PURCHASE_ORDER, 'delete')
+  const mayCreate = may(profile, NEOTMS_PERMISSION_PO_CREATE)
+  const mayUpdate = may(profile, NEOTMS_PERMISSION_PO_UPDATE)
+  const mayDelete = may(profile, NEOTMS_PERMISSION_PO_DELETE)
 
   const onSearch = (e: FormEvent) => {
     e.preventDefault()

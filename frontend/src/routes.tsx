@@ -2,8 +2,21 @@ import type { ReactNode } from 'react'
 import { createBrowserRouter, Navigate, useLocation } from 'react-router'
 import { useProfile } from '@/apis/queries/neotms.query'
 import NeotmsApp from '@/NeotmsApp'
-import { NeotmsMenuId, type NeotmsMenuIdValue } from '@/shared/config'
-import { mayDo, readableNav } from '@/shared/permissions'
+import { hasAttribute, may, readableNav } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_CUSTOMER_READ,
+  NEOTMS_PERMISSION_DASHBOARD_PM_READ,
+  NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
+  NEOTMS_PERMISSION_INVOICE_READ,
+  NEOTMS_PERMISSION_JOB_READ,
+  NEOTMS_PERMISSION_MAINTENANCE_READ,
+  NEOTMS_PERMISSION_PO_READ,
+  NEOTMS_PERMISSION_PROJECT_READ,
+  NEOTMS_PERMISSION_REPORT_READ,
+  NEOTMS_PERMISSION_STAFF_READ,
+  NEOTMS_PERMISSION_TRANSLATOR_READ,
+  NEOTMS_USER_ATTRIBUTE_SUPERUSER,
+} from '@/apis/neotms.authorities'
 import { CallbackView } from '@/features/auth/CallbackView'
 import { LogoutView } from '@/features/auth/LogoutView'
 import { CustomersView } from '@/features/customers/CustomersView'
@@ -16,6 +29,7 @@ import { ProjectDetailView } from '@/features/projects/ProjectDetailView'
 import { ProjectsView } from '@/features/projects/ProjectsView'
 import { PurchaseOrdersView } from '@/features/purchaseorders/PurchaseOrdersView'
 import { ReportsView } from '@/features/reports/ReportsView'
+import { RolesView } from '@/features/roles/RolesView'
 import { StaffView } from '@/features/staff/StaffView'
 import { TranslatorsView } from '@/features/translators/TranslatorsView'
 import ui from '@/shared/ui/ui.module.css'
@@ -49,14 +63,20 @@ import ui from '@/shared/ui/ui.module.css'
  *
  * **이건 보안 장치가 아니다.** 모든 API 가 서버에서 같은 권한을 다시 확인한다.
  */
-function RequireMenu({ menuId, children }: { menuId: NeotmsMenuIdValue; children: ReactNode }) {
+function RequireMenu({
+  permission,
+  children,
+}: {
+  permission: string
+  children: ReactNode
+}) {
   const { data: profile, isLoading } = useProfile()
 
   // 셸이 이미 프로필을 기다렸으므로 여기서 로딩이 걸리는 일은 드물다. 다만 캐시가 비워진
   // 직후(로그아웃 → 재로그인)에는 가능하므로, 그 순간에 "권한 없음" 을 띄우지는 않는다.
   if (isLoading) return null
 
-  if (!mayDo(profile, menuId, 'read')) {
+  if (!may(profile, permission)) {
     return (
       <div className={ui.page}>
         {/*
@@ -69,6 +89,37 @@ function RequireMenu({ menuId, children }: { menuId: NeotmsMenuIdValue; children
         <h1 className={ui.pageTitle}>접근 권한이 없습니다</h1>
         <div className={`${ui.alert} ${ui.alertInfo}`} role="alert">
           이 메뉴에 대한 조회 권한이 없습니다. 필요하다면 시스템 담당자에게 요청해 주세요.
+        </div>
+      </div>
+    )
+  }
+
+  return <>{children}</>
+}
+
+/**
+ * 시스템관리자 속성이 없는 계정이 역할 관리 주소를 직접 열었을 때.
+ *
+ * `RequireMenu` 와 같은 일을 하지만 **다른 질문**을 한다. 역할 관리는 역할이 무엇을 뜻하는지를
+ * 바꾸는 화면이고, 그 문을 권한으로 지키면 그 권한을 가진 역할이 자기에게 나머지 권한을 전부
+ * 부여할 수 있다 — 자물쇠가 문 안쪽에 있는 셈이 된다. 그래서 서버도 이 엔드포인트들을 권한이
+ * 아니라 속성으로 막고(`NeotmsRoute.superuser`), 화면도 같은 질문을 한다.
+ *
+ * **이것도 보안 장치가 아니다.** 서버가 같은 확인을 다시 한다. 이 화면이 하는 일은 403 을
+ * "불러오지 못했습니다" 가 아니라 권한 문제로 읽히게 만드는 것뿐이다.
+ */
+function RequireSuperuser({ children }: { children: ReactNode }) {
+  const { data: profile, isLoading } = useProfile()
+
+  if (isLoading) return null
+
+  if (!hasAttribute(profile, NEOTMS_USER_ATTRIBUTE_SUPERUSER)) {
+    return (
+      <div className={ui.page}>
+        <h1 className={ui.pageTitle}>접근 권한이 없습니다</h1>
+        <div className={`${ui.alert} ${ui.alertInfo}`} role="alert">
+          역할의 권한을 바꾸는 화면은 <b>시스템관리자</b>만 열 수 있습니다. 역할 자체를 사람에게
+          배정하는 일은 <b>사용자 관리</b> 화면에서 하며, 그쪽은 '역할 배정' 권한으로 열립니다.
         </div>
       </div>
     )
@@ -119,7 +170,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'projects',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.PROJECT}>
+          <RequireMenu permission={NEOTMS_PERMISSION_PROJECT_READ}>
             <ProjectsView />
           </RequireMenu>
         ),
@@ -131,7 +182,7 @@ export const neotmsRouter = createBrowserRouter([
          */
         path: 'projects/:id',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.PROJECT}>
+          <RequireMenu permission={NEOTMS_PERMISSION_PROJECT_READ}>
             <ProjectDetailView />
           </RequireMenu>
         ),
@@ -139,7 +190,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'jobs',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.JOB}>
+          <RequireMenu permission={NEOTMS_PERMISSION_JOB_READ}>
             <JobsView />
           </RequireMenu>
         ),
@@ -147,7 +198,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'purchase-orders',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.PURCHASE_ORDER}>
+          <RequireMenu permission={NEOTMS_PERMISSION_PO_READ}>
             <PurchaseOrdersView />
           </RequireMenu>
         ),
@@ -155,7 +206,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'customers',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.CUSTOMER}>
+          <RequireMenu permission={NEOTMS_PERMISSION_CUSTOMER_READ}>
             <CustomersView />
           </RequireMenu>
         ),
@@ -163,7 +214,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'translators',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.TRANSLATOR}>
+          <RequireMenu permission={NEOTMS_PERMISSION_TRANSLATOR_READ}>
             <TranslatorsView />
           </RequireMenu>
         ),
@@ -188,7 +239,7 @@ export const neotmsRouter = createBrowserRouter([
          */
         path: 'dashboard/sales',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.DASHBOARD_SALES}>
+          <RequireMenu permission={NEOTMS_PERMISSION_DASHBOARD_SALES_READ}>
             <DashboardView role="sales" />
           </RequireMenu>
         ),
@@ -196,7 +247,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'dashboard/pm',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.DASHBOARD_PM}>
+          <RequireMenu permission={NEOTMS_PERMISSION_DASHBOARD_PM_READ}>
             <DashboardView role="pm" />
           </RequireMenu>
         ),
@@ -214,7 +265,7 @@ export const neotmsRouter = createBrowserRouter([
          */
         path: 'payment/purchase-orders',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.PAYMENT}>
+          <RequireMenu permission={NEOTMS_PERMISSION_INVOICE_READ}>
             <PoPaymentView />
           </RequireMenu>
         ),
@@ -222,7 +273,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'payment/invoices',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.PAYMENT}>
+          <RequireMenu permission={NEOTMS_PERMISSION_INVOICE_READ}>
             <InvoicePaymentView />
           </RequireMenu>
         ),
@@ -240,7 +291,7 @@ export const neotmsRouter = createBrowserRouter([
       {
         path: 'reports',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.REPORT}>
+          <RequireMenu permission={NEOTMS_PERMISSION_REPORT_READ}>
             <ReportsView />
           </RequireMenu>
         ),
@@ -253,7 +304,7 @@ export const neotmsRouter = createBrowserRouter([
          */
         path: 'maintenance',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.MAINTENANCE}>
+          <RequireMenu permission={NEOTMS_PERMISSION_MAINTENANCE_READ}>
             <MaintenanceView />
           </RequireMenu>
         ),
@@ -267,9 +318,21 @@ export const neotmsRouter = createBrowserRouter([
          */
         path: 'staff',
         element: (
-          <RequireMenu menuId={NeotmsMenuId.STAFF}>
+          <RequireMenu permission={NEOTMS_PERMISSION_STAFF_READ}>
             <StaffView />
           </RequireMenu>
+        ),
+      },
+      {
+        /*
+         * 역할 관리. 사이드바 항목은 `superuserOnly` 로 걸러지지만, 주소는 누구나 입력할 수
+         * 있으므로 경로에도 같은 게이트를 둔다.
+         */
+        path: 'roles',
+        element: (
+          <RequireSuperuser>
+            <RolesView />
+          </RequireSuperuser>
         ),
       },
       { path: '*', element: <NotFoundView /> },

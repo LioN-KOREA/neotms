@@ -3,8 +3,13 @@ import { useCodeNames, useCustomers, useProfile } from '@/apis/queries/neotms.qu
 import { useDeleteCustomer } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN } from '@/apis/neotms.codes'
 import type { CustomerRow } from '@/apis/neotms.types'
-import { LIST_PAGE_SIZE, NeotmsMenuId } from '@/shared/config'
-import { mayDo } from '@/shared/permissions'
+import { LIST_PAGE_SIZE } from '@/shared/config'
+import { may } from '@/shared/permissions'
+import {
+  NEOTMS_PERMISSION_CUSTOMER_CREATE,
+  NEOTMS_PERMISSION_CUSTOMER_DELETE,
+  NEOTMS_PERMISSION_CUSTOMER_UPDATE,
+} from '@/apis/neotms.authorities'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
 import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
@@ -56,9 +61,9 @@ export function CustomersView() {
     [customersQuery.data],
   )
 
-  const mayCreate = mayDo(profile, NeotmsMenuId.CUSTOMER, 'create')
-  const mayUpdate = mayDo(profile, NeotmsMenuId.CUSTOMER, 'update')
-  const mayDelete = mayDo(profile, NeotmsMenuId.CUSTOMER, 'delete')
+  const mayCreate = may(profile, NEOTMS_PERMISSION_CUSTOMER_CREATE)
+  const mayUpdate = may(profile, NEOTMS_PERMISSION_CUSTOMER_UPDATE)
+  const mayDelete = may(profile, NEOTMS_PERMISSION_CUSTOMER_DELETE)
 
   const onSearch = (e: FormEvent) => {
     e.preventDefault()

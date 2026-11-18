@@ -588,17 +588,6 @@ VALUES
   ('STAFF',       '사용자 관리', NULL, 1, '/staff',       8, true)
 ON CONFLICT (menu_id) DO NOTHING;
 
-COMMENT ON TABLE sys_menu IS
-  'Legacy SY_MENU -- the navigation tree, and the unit permissions are granted on. GET /api/v0/me '
-  'returns one entry per active row here, so a menu with no row is INVISIBLE AND FORBIDDEN with no '
-  'error anywhere: the sidebar omits it and every route gated on it answers 403. The ids the '
-  'application gates on are enumerated in lambdas/neotms/nodejs/neotms/NeotmsMenus.ts; the six '
-  'business menus are seeded by db/006_bootstrap.sql, the two administrative ones (MAINTENANCE, '
-  'STAFF) by db/008_admin.sql, and the two dashboards (DASHBOARD_SALES, DASHBOARD_PM) by '
-  'db/013_dashboard_menus.sql. After inserting any row here, re-run '
-  'sys_role_grant_all_menus(''NEOTMS_SYSADMIN'') -- grants written earlier do not cover menus added '
-  'later.';
-
 
 -- ---------------------------------------------------------------------
 -- 2. Re-grant the superuser role over the new menus
@@ -608,7 +597,7 @@ COMMENT ON TABLE sys_menu IS
 -- rights on anything added afterwards. This file is the first proof of
 -- that -- without the line below, the bootstrap superuser can see 유지보수
 -- in the sidebar (sys_menu has the row) and gets 403 from every request it
--- makes (sys_role_auth does not).
+-- makes (the permission list does not).
 --
 -- Idempotent, and it re-asserts all five action flags on every menu that
 -- exists when it runs.
@@ -646,17 +635,6 @@ VALUES
   ('DASHBOARD_PM',    '대시보드-PM',   NULL, 1, '/dashboard/pm',    10, true)
 ON CONFLICT (menu_id) DO NOTHING;
 
-COMMENT ON TABLE sys_menu IS
-  'Legacy SY_MENU -- the navigation tree, and the unit permissions are granted on. GET /api/v0/me '
-  'returns one entry per active row here, so a menu with no row is INVISIBLE AND FORBIDDEN with no '
-  'error anywhere: the sidebar omits it and every route gated on it answers 403. The ids the '
-  'application gates on are enumerated in lambdas/neotms/nodejs/neotms/NeotmsMenus.ts; the six '
-  'business menus are seeded by db/006_bootstrap.sql, the two administrative ones (MAINTENANCE, '
-  'STAFF) by db/008_admin.sql, and the two dashboards (DASHBOARD_SALES, DASHBOARD_PM) by '
-  'db/013_dashboard_menus.sql. After inserting any row here, re-run '
-  'sys_role_grant_all_menus(''NEOTMS_SYSADMIN'') -- grants written earlier do not cover menus added '
-  'later.';
-
 
 -- ---------------------------------------------------------------------
 -- 2. Re-grant the superuser role over the new menus
@@ -664,7 +642,7 @@ COMMENT ON TABLE sys_menu IS
 -- As in 008, and for the reason 006 gives: grants written once do not
 -- cover menus added afterwards. Without the line below the bootstrap
 -- superuser sees both 대시보드 entries in the sidebar (sys_menu has the
--- rows) and gets 403 from both (sys_role_auth does not).
+-- rows) and gets 403 from both (the permission list does not).
 --
 -- This re-grants the superuser ONLY. Deciding which other roles hold which
 -- dashboard is the point of splitting the menu in two, and it is done on
@@ -686,7 +664,7 @@ COMMENT ON TABLE sys_menu IS
 --   PURCHASE_ORDER, every PM who can raise a PO could approve their own --
 --   which is not an approval gate, it is a formality.
 --
---   A separate id makes "who may approve" a grant in sys_role_auth:
+--   A separate permission makes "who may approve" grantable on its own:
 --   assignable, revocable and auditable by the same mechanism as
 --   everything else, and changeable on the 사용자 관리 screen without a
 --   deploy. That matters here specifically because who holds this
@@ -704,17 +682,6 @@ INSERT INTO sys_menu (menu_id, menu_name, menu_parent, menu_depth, menu_url, ord
 VALUES
   ('PAYMENT', '결제', NULL, 1, '/payment', 11, true)
 ON CONFLICT (menu_id) DO NOTHING;
-
-COMMENT ON TABLE sys_menu IS
-  'Legacy SY_MENU -- the navigation tree, and the unit permissions are granted on. GET /api/v0/me '
-  'returns one entry per active row here, so a menu with no row is INVISIBLE AND FORBIDDEN with no '
-  'error anywhere: the sidebar omits it and every route gated on it answers 403. The ids the '
-  'application gates on are enumerated in lambdas/neotms/nodejs/neotms/NeotmsMenus.ts; the six '
-  'business menus are seeded by db/006_bootstrap.sql, the two administrative ones (MAINTENANCE, '
-  'STAFF) by db/008_admin.sql, the two dashboards (DASHBOARD_SALES, DASHBOARD_PM) by '
-  'db/013_dashboard_menus.sql, and 결제 (PAYMENT) by db/015_payment.sql. After inserting any row '
-  'here, re-run sys_role_grant_all_menus(''NEOTMS_SYSADMIN'') -- grants written earlier do not cover '
-  'menus added later.';
 
 
 -- ---------------------------------------------------------------------
@@ -745,7 +712,7 @@ COMMENT ON COLUMN sys_role.role_name IS
 
 
 -- ---------------------------------------------------------------------
--- 3. sys_role_grant_all_menus() -- "this role may do everything"
+-- 3. sys_role_grant_all_permissions() -- "this role may do everything"
 -- ---------------------------------------------------------------------
 -- A function rather than a flat INSERT, for one reason that only shows up
 -- later: `sys_menu` will grow. Today it has the six rows above; after the
@@ -757,14 +724,18 @@ COMMENT ON COLUMN sys_role.role_name IS
 -- So the grant is expressed as "every active menu, re-evaluated when
 -- asked", and the operating instruction is one line:
 --
---   SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN');
+--   SELECT sys_role_grant_all_permissions('NEOTMS_SYSADMIN');
 --
 -- Run it after any change to `sys_menu`, including the ETL. It is NOT a
 -- trigger on sys_menu on purpose: a trigger would grant rights as a side
 -- effect of loading a navigation row, and silently widening an
 -- authorization matrix is the one behaviour this schema refuses to have.
 
--- Grant the superuser role every menu seeded above. The function is defined in
--- 001; calling it here, once, after every menu exists, is what replaces the
--- four separate re-grant calls the old chain needed as menus were added.
-SELECT sys_role_grant_all_menus('NEOTMS_SYSADMIN') AS menus_granted;
+-- Grant the superuser role every permission this build knows. The function is
+-- defined in 001 and reads the vocabulary out of the CHECK on sys_role_permission,
+-- so this one call cannot fall behind the list the application compares against.
+--
+-- Menus are NOT granted here any more: sys_menu is navigation, and a screen is shown
+-- when its read permission is held. There is nothing left that could disagree with
+-- the permission set about whether a screen is reachable.
+SELECT sys_role_grant_all_permissions('NEOTMS_SYSADMIN') AS permissions_granted;

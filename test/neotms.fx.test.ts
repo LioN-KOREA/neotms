@@ -60,7 +60,11 @@ const caller: NeotmsCaller = {
   roleId: "1",
   roleCode: "NEOTMS_SYSADMIN",
   roleName: "시스템관리자",
-  permissions: new Map(),
+  // The permission set and the attributes are empty here: these fixtures exercise SQL
+  // building, which reads the caller for its row scope and nothing else.
+  permissions: new Set<string>(),
+  attributes: new Set<string>(),
+  isSuperuser: false,
   viewScope: "all",
   seesEveryRow: true,
 };

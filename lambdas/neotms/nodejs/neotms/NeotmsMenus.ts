@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 //
-// The menu ids permissions are granted on.
+// The menu ids the navigation tree is built from.
 //
-// `sys_role_auth` grants rights per `menu_id` x action, and `menu_id` is a legacy string from
-// SY_MENU - 48 of them. Every route in this API has to name the menu it belongs to, and this module
-// is the only place those strings appear. A route that names a menu inline is a route whose
-// permission check nobody can audit, and a typo in one is not a syntax error: `hasPermission`
-// returns false for an unknown menu, so the route simply refuses everyone, forever, with a message
-// that says "your role does not permit this".
+// `menu_id` is a legacy string from SY_MENU - 48 of them - and this module is the only place those
+// strings appear in TypeScript.
+//
+// These are NO LONGER what permissions are granted on. A role holds a flat list of permission
+// names (`sys_role_permission`, vocabulary in auth/NeotmsAuthorities.ts) and every route names the
+// one permission it needs; a menu is shown when its read permission is held. The ids below still
+// matter because `sys_menu` drives the sidebar and a missing row makes a screen unreachable - but a
+// typo in one is now a missing menu rather than a route that refuses everybody.
 //
 // ## UNCONFIRMED: the values below are the intended ids, not verified legacy ones
 //
@@ -62,10 +64,10 @@ export const NeotmsMenu = {
    * and `staff.view_scope` decides whether somebody sees their own rows or everybody's. A role
    * granted here is a role granted everywhere.
    *
-   * Which is also why it is a menu and not a hardcoded "superuser may do this" check. The right to
-   * assign roles is itself a grant in `sys_role_auth`, so it can be given, taken away, and audited
-   * by the same mechanism as everything else - rather than being an implicit property of a role
-   * code that nothing enumerates.
+   * Which is also why it is permissioned and not a hardcoded "superuser may do this" check. The
+   * right to assign roles is itself a grant - `NEOTMS_PERMISSION_STAFF_UPDATE` - so it can be
+   * given, taken away, and audited by the same mechanism as everything else, rather than being an
+   * implicit property of a role code that nothing enumerates.
    */
   STAFF: "STAFF",
   /**
@@ -76,8 +78,8 @@ export const NeotmsMenu = {
    * Because the requirement is "each person sees the one that matches their position", and one menu
    * id cannot say that. A single `DASHBOARD` grant would be all-or-nothing: a PM who is granted it
    * also gets the sales screen, and withholding it takes away the screen they actually need. Two
-   * ids make the two screens two separately grantable things, which is what `sys_role_auth` is for
-   * - and a system administrator simply holds both.
+   * ids make the two screens two separately grantable things - `DASHBOARD_SALES_READ` and
+   * `DASHBOARD_PM_READ` - and a system administrator simply holds both.
    *
    * These are not more permissive than `PROJECT`, which is what these two routes were gated on
    * before. Every figure on either screen is an aggregate over the caller's own project, job and PO
@@ -110,17 +112,19 @@ export const NeotmsMenu = {
    * formality. `purchase_order.po_approved` is therefore writable ONLY through this menu, and an
    * unapproved PO cannot be printed or sent.
    *
-   * Making it a menu rather than a hardcoded role check is the same argument `STAFF` makes: who may
-   * approve becomes a row in `sys_role_auth`, assignable and revocable on the staff administration
-   * screen without a deploy, and visible to the same audit as everything else. That matters here
-   * specifically because who holds this authority is still being decided.
+   * Making it a grant rather than a hardcoded role check is the same argument `STAFF` makes: who
+   * may approve becomes a row in `sys_role_permission`, assignable and revocable on the staff
+   * administration screen without a deploy, and visible to the same audit as everything else. That
+   * matters here specifically because who holds this authority is still being decided.
    *
-   * ## What the five action flags mean here
+   * ## The permissions behind these screens
    *
-   * `read` sees the payment screens and the printable PO and invoice documents; `update` approves a
-   * PO and records a payment against one; `create` issues a translator invoice; `delete` voids one.
-   * Nothing on this menu edits a PO's amounts - those stay on `PURCHASE_ORDER`, so a person who may
-   * approve money is not thereby a person who may change it.
+   * `INVOICE_READ` sees the payment screens and the printable PO and invoice documents;
+   * `PO_APPROVE` signs off a purchase order; `INVOICE_CREATE` issues a translator invoice and
+   * `INVOICE_DELETE` voids one; `INVOICE_UPDATE` records a payment. Approving used to share one
+   * grant with recording a payment, which is exactly what `PO_APPROVE` exists to separate.
+   * Nothing here edits a PO's amounts - that is `PO_UPDATE` - so a person who may approve money is
+   * not thereby a person who may change it.
    *
    * Seeded by db/015_payment.sql, which also re-grants NEOTMS_SYSADMIN. See DASHBOARD_SALES above
    * for why a missing `sys_menu` row is a silent failure rather than an error.
