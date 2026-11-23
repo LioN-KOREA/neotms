@@ -29,6 +29,23 @@ import { RolePermissionsModal } from './RolePermissionsModal'
  * "로그인이 안 된다" 고 말한다. 목록에서 0개 역할에 경고를 붙이는 것이 그 전화를 막는 유일한
  * 장치다.
  */
+/**
+ * The code as the table shows it. A minted code is abbreviated.
+ *
+ * Role codes are surrogate keys now (`newRoleCode()` - `ROLE_` plus 32 hexadecimal digits), and
+ * printing all 37 characters makes the widest column in the table the one that MEANS NOTHING. What
+ * somebody is actually looking for is the role name to its left.
+ *
+ * Reserved codes (`NEOTMS_SYSADMIN`, the ones carried over from legacy) are short and meaningful,
+ * so they are printed in full - "which row is the system administrator" is the only real question
+ * this column answers.
+ *
+ * The abbreviated value carries the whole code in `title`, so anybody who has to copy one can hover
+ * or open the edit form.
+ */
+const shortCode = (code: string): string =>
+  /^ROLE_[0-9A-F]{32}$/.test(code) ? `${code.slice(0, 13)}…` : code
+
 export function RolesView() {
   const grantsQuery = useRoleGrants()
   const updateRole = useUpdateRole()
@@ -148,7 +165,9 @@ export function RolesView() {
                   <td>
                     {role.roleName || <span className={ui.cellMuted}>(이름 없음)</span>}
                   </td>
-                  <td className={ui.cellMono}>{role.roleCode}</td>
+                  <td className={ui.cellMono} title={role.roleCode}>
+                    {shortCode(role.roleCode)}
+                  </td>
                   <td>
                     {role.permissions.length === 0 ? (
                       <span className={`${ui.badge} ${ui.badgeWarn}`}>없음</span>

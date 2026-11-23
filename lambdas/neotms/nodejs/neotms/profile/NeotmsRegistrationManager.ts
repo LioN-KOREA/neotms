@@ -7,11 +7,23 @@
 // creates one cannot itself require one. See the header of NeotmsProfileManager for the deadlock
 // that produced both.
 //
-// WHAT THIS CREATES IS A REQUEST, NOT AN ACCOUNT. The row arrives with `role_id IS NULL`, which
-// means an empty permission matrix, which means every menu-gated route still refuses it. The only
-// thing that changes is that `/api/v0/me` starts answering `pending` instead of `unregistered`, so
-// the SPA swaps the sign-up form for the waiting notice. Approval is a separate act by a separate
-// person on the staff administration screen, and nothing in this file can perform it.
+// FOR ALMOST EVERYBODY, WHAT THIS CREATES IS A REQUEST AND NOT AN ACCOUNT. The row arrives with
+// `role_id IS NULL`, which means an empty permission matrix, which means every menu-gated route
+// still refuses it. The only thing that changes is that `/api/v0/me` starts answering `pending`
+// instead of `unregistered`, so the SPA swaps the sign-up form for the waiting notice. Approval is
+// a separate act by a separate person on the staff administration screen, and nothing in this file
+// can perform it.
+//
+// THE ONE EXCEPTION is an account holding the LPX bootstrap authority (`lpx.admin.access`), which
+// is approved on submission: `staff_self_register_bootstrap()` writes the NEOTMS_SYSADMIN role and
+// a `view_scope` of 'Y', and the same response reports `active` rather than `pending`. It is not a
+// shortcut granted as a courtesy. That authority exists so an empty or locked-out NEOTMS has a way
+// in, and a way in that queues for an approval from the people who cannot sign in is not one.
+//
+// Everything about that exception is decided from the TOKEN. `holdsBootstrapAuthority()` reads the
+// authority list the account system returned for a verified identity; `SelfProfileSchema` has no
+// field that could influence it, and neither SQL function takes a role, a scope or an active flag
+// as an argument.
 //
 // There is deliberately no administrator-facing POST anywhere in the application to pair with this
 // one. A staff row is only usable once it carries an `lpx_sub`, and `lpx_sub` is an OIDC subject
@@ -20,13 +32,24 @@
 // Self-registration is not a convenience here; it is the only path a new employee has.
 //
 // The three columns that decide what this row may do - `role_id`, `view_scope`, `active` - are not
-// parameters of anything in this file. They are literals inside `staff_self_register()`, in
-// db/009_selfservice.sql, next to the constraints that bound them. A self-service form that could
-// write any of them would be the unsigned-role-cookie defect rebuilt with better manners.
+// parameters of anything in this file. They are literals inside the two functions, in db/001's
+// self-service block, next to the constraints that bound them. That is also why there are TWO
+// functions rather than one with a boolean: a flag selecting between two sets of literals is still
+// an argument that selects a permission level, and the next person to widen it would have a
+// precedent to point at instead of a prohibition. A self-service form that could write any of those
+// three columns would be the unsigned-role-cookie defect rebuilt with better manners.
 
-import { StaffSelfRegisterOps } from "../../auth/NeotmsStaff.dbops.js";
-import { resolveRegistration, type LpxIdentity } from "../../auth/NeotmsAuthGuard.js";
+import {
+  StaffSelfRegisterBootstrapOps,
+  StaffSelfRegisterOps,
+} from "../../auth/NeotmsStaff.dbops.js";
+import {
+  holdsBootstrapAuthority,
+  resolveRegistration,
+  type LpxIdentity,
+} from "../../auth/NeotmsAuthGuard.js";
 import type { ResponseData } from "../../reqres/RequestResponse.js";
+import { NeotmsEnv } from "../../env/NeotmsEnv.js";
 import { pgQuery } from "../../utils/PostgresUtils.js";
 import type { SelfProfile } from "../neotms.schemas.js";
 import { runDb } from "../NeotmsResult.js";
@@ -114,7 +137,44 @@ export async function registerSelf(
       } satisfies ResponseData<string>;
     }
 
-    await pgQuery(StaffSelfRegisterOps(identity.sub, input, ip));
+    /*
+     * The one decision this route makes, and it is made from the TOKEN, never from the body.
+     *
+     * `holdsBootstrapAuthority` reads the authority list the account system returned for this
+     * verified identity. `SelfProfileSchema` has no field that could influence it, and neither SQL
+     * function takes a role, a scope or an active flag as an argument - so the only way to be
+     * approved on arrival is to actually hold `lpx.admin.access` at the moment of submission.
+     *
+     * Why an administrator is not left in the queue like everybody else: there may be nobody in the
+     * queue's other end. This is the authority that exists so an empty or locked-out NEOTMS has a
+     * way in, and a way in that waits for an approval from the people who cannot sign in is not one.
+     */
+    const bootstrapAdmin = holdsBootstrapAuthority(identity.account);
+    const staffId = (
+      await pgQuery(
+        bootstrapAdmin
+          ? StaffSelfRegisterBootstrapOps(identity.sub, input, ip)
+          : StaffSelfRegisterOps(identity.sub, input, ip),
+      )
+    ).data;
+
+    if (bootstrapAdmin) {
+      /*
+       * THE AUDIT RECORD, and the only one that exists for this event.
+       *
+       * The row itself carries `created_by = 'lpx-bootstrap-signup'`, which a review query can
+       * find, but it cannot say WHICH authority let them in or which identity they arrived as.
+       * `console.warn` rather than `info` so it survives a log level raised to quiet the request
+       * log: this should be a handful of lines at go-live and then never, and a reader who finds a
+       * fresh one months later should feel what they would feel at a sudo entry.
+       */
+      console.warn(
+        `NEOTMS BOOTSTRAP: the authority ${NeotmsEnv.NEOTMS_BOOTSTRAP_AUTHORITY_ID} approved the ` +
+          `sign-up of staff ${staffId ?? "?"} for the identity ${identity.sub} ` +
+          `(${identity.account.email || "no email"}) on submission, with the ` +
+          `NEOTMS_SYSADMIN role and no approval by anybody in NEOTMS.`,
+      );
+    }
 
     /*
      * Re-read through `getProfile`, so there is exactly one thing in this codebase that builds a

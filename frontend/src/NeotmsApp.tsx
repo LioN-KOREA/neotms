@@ -127,7 +127,13 @@ function Shell({ onLogout }: { onLogout: () => void }) {
    * 가 먼저 받고, 그 본문("관리자에게 문의하십시오")이 그대로 보인다.
    */
   if (profile?.registration === 'unregistered') {
-    return <SignupView prefill={profile.prefill} onLogout={onLogout} />
+    return (
+      <SignupView
+        prefill={profile.prefill}
+        bootstrapAdmin={profile.bootstrapAdmin === true}
+        onLogout={onLogout}
+      />
+    )
   }
   if (profile?.registration === 'pending') {
     /*

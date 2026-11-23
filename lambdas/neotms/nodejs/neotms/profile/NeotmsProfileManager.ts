@@ -29,6 +29,7 @@
 
 import { pgQuery } from "../../utils/PostgresUtils.js";
 import {
+  holdsBootstrapAuthority,
   resolveRegistration,
   type LpxIdentity,
   type NeotmsCaller,
@@ -89,6 +90,14 @@ export type ProfileView = {
   prefill: ProfilePrefill;
   /** The OIDC subject. The one field that is known before registration. */
   sub: string;
+  /**
+   * Whether submitting the sign-up form will be approved on the spot.
+   *
+   * True for a holder of the LPX bootstrap authority, and only sent with `unregistered`, which is
+   * the one state in which the answer changes what the screen should say. See
+   * `staff_self_register_bootstrap()` in db/001 for what "approved" means here.
+   */
+  bootstrapAdmin?: boolean;
   staffId?: string;
   /** Legacy `MGR_ID`. Shown because it is the identifier colleagues and old documents use. */
   mgrId?: string;
@@ -179,6 +188,20 @@ export async function getProfile(
         registration: "unregistered",
         prefill,
         sub: identity.sub,
+        /*
+         * Sent so the sign-up form can tell the truth about what submitting it will do.
+         *
+         * Without this the form promises "관리자 승인 후 사용할 수 있습니다" to somebody who will be
+         * using the system a second later, and the confirmation screen says their request has been
+         * queued for a review that is not going to happen. Neither sentence is harmful; both are
+         * wrong, and being told you are waiting when you are not is how somebody concludes the
+         * screen is broken and signs up again.
+         *
+         * It is a label, not a capability. It says what the account system already says about this
+         * account, the approval itself is decided again on the server when the form is submitted,
+         * and a client that sets it on itself gains nothing.
+         */
+        bootstrapAdmin: holdsBootstrapAuthority(identity.account),
         menus: [],
         permissions: [],
         attributes: [],

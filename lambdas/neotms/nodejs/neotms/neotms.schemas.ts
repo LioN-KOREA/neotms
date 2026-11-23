@@ -915,38 +915,46 @@ export const RecentSearchForgetSchema = v.object({
  * space or a quote in it is a code somebody has to remember to quote correctly in a migration a
  * year from now. The shape is also what makes the codes legible in `created_by` audit values.
  */
-const RoleCodeSchema = v.pipe(
-  v.string(),
-  v.trim(),
-  v.minLength(2),
-  v.maxLength(50),
-  v.regex(
-    /^[A-Z][A-Z0-9_]*$/u,
-    "A role code is upper-case letters, digits and underscores, starting with a letter",
-  ),
-);
-
 /**
  * Creating a role.
  *
- * It grants nothing until permissions are written for it, and that is the safe direction - see
- * `RoleCreateOps`. `active` defaults to true at the database rather than here, so omitting it
- * means "a normal, assignable role".
+ * ## There is no `roleCode` field, and that is the whole of this object's design
+ *
+ * `sys_role.role_code` is a surrogate key - nothing about a role is encoded in it - so asking an
+ * administrator to invent one asked them for a value whose rules they had no reason to know. The
+ * two failures were not hypothetical: a Korean label typed into the box is refused by the regex
+ * that used to live here, which reads as the form being broken, and a plausible-looking code typed
+ * in a hurry is PERMANENT, because nothing in this system can rename one. `newRoleCode()` in
+ * NeotmsRoleAdmin.dbops.ts mints it instead.
+ *
+ * `roleName` is therefore required, where it used to be optional. It is now the only thing that
+ * distinguishes one role from another on screen: with a minted code, a role with no name shows as
+ * a line of hexadecimal in the assignment dropdown, which nobody can act on.
+ *
+ * The role still grants nothing until permissions are written for it - the safe direction, see
+ * `RoleCreateOps`. `active` defaults to true at the database rather than here, so omitting it means
+ * "a normal, assignable role".
  */
 export const RoleAdminCreateSchema = v.object({
-  roleCode: RoleCodeSchema,
-  roleName: settable(text(100)),
+  roleName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(100)),
   active: v.optional(v.boolean()),
 });
 
 /**
- * Editing a role. `roleCode` is absent, and the omission is the security-relevant part.
+ * Editing a role. There is no `roleCode` here either, and for a second reason.
  *
- * `v.partial(v.omit(...))` rather than a hand-written object, so a field added above cannot be
- * forgotten here - the same shape `CodeUpdateSchema` uses, for the same reason. What a rename would
- * break is set out on `ROLE_ADMIN_FIELDS` in NeotmsRoleAdmin.dbops.ts.
+ * Minting the code means nobody can supply a wrong one on create; this is what stops anybody
+ * CHANGING one afterwards. Three things resolve a role by its code -
+ * `staff_bootstrap_superuser()` and `staff_self_register_bootstrap()` look up the role to give an
+ * administrator, the seed re-asserts grants `ON CONFLICT (role_code)`, and
+ * `sys_role_grant_all_permissions(text)` takes one as its argument - and a rename leaves all three
+ * looking for a row that no longer answers, silently, until the day somebody needs the way back in.
+ *
+ * `v.partial(...)` of the create object rather than a hand-written one, so a field added above
+ * cannot be forgotten here. Note what `partial` does NOT do: `roleName` stays non-nullable, so an
+ * edit may leave the name alone but cannot blank it.
  */
-export const RoleAdminUpdateSchema = v.partial(v.omit(RoleAdminCreateSchema, ["roleCode"]));
+export const RoleAdminUpdateSchema = v.partial(RoleAdminCreateSchema);
 
 /**
  * The complete permission set a role should have after this request.

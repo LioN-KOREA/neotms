@@ -611,7 +611,7 @@ CREATE TABLE sys_role (
 COMMENT ON TABLE  sys_role IS
   'Permission role. Legacy SY_ROLE. A staff member has exactly one role (staff.role_id), and the role determines what they may do (sys_role_permission). What they may BE named as is separate and per-person -- see staff_attribute.';
 COMMENT ON COLUMN sys_role.role_code IS
-  'Legacy SY_ROLE.ROLE_ID, renamed to role_code to avoid colliding with the surrogate id. Natural key; staff rows and the permission tables were keyed on this string in legacy.';
+  'Legacy SY_ROLE.ROLE_ID, renamed to role_code to avoid colliding with the surrogate id. Natural key; staff rows and the permission tables were keyed on this string in legacy. NOT typed in by anybody any more: a role created through the 역할 관리 screen gets a minted code (newRoleCode() in NeotmsRoleAdmin.dbops.ts -- ''ROLE_'' plus a UUID), because the value is a surrogate and asking an administrator for one asked them to follow rules they had no reason to know, permanently. Only the RESERVED codes carry meaning -- NEOTMS_SYSADMIN, which two functions and the seed resolve by name, and the codes the ETL carried over from legacy. Nothing can rename one; the human-readable label is role_name.';
 COMMENT ON COLUMN sys_role.active IS 'Legacy STATE (Y/N).';
 
 
@@ -2394,6 +2394,16 @@ COMMENT ON FUNCTION sys_role_grant_all_permissions(text) IS
 --   this a reliable way back in -- but it means the real revocation is
 --   removing the authority on LPX, not editing a row here. Section 5
 --   below is how you check who has been let in this way.
+--
+-- WHICH BRANCHES THE APPLICATION STILL REACHES
+--   Only (a). The guard calls this for a row that EXISTS and cannot be
+--   used -- inactive, or no role -- because an identity with NO row is now
+--   offered the sign-up form instead and approved there, through
+--   staff_self_register_bootstrap() in section 2 of the next block. So (b)
+--   adopt-by-email and (c) mint are reachable only BY HAND, from psql,
+--   which is also what makes this function the documented manual way in
+--   when the console cannot be loaded at all. Do not delete them on the
+--   grounds that nothing calls them.
 CREATE OR REPLACE FUNCTION staff_bootstrap_superuser(
   p_lpx_sub text,
   p_email   text,
@@ -2896,6 +2906,156 @@ COMMENT ON COLUMN staff.created_by IS
   'does NOT mark a row that function ADOPTED -- an adopted legacy row keeps the ETL''s provenance, '
   'which is the more useful fact about it. Review both; see section 5 of db/006_bootstrap.sql and '
   'section 2 of db/009_selfservice.sql.';
+
+
+-- ---------------------------------------------------------------------
+-- 2. staff_self_register_bootstrap() -- an LPX admin signs up, and is
+--    approved on the spot
+-- ---------------------------------------------------------------------
+-- Called by POST /api/v0/registration INSTEAD of staff_self_register()
+-- when, and only when, the verified LPX account holds the bootstrap
+-- authority (`lpx.admin.access`, NEOTMS_BOOTSTRAP_AUTHORITY_ID). Returns
+-- staff.id, like its sibling.
+--
+-- WHY A SECOND FUNCTION AND NOT A FLAG ON THE FIRST
+--   The obvious shape is `staff_self_register(..., p_bootstrap boolean)`.
+--   It is refused here, and the reason is written down in section 1 and
+--   pinned by a test: staff_self_register() is THE ONE WRITE PATH AN
+--   UNAPPROVED ACCOUNT CAN REACH, and the three columns that decide what
+--   a row may do -- role_id, view_scope, active -- are literals in its
+--   body precisely so that no argument can influence them. A boolean that
+--   selects between two sets of literals is still an argument that
+--   selects a permission level, and the next person to widen it would
+--   have a precedent rather than a prohibition to argue with.
+--
+--   So the two paths are two functions, each with its own literals, and
+--   the choice between them is made in TypeScript from a verified
+--   authority list that SQL cannot see.
+--
+-- WHY IT WRAPS RATHER THAN COPIES
+--   Everything hard about minting a staff row -- the mgr_id collision
+--   loop, the unique_violation handler, the double-submit race -- lives
+--   in staff_self_register(). Copying it would make a third copy (the
+--   second is in staff_bootstrap_superuser) of logic whose bugs are
+--   invisible until two people sign up in the same second. This calls it
+--   and then finishes the row, all inside one function, therefore one
+--   statement, therefore one transaction under the pooler.
+--
+-- WHAT "APPROVED ON THE SPOT" MEANS, EXACTLY
+--   role_id = the NEOTMS_SYSADMIN role, view_scope = 'Y'. The same two
+--   values staff_bootstrap_superuser() hands out, for the same reason: a
+--   superuser whose view_scope is not 'Y' can open every screen and see
+--   nothing on any of them.
+--
+--   It does NOT write staff_attribute. The superuser OVERRIDE already
+--   follows the authority at request time -- see `isSuperuser` in
+--   NeotmsAuthGuard -- so storing it here would outlive the authority and
+--   turn "revoke it on LPX" into a revocation that no longer revokes.
+--
+-- THE CONSEQUENCE, STATED PLAINLY
+--   An account that holds lpx.admin.access can give itself a NEOTMS
+--   administrator account by filling in a form. That is not new -- such a
+--   holder can already grant themselves the NEOTMS app authority on LPX,
+--   and staff_bootstrap_superuser() has let them in silently since day
+--   one. What changes is that it now leaves a form submission and the row
+--   below, instead of happening invisibly at sign-in.
+CREATE OR REPLACE FUNCTION staff_self_register_bootstrap(
+  p_lpx_sub  text,
+  p_name     text,
+  p_name_eng text,
+  p_email    text,
+  p_phone    text,
+  p_position text,
+  p_ip       text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $fn$
+DECLARE
+  /* `p_`/`v_` prefixes, for the reason section 1 gives -- a local named
+   * like a column raises "column reference is ambiguous" at CALL time,
+   * not at CREATE time. */
+  v_role_id  bigint;
+  v_existing bigint;
+  v_staff_id bigint;
+BEGIN
+  SELECT id INTO v_role_id FROM sys_role WHERE role_code = 'NEOTMS_SYSADMIN';
+  IF v_role_id IS NULL THEN
+    RAISE EXCEPTION
+      'staff_self_register_bootstrap: the NEOTMS_SYSADMIN role is missing. '
+      'Apply db/002_initial_seeding.sql -- an administrator cannot be '
+      'approved into a role that does not exist.';
+  END IF;
+
+  /* ------------------------------------------------------------------ *
+   * Was there a row before this call? The question has to be asked HERE,
+   * because the next line creates one.
+   *
+   * It decides between finishing a row this call made -- which is ours to
+   * set, nobody has configured it -- and repairing one that already
+   * existed, where an explicit role or view_scope is somebody's decision
+   * and must not be overwritten by a sign-up form.
+   * ------------------------------------------------------------------ */
+  SELECT id INTO v_existing FROM staff WHERE lpx_sub = p_lpx_sub;
+
+  v_staff_id := staff_self_register(
+                  p_lpx_sub, p_name, p_name_eng, p_email, p_phone, p_position, p_ip);
+
+  IF v_existing IS NULL THEN
+    /* The row was minted a line ago with role_id NULL and view_scope 'N'
+     * -- an approval request. Finish it as an administrator's account.
+     *
+     * created_by gets its own marker rather than reusing 'lpx-bootstrap'.
+     * Both mean "this account let itself in", but they are different
+     * events: 'lpx-bootstrap' is a row minted SILENTLY at sign-in, this
+     * one is a form somebody filled in. An auditor reading the column
+     * should be able to tell which, because only one of them has a name,
+     * a phone number and a position that a person typed. */
+    UPDATE staff
+       SET role_id    = v_role_id,
+           view_scope = 'Y',
+           created_by = 'lpx-bootstrap-signup',
+           updated_at = now()
+     WHERE id = v_staff_id;
+  ELSE
+    /* A row already existed, so this is a RACE or a stale tab -- the
+     * application answers 409 before calling anything when it can see the
+     * row, and the console never shows the form to an identity that has
+     * one. Repair it the way the sign-in path would, which COALESCEs and
+     * therefore never overrides a deliberate role or scope. */
+    PERFORM staff_bootstrap_superuser(p_lpx_sub, p_email, p_name);
+  END IF;
+
+  RETURN v_staff_id;
+END;
+$fn$;
+
+COMMENT ON FUNCTION staff_self_register_bootstrap(text, text, text, text, text, text, text) IS
+  'Creates a NEOTMS staff row for one verified OIDC identity that has none, ALREADY APPROVED -- '
+  'role_id = NEOTMS_SYSADMIN, view_scope = ''Y'' -- and returns staff.id. Called by '
+  'POST /api/v0/registration only for an account holding the LPX bootstrap authority '
+  '(lpx.admin.access), which the application establishes from a verified authority list; SQL '
+  'cannot see it. Wraps staff_self_register() rather than copying its mgr_id minting, and finishes '
+  'only a row this call created -- a pre-existing row is repaired through '
+  'staff_bootstrap_superuser(), which never overrides a deliberate role or view_scope. Does not '
+  'write staff_attribute: the superuser override follows the LPX authority at request time, so '
+  'storing it would survive revoking the authority.';
+
+-- A restatement, not an addition -- `COMMENT ON` takes a literal and
+-- overwrites. The third reserved value is the one this section adds.
+COMMENT ON COLUMN staff.created_by IS
+  'Legacy REG_ID -- the mgr_id of whoever created the row. Plain text, not an FK, because '
+  'historical rows reference mgr_ids that no longer exist. THREE values are reserved, and all '
+  'three mark a row created with NO NEOTMS ADMINISTRATOR INVOLVED. ''lpx-bootstrap'': MINTED at '
+  'sign-in by staff_bootstrap_superuser() for a holder of LPX''s lpx.admin.access authority, '
+  'silently, holding the superuser role. ''lpx-bootstrap-signup'': the same authority, but through '
+  'the sign-up form -- staff_self_register_bootstrap() -- so the row carries a name, a phone '
+  'number and a position somebody typed, and is likewise approved on arrival. '
+  '''self-registration'': staff_self_register(), which arrives with role_id = NULL and can do '
+  'nothing until somebody approves it -- the only one of the three that is not immediate access. '
+  'Note ''lpx-bootstrap'' does NOT mark a row that function ADOPTED: an adopted legacy row keeps '
+  'the ETL''s provenance, which is the more useful fact about it. Review all three.';
 
 
 -- =====================================================================

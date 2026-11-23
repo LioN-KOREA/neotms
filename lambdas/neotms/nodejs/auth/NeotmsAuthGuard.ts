@@ -201,7 +201,7 @@ export async function lookupAccount(accessToken: string, sub: string): Promise<A
  * `bootstrapSuperuser` below, which provisions a real staff row with a real role - so the
  * permissions that follow are read back out of the database like everyone else's.
  */
-function holdsBootstrapAuthority(account: AccountInfo): boolean {
+export function holdsBootstrapAuthority(account: AccountInfo): boolean {
   const authority = NeotmsEnv.NEOTMS_BOOTSTRAP_AUTHORITY_ID.trim();
   if (!authority) return false;
   return account.authorities.includes(authority);
@@ -453,7 +453,33 @@ async function resolveCallerState(sub: string, account: AccountInfo): Promise<Ca
    * them. The eligibility test has to see the row, not the absence of one.
    */
   const unusable = whyUnusable(staff);
-  if (unusable && holdsBootstrapAuthority(account)) {
+  /*
+   * NOT for "missing", and that exclusion is the point of this branch rather than an oversight.
+   *
+   * A holder of the bootstrap authority with NO staff row used to be minted one right here,
+   * silently, on their first request: they never saw the sign-up form, so NEOTMS never learned the
+   * English name that goes on foreign documents, the phone number or the position - and the only
+   * record of the event was a log line. They now fall through to `unregistered` and are offered the
+   * same form as everybody else, and `POST /api/v0/registration` recognises the authority and
+   * approves the row on submission through `staff_self_register_bootstrap()`. The same destination,
+   * one screen earlier, with the fields filled in by the person they describe.
+   *
+   * What remains here are the two states with no form to offer. An `inactive` row is never shown
+   * the sign-up form on purpose - minting a second row for somebody an administrator switched off
+   * would hand back the access that was removed - and a `no role` row already has a session, the
+   * waiting screen, so there is nothing to submit. Both are repairs of a row that EXISTS, and both
+   * are still the way back in for an administrator who has locked themselves out of NEOTMS.
+   *
+   * WHAT IS LOST, SAID PLAINLY. `staff_bootstrap_superuser()` can adopt an unclaimed legacy row by
+   * email; `staff_self_register_bootstrap()` cannot, because it inherits that refusal from the
+   * function it wraps. The just-in-time link above still adopts an ACTIVE unclaimed row on every
+   * sign-in, so what is no longer adopted is narrow: an administrator whose legacy row arrived from
+   * the ETL inactive or soft-deleted now gets a fresh row rather than their old one, and their
+   * history stays under the old `mgr_id` until somebody merges the two by hand. The alternative was
+   * an adopt-by-email branch inside the one write path an unapproved account can reach, which is
+   * exactly what db/001 section 1(b) refuses and explains at length.
+   */
+  if (unusable && unusable !== "missing" && holdsBootstrapAuthority(account)) {
     // Only on success, so a bootstrap that did not take leaves the caller exactly where they would
     // have been without it. The "no role" case is the one that matters: that row is active, and
     // overwriting it with a null would turn a session with no permissions into no session at all -

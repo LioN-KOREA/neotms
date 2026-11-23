@@ -13,29 +13,33 @@ import { Modal } from '@/shared/ui/Modal'
 import ui from '@/shared/ui/ui.module.css'
 
 /**
- * 번역가에게 의뢰 메일을 보낸다.
+ * Send a translator the mail that commissions their job.
  *
- * ## 본문은 서버가 만든다
+ * ## The server composes the body
  *
- * 화면이 모으는 것은 사람이 정해야 하는 것들뿐이다 — 문서 형태 두 줄, 요청사항, 받는 사람,
- * 첨부파일, 그리고 Hiworks 자격증명. 언어·분량·납품일정은 PO 에 이미 있으므로 서버가 꺼내
- * 채운다. 화면에서 다시 입력받으면 같은 사실이 두 곳에 있게 되고, 둘이 어긋났을 때 번역가에게
- * 가는 쪽은 사람이 급히 친 쪽이 된다.
+ * This screen collects only what a PERSON has to decide - the two document-format rows, the
+ * request note, the recipient, the files, and the Hiworks credentials. Languages, volume and the
+ * delivery schedule are already on the PO, so the server reads them from there. Asking for them
+ * again would put one fact in two places, and the copy that reached the translator would be the one
+ * somebody typed in a hurry.
  *
- * ## 첨부는 S3 로 바로 올라간다
+ * ## Attachments go straight to S3
  *
- * 파일을 고르면 그 순간 등록되고 업로드된다(`useUploadAttachment`). 메일을 보낼 때 서버로 가는
- * 것은 **토큰 목록**이고, 링크는 서버가 만든다. 화면은 S3 키도 URL 도 만지지 않는다.
+ * Picking a file registers and uploads it on the spot (`useUploadAttachment`). What goes to the
+ * server when the mail is sent is a LIST OF TOKENS; the links are built there. This screen never
+ * touches an S3 key or a URL.
  *
- * Hiworks 메일 API 에는 첨부 기능이 없어서 링크로 보낸다. 그 링크는 S3 가 아니라 이 시스템을
- * 가리키고, 번역가가 누르는 순간 짧은 수명의 presigned URL 로 바뀐다 — S3 서명은 21일을 살 수
- * 없기 때문이다(최대 7일이고, Lambda 자격증명으로 서명하면 몇 시간이다).
+ * The Hiworks mail API has no attachment parameter, so files travel as links. A link points at this
+ * system rather than at S3, and resolves to a short-lived presigned URL at the moment the
+ * translator clicks it - because an S3 signature cannot live for 21 days (seven at most, and only
+ * hours when it is signed with the function's own credentials).
  *
- * ## 비밀번호는 상태에만 있다
+ * ## The password lives in state and nowhere else
  *
- * `localStorage` 에 쓰지 않고, 대화상자를 닫으면 사라지고, 성공 안내에도 넣지 않는다. 서버도
- * 같다 — 한 번 로그인하고 버린다. 자동완성은 일부러 막지 않는다: 비밀번호 관리자는 사용자의
- * 것이고, 막으면 사람들이 더 짧은 비밀번호를 쓰게 된다.
+ * Never written to `localStorage`, gone when the dialog closes, and absent from the success notice.
+ * The server does the same: it signs in once and discards it. Autocomplete is deliberately NOT
+ * blocked - a password manager belongs to the user, and blocking it is how people end up choosing
+ * shorter passwords.
  */
 
 interface Props {
@@ -44,12 +48,12 @@ interface Props {
   onSent: (message: string) => void
 }
 
-/** 체크 하나를 뒤집는다. 요청 본문이 배열이라 배열로 들고 있는다. */
+/** Flip one checkbox. Held as an array because the request body is one. */
 function toggle<T>(list: readonly T[], value: T): T[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
 }
 
-/** 업로드가 끝난 파일. 화면이 들고 있는 것은 토큰과 이름뿐이다. */
+/** An uploaded file. All this screen holds is the token and the name. */
 interface Attached {
   token: string
   fileName: string
@@ -60,11 +64,11 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
   const sendMail = useSendPoRequestMail()
 
   /*
-   * 원본은 PDF 가 기본, 작업파일은 아무것도 선택하지 않는다.
+   * PDF is the default original; nothing is ticked for the workspace file.
    *
-   * 인계메일 대화상자가 WORD 를 기본으로 두는 것과 같은 판단이다: 압도적으로 많은 쪽으로
-   * 기울여 두되, 근거 없는 기본값은 두지 않는다. 작업파일이 없는 건이 흔하므로, 비워 두는 것이
-   * 사실에 더 가깝다.
+   * The same judgement the handover-mail dialog makes by defaulting to WORD: lean towards the
+   * overwhelmingly common answer, but do not invent a default with nothing behind it. Jobs with no
+   * workspace file are common, so leaving it empty is closer to the truth.
    */
   const [originalFormats, setOriginalFormats] = useState<PoOriginalFormat[]>(['PDF'])
   const [workspaceFormats, setWorkspaceFormats] = useState<PoWorkspaceFormat[]>([])
@@ -76,22 +80,22 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   /*
-   * 진짜 파일 입력칸은 감춰 두고, 보이는 버튼이 이 칸을 대신 누른다.
+   * The real file input is hidden, and a visible button clicks it on the user's behalf.
    *
-   * `<input type="file">` 은 브라우저가 그리는 모양을 거의 바꿀 수 없다 — 버튼이 칸 안에 들어
-   * 있고, 글꼴도 색도 이 화면의 다른 버튼과 맞지 않는다. 그래서 칸은 감추고, 눈에 보이는 것은
-   * 이 화면의 다른 확인 버튼과 같은 버튼으로 둔다.
+   * `<input type="file">` is drawn by the browser and barely styleable - its button sits INSIDE the
+   * field, in a font and colour that match nothing else in this dialog. So the field is hidden and
+   * the thing people see is an ordinary button, the same one as every other confirm action here.
    */
   const fileInput = useRef<HTMLInputElement>(null)
 
   const pending = sendMail.isPending || upload.isPending
 
   /*
-   * 고른 파일을 한 줄로 요약한다.
+   * The selection, summarised in one line.
    *
-   * 전체 목록은 아래 뱃지가 보여 주고 거기서 하나씩 뺄 수 있으므로, 이 칸이 같은 목록을 다시
-   * 적을 이유가 없다. 감춘 파일 입력칸이 보여 주던 것과 같은 수준 — 하나면 그 이름, 여럿이면
-   * 첫 이름과 나머지 개수 — 만 둔다.
+   * The badges below already list every file and let one be taken back out, so there is no reason
+   * for this field to repeat the same list. It says what the hidden file input would have said -
+   * one file's name, or the first name and how many others.
    */
   const pickedLabel =
     attached.length === 0
@@ -104,8 +108,8 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
     if (files.length === 0) return
     setUploadError(null)
     /*
-     * 한 번에 하나씩 올린다. 동시에 올리면 100MB 짜리 다섯 개가 같은 회선을 나눠 쓰면서 전부
-     * 느려지고, 하나가 실패했을 때 어느 것이 실패했는지 화면이 말해 주기 어려워진다.
+     * One at a time. Five 100MB files sharing one connection make all five slow, and when one of
+     * them fails it becomes hard for the screen to say WHICH one.
      */
     for (const file of files) {
       try {
@@ -239,9 +243,10 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
               value={pickedLabel}
               placeholder="선택된 파일 없음"
               /*
-               * `readonly` 이고 `disabled` 가 아니다. 비활성 입력칸은 탭 순서에서 빠지고 일부
-               * 스크린리더가 읽지 않는데, 이 칸에 들어가는 것은 **보내려는 파일의 이름**이고
-               * 보내기 직전에 확인해야 하는 값이다. 막아야 할 것은 타이핑뿐이다.
+               * `readonly`, not `disabled`. A disabled input leaves the tab order and some screen
+               * readers skip it entirely - and what this field holds is the NAME OF THE FILE about
+               * to be mailed out, which is the thing to check before pressing send. Typing is the
+               * only thing worth preventing.
                */
               readOnly
             />
@@ -261,14 +266,14 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
             hidden
             onChange={(e) => {
               /*
-               * 파일 목록을 **먼저** 배열로 복사한다. `input.files` 는 살아 있는 목록이어서,
-               * 아래에서 값을 비우는 순간 빈 목록이 된다.
+               * Copy the list into an array FIRST. `input.files` is live, so it becomes empty the
+               * moment the value is cleared below.
                */
               const picked = Array.from(e.target.files ?? [])
               /*
-               * 그리고 칸을 비운다. 비우지 않으면 같은 파일을 두 번 고를 수 없다 — 값이 바뀌지
-               * 않으면 `change` 가 일어나지 않으므로, 하나 뺐다가 같은 파일을 다시 고르면
-               * 아무 일도 생기지 않고 버튼이 고장난 것처럼 보인다.
+               * Then clear the field. Without this the same file cannot be picked twice: an
+               * unchanged value raises no `change` event, so taking a file back out and choosing it
+               * again does nothing at all and the button looks broken.
                */
               e.target.value = ''
               void onPickFiles(picked)

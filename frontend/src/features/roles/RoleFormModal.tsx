@@ -13,21 +13,30 @@ interface Props {
   onSaved: (message: string, created: RoleAdminRow | null) => void
 }
 
-/** `NEOTMS_SYSADMIN` 처럼 대문자·숫자·밑줄, 첫 글자는 영문 대문자. 서버의 `RoleCodeSchema` 와 같다. */
-const CODE_SHAPE = /^[A-Z][A-Z0-9_]*$/u
-
 /**
- * 역할 등록·수정.
+ * Create or edit a role.
  *
- * ## 역할 코드는 등록할 때만 입력받는다
+ * ## It does not ask for a role code
  *
- * 수정 화면에서는 글자로만 보여 준다. 코드로 역할을 찾는 것들이 있기 때문이다 —
- * `staff_bootstrap_superuser()` 는 첫 관리자에게 줄 역할을 코드로 찾고, 초기 데이터 스크립트는
- * `ON CONFLICT (role_code)` 로 권한을 다시 부여하고, `sys_role_grant_all_permissions(text)` 는
- * 코드를 인수로 받는다. 이름을 바꾸면 그 전부가 없는 행을 찾게 되고, 최악의 경우 증상이 없다 —
- * 부트스트랩이 조용히 역할을 못 찾게 되고, 그걸 알게 되는 날은 그게 필요한 날이다.
+ * It used to: a box for something like `PROJECT_MANAGER`, filled in at create time. Two reasons it
+ * is gone, and both of them happened:
  *
- * 사람들이 실제로 바꾸고 싶어 하는 것은 **표시 이름**이고, 그건 바꿀 수 있다.
+ *   * `role_code` is a SURROGATE key. Nothing reads meaning out of it, so the box asked somebody
+ *     who had no reason to know the rules (upper case, digits, underscores) to follow them. A
+ *     Korean label is refused, which reads as the form being broken rather than as a rule.
+ *   * Whatever was typed is PERMANENT. There is no path in this system that renames a code.
+ *
+ * The server mints it now (`newRoleCode()` - `ROLE_` plus a UUID). The edit screen shows that value
+ * as text, because things resolve a role BY it: the two bootstrap functions look up the role to
+ * give an administrator, the seed re-asserts grants `ON CONFLICT (role_code)`, and
+ * `sys_role_grant_all_permissions(text)` takes one as its argument. Change it and all of them look
+ * for a row that no longer answers - and in the worst case there is no symptom at all, until the
+ * day somebody needs the way back in.
+ *
+ * ## Which is why the name is required
+ *
+ * The name is now the only thing that tells two roles apart on screen. Leave it blank and the
+ * assignment dropdown offers `ROLE_9F3C...`, which nobody can choose between.
  *
  * ## 새 역할은 권한이 하나도 없이 만들어진다
  *
@@ -42,7 +51,6 @@ export function RoleFormModal({ role, onClose, onSaved }: Props) {
   const pending = createRole.isPending || updateRole.isPending
 
   const [form, setForm] = useState({
-    roleCode: role?.roleCode ?? '',
     roleName: role?.roleName ?? '',
     active: role?.active ?? true,
   })
@@ -53,24 +61,24 @@ export function RoleFormModal({ role, onClose, onSaved }: Props) {
     setForm((prev) => ({ ...prev, [key]: value }))
   }
 
-  const trimmedCode = form.roleCode.trim().toUpperCase()
-  const codeOk = CODE_SHAPE.test(trimmedCode)
-  const canSave = isEdit ? true : codeOk
+  // The same condition as the server's `v.minLength(1)`. The name is the only way to tell roles
+  // apart now, so it cannot be blank.
+  const trimmedName = form.roleName.trim()
+  const canSave = trimmedName.length > 0
 
   const onSubmit = async () => {
     if (!canSave) return
-    const label = form.roleName.trim() || trimmedCode
+    const label = trimmedName
 
     if (role) {
       await updateRole.mutateAsync({
         id: role.id,
-        input: { roleName: form.roleName.trim() || null, active: form.active },
+        input: { roleName: trimmedName, active: form.active },
       })
       onSaved(`역할 '${label}' 을(를) 수정했습니다.`, null)
     } else {
       const created = await createRole.mutateAsync({
-        roleCode: trimmedCode,
-        roleName: form.roleName.trim() || null,
+        roleName: trimmedName,
         active: form.active,
       })
       onSaved(`역할 '${label}' 을(를) 만들었습니다. 이어서 권한을 선택해 주십시오.`, created)
@@ -104,45 +112,8 @@ export function RoleFormModal({ role, onClose, onSaved }: Props) {
 
       <div className={ui.formGrid}>
         <div className={ui.fieldWide}>
-          <label className={`${ui.label} ${isEdit ? '' : ui.required}`} htmlFor="role-code">
-            역할 코드
-          </label>
-          {isEdit ? (
-            <>
-              {/* 입력란이 아니라 글자다. disabled 입력란으로 두면 "왜 안 되지" 를 먼저 겪고
-                  설명은 그 다음에 읽힌다 — CodeFormModal 의 코드값과 같은 이유다. */}
-              <p className={ui.inputMono}>{role.roleCode}</p>
-              <span className={ui.hint}>
-                역할 코드는 변경할 수 없습니다. 초기화 스크립트와 복구 함수가 이 값으로 역할을
-                찾기 때문입니다. 표시 이름은 아래에서 바꿀 수 있습니다.
-              </span>
-            </>
-          ) : (
-            <>
-              <input
-                id="role-code"
-                className={`${ui.input} ${ui.inputMono}`}
-                value={form.roleCode}
-                onChange={(e) => set('roleCode', e.target.value.toUpperCase())}
-                placeholder="PROJECT_MANAGER"
-                autoComplete="off"
-              />
-              <span className={ui.hint}>
-                영문 대문자·숫자·밑줄만 사용합니다(예: <code>PROJECT_MANAGER</code>). 나중에 바꿀
-                수 없으니 직책을 그대로 적어 주십시오.
-              </span>
-              {form.roleCode.trim().length > 0 && !codeOk ? (
-                <span className={ui.hintWarn}>
-                  영문 대문자로 시작하고, 대문자·숫자·밑줄만 쓸 수 있습니다.
-                </span>
-              ) : null}
-            </>
-          )}
-        </div>
-
-        <div className={ui.fieldWide}>
-          <label className={ui.label} htmlFor="role-name">
-            표시 이름
+          <label className={`${ui.label} ${ui.required}`} htmlFor="role-name">
+            역할 이름
           </label>
           <input
             id="role-name"
@@ -150,12 +121,27 @@ export function RoleFormModal({ role, onClose, onSaved }: Props) {
             value={form.roleName}
             onChange={(e) => set('roleName', e.target.value)}
             placeholder="프로젝트 매니저"
+            maxLength={100}
+            autoFocus
           />
           <span className={ui.hint}>
-            사용자 관리 화면의 역할 드롭다운에 이 이름이 나옵니다. 비워 두면 역할 코드가 그대로
-            보입니다.
+            사용자 관리 화면의 역할 드롭다운에 이 이름이 나옵니다. 나중에 바꿀 수 있습니다.
           </span>
         </div>
+
+        {isEdit ? (
+          <div className={ui.fieldWide}>
+            <span className={ui.label}>내부 식별자</span>
+            {/* Text, not a disabled input. A disabled input makes somebody try it first and
+                read the explanation second - the same reasoning as the code value in
+                CodeFormModal. */}
+            <p className={ui.inputMono}>{role.roleCode}</p>
+            <span className={ui.hint}>
+              서버가 만든 값이고 바꿀 수 없습니다. 초기화 스크립트와 복구 함수가 이 값으로 역할을
+              찾기 때문입니다. 문의할 때만 쓰는 값이니 외우실 필요는 없습니다.
+            </span>
+          </div>
+        ) : null}
 
         <div className={ui.fieldWide}>
           <label className={ui.check}>

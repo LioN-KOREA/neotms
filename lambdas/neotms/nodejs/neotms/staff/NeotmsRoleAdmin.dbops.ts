@@ -30,6 +30,8 @@
 // to ship. Every count and list below is therefore a SCALAR SUBQUERY, which cannot fan out, rather
 // than a join plus GROUP BY.
 
+import { randomUUID } from "node:crypto";
+
 import {
   param,
   readBool,
@@ -46,18 +48,57 @@ import type { RoleAdminCreate, RoleAdminUpdate } from "../neotms.schemas.js";
 /**
  * The role code the bootstrap depends on.
  *
- * `staff_bootstrap_superuser()` looks this code up by name to decide which role to give the first
- * administrator, and `db/002_initial_seeding.sql` grants it every permission by the same name. So
- * renaming or deleting this row breaks the way back into an empty or misconfigured database - which
- * is exactly the situation in which somebody would be reaching for it. Both are refused in
- * `NeotmsRoleAdminManager`, and the constant lives here because the queries are what enforce it.
+ * TWO functions look this code up by name to decide which role an administrator gets -
+ * `staff_bootstrap_superuser()`, repairing a row at sign-in, and `staff_self_register_bootstrap()`,
+ * approving a sign-up on submission - and `db/002_initial_seeding.sql` grants it every permission
+ * by the same name. So renaming or deleting this row breaks the way back into an empty or
+ * misconfigured database, which is exactly the situation in which somebody would be reaching for
+ * it. Both are refused in `NeotmsRoleAdminManager`, and the constant lives here because the queries
+ * are what enforce it.
+ *
+ * `newRoleCode()` below cannot produce this value, or any other reserved one: everything it mints
+ * carries a `ROLE_` prefix and 32 hexadecimal digits.
  */
 export const BOOTSTRAP_ROLE_CODE = "NEOTMS_SYSADMIN";
+
+/**
+ * Mint a role code. Nobody types one.
+ *
+ * ## Why this is random rather than derived from the name
+ *
+ * `role_code` is a surrogate key. Nothing reads meaning out of it except for the handful of
+ * RESERVED codes the seed writes - `NEOTMS_SYSADMIN` and the legacy codes the ETL carried over -
+ * and those are exactly the ones this never produces. Deriving a code from the Korean label would
+ * put a second, stale copy of the name in a column that cannot be renamed; deriving it from a
+ * counter would make two databases disagree about which role is which.
+ *
+ * ## Why it looks like this and not like a bare UUID
+ *
+ * It IS a UUID - `randomUUID()` with the hyphens taken out and upper-cased - behind a `ROLE_`
+ * prefix, and the prefix is doing two jobs. It keeps the value inside the shape every other code in
+ * this system has (`^[A-Z][A-Z0-9_]*$`, which the request schema used to enforce and the seed still
+ * follows), and it makes a minted code unmistakable next to a reserved one in a log line, a support
+ * question or a `WHERE role_code =` somebody is about to run.
+ *
+ * 37 characters, inside `text` with no length limit.
+ *
+ * ## The collision argument, so nobody has to redo it
+ *
+ * `randomUUID()` is 122 random bits from the platform CSPRNG. `sys_role` holds tens of rows, so the
+ * chance of ever seeing the UNIQUE constraint fire here is not a number worth writing down. There
+ * is deliberately no retry loop: a retry would be untested code on a path that cannot be reached,
+ * and the constraint is still there to make the impossible case a refusal rather than a duplicate.
+ */
+export const newRoleCode = (): string =>
+  `ROLE_${randomUUID().replaceAll("-", "").toUpperCase()}`;
 
 export type RoleAdminRow = {
   id: string;
   /**
-   * The stable identifier. NOT editable - see `ROLE_ADMIN_FIELDS`.
+   * The stable identifier. Minted by `newRoleCode()`, and NOT editable - see `ROLE_ADMIN_FIELDS`.
+   *
+   * Only the reserved codes mean anything. A code this application minted means nothing at all, and
+   * the screen shows it accordingly - abbreviated in the table, in full on the edit form.
    */
   roleCode: string;
   roleName: string | null;
@@ -215,8 +256,15 @@ export const RoleCreateOps: (
               0 AS role_holders
   `,
   parameters: [
-    param("role_code", input.roleCode, "text"),
-    param("role_name", input.roleName ?? null, "text"),
+    /*
+     * Minted here, not taken from the request - `RoleAdminCreateSchema` has no field for it.
+     *
+     * Generated per CALL rather than per role object, which is what makes the manager's retry
+     * story trivial: calling this twice produces two different codes, so there is nothing to
+     * reset between attempts.
+     */
+    param("role_code", newRoleCode(), "text"),
+    param("role_name", input.roleName, "text"),
     param("active", input.active ?? true, "bool"),
     param("created_by", createdBy, "text"),
   ],
@@ -227,12 +275,16 @@ export const RoleCreateOps: (
  * The two columns an administrator may write on a role, and nothing else.
  *
  * `role_code` IS ABSENT, and that is the load-bearing omission. The code is a name other things
- * resolve by: `staff_bootstrap_superuser()` finds the bootstrap role by code, the seed re-asserts
- * its grants `ON CONFLICT (role_code)`, and `sys_role_grant_all_permissions(text)` takes a code as
- * its argument. A rename would leave every one of those looking for a row that no longer answers,
- * and the failure is silent in the worst case - the bootstrap simply stops finding a role, on the
- * day somebody needs it. Renaming a role's LABEL (`role_name`) is the operation people actually
- * want, and that is here.
+ * resolve by: `staff_bootstrap_superuser()` and `staff_self_register_bootstrap()` find the role to
+ * give an administrator, the seed re-asserts its grants `ON CONFLICT (role_code)`, and
+ * `sys_role_grant_all_permissions(text)` takes a code as its argument. A rename would leave every
+ * one of those looking for a row that no longer answers, and the failure is silent in the worst
+ * case - the bootstrap simply stops finding a role, on the day somebody needs it. Renaming a role's
+ * LABEL (`role_name`) is the operation people actually want, and that is here.
+ *
+ * Nobody supplies a code on create either, which is the other half of the same decision - see
+ * `newRoleCode()`. This list is what stops it CHANGING; that is what stops a wrong one being
+ * chosen in the first place.
  *
  * `active` retires a role without deleting it: it stops being offered for assignment while the
  * people who hold it keep holding it, which is the same retire-don't-delete pattern as `sys_code`.

@@ -284,23 +284,38 @@ export const StaffBootstrapSuperuserOps: (
  * have approved. See db/009_selfservice.sql, which also records why there is no adopt-by-email
  * branch here when the bootstrap has one.
  */
-export const StaffSelfRegisterOps: (
-  sub: string,
-  profile: {
-    name: string;
-    nameEng?: string | null;
-    email?: string | null;
-    phone?: string | null;
-    position?: string | null;
-  },
-  ip: string | null,
-) => SqlOps<string | null> = (sub, profile, ip) => ({
+type SelfRegisterProfile = {
+  name: string;
+  nameEng?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  position?: string | null;
+};
+
+/**
+ * The two sign-up functions, which differ only in the name they call.
+ *
+ * They take the same seven arguments and answer the same way; what differs is the row they leave
+ * behind, and that difference is entirely inside SQL - `staff_self_register` writes `role_id NULL`,
+ * `staff_self_register_bootstrap` writes the NEOTMS_SYSADMIN role and `view_scope 'Y'`. Neither
+ * takes a role, a scope or an active flag as an argument, which is the property db/001 section 1
+ * exists to keep: the only write path an unapproved account can reach cannot be told what to grant.
+ *
+ * Built from one factory so the parameter handling below - the `?? null`s, the untyped IP - cannot
+ * drift between them. The function name is a union of two literals rather than a string, so there
+ * is no interpolation here that could carry anything else.
+ */
+const selfRegisterOps =
+  (
+    fn: "staff_self_register" | "staff_self_register_bootstrap",
+  ): ((sub: string, profile: SelfRegisterProfile, ip: string | null) => SqlOps<string | null>) =>
+  (sub, profile, ip) => ({
   // Every argument cast, for the reason spelled out on `StaffBootstrapSuperuserOps`: node-postgres
   // sends these untyped, PostgreSQL resolves an untyped argument by finding a unique function of
   // this name and arity, and a seven-argument signature of all-text is exactly the kind somebody
   // adds an overload of. The casts pin it.
   sql: `
-    SELECT staff_self_register(
+    SELECT ${fn}(
              :sub::text,
              :name::text,
              :name_eng::text,
@@ -334,6 +349,19 @@ export const StaffSelfRegisterOps: (
   ],
   mapper: (rows) => (rows.length > 0 ? readId(rows[0]!, "staff_id") : null),
 });
+
+export const StaffSelfRegisterOps = selfRegisterOps("staff_self_register");
+
+/**
+ * The same sign-up, for an account holding the LPX bootstrap authority - approved on arrival.
+ *
+ * `role_id` is the NEOTMS_SYSADMIN role and `view_scope` is 'Y', so this identity has a working
+ * administrator account the moment the form is submitted, with nobody to approve it. The eligibility
+ * decision is NOT here and is not in SQL: it is `holdsBootstrapAuthority()` in NeotmsAuthGuard,
+ * reading a verified authority list that the database cannot see. This constant must therefore only
+ * ever appear behind that test - `NeotmsRegistrationManager` is the one place it may be named.
+ */
+export const StaffSelfRegisterBootstrapOps = selfRegisterOps("staff_self_register_bootstrap");
 
 /**
  * Everything one role has been granted.

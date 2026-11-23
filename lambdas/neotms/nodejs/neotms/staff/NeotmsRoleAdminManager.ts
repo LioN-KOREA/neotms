@@ -56,8 +56,6 @@ import {
 } from "./NeotmsRoleAdmin.dbops.js";
 import { StaffAdminGetOps, type StaffAdminRow } from "./NeotmsStaffAdmin.dbops.js";
 
-/** `sys_role.role_code` is UNIQUE. */
-const UNIQUE_VIOLATION = "23505";
 /** `staff.role_id -> sys_role.id` is `ON DELETE RESTRICT`. */
 const FOREIGN_KEY_VIOLATION = "23503";
 
@@ -78,27 +76,23 @@ export async function listRolesForAdmin(): Promise<ResponseData<RoleAdminListVie
  * the API does not pretend the two are one step: a create that also took a permission list would
  * make "create a role" and "decide what it may do" the same audit entry, and they are the two
  * halves somebody reviewing a surprise would want to tell apart.
+ *
+ * ## The request carries no role code, and there is no 409 here any more
+ *
+ * It used to. An administrator typed a code, and a code already taken - by a RETIRED role, which
+ * the screen does not list - came back as a 409 explaining that codes are permanent. Both halves of
+ * that are gone: `newRoleCode()` mints the code, so the only remaining way to hit the UNIQUE
+ * constraint on `sys_role.role_code` is a collision between two random UUIDs, which is not a
+ * condition an administrator can do anything about and not one worth a sentence of its own.
+ * `runDb` reports it as a 500, which is the honest status for "something impossible happened".
  */
 export async function createRole(
   caller: NeotmsCaller,
   input: RoleAdminCreate,
 ): Promise<ResponseData<RoleAdminRow | string>> {
   return runDb("create role", async () => {
-    try {
-      const row = (await pgExecute(RoleCreateOps(input, caller.mgrId))).data;
-      return row ? ok(row, 201) : { status: 500 as const, body: "The role was not created" };
-    } catch (err) {
-      if (sqlState(err) === UNIQUE_VIOLATION) {
-        return {
-          status: 409 as const,
-          body:
-            `The role code '${input.roleCode}' is already in use. Role codes are permanent - they ` +
-            `cannot be renamed afterwards - so pick a different one, or edit the existing role ` +
-            `instead. A retired role still occupies its code.`,
-        };
-      }
-      throw err;
-    }
+    const row = (await pgExecute(RoleCreateOps(input, caller.mgrId))).data;
+    return row ? ok(row, 201) : { status: 500 as const, body: "The role was not created" };
   });
 }
 

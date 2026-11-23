@@ -61,9 +61,18 @@ const nullIfBlank = (value: string): string | null => {
 
 export function SignupView({
   prefill,
+  bootstrapAdmin,
   onLogout,
 }: {
   prefill: ProfilePrefill
+  /**
+   * Whether submitting this form is approved on the spot (`ProfileView.bootstrapAdmin`).
+   *
+   * True for an account holding the LPX administrator authority. It changes the form's WORDING and
+   * nothing else - approval is decided by the server, from the authority list on the token. A wrong
+   * value here gains and loses no access; it only produces a wrong sentence.
+   */
+  bootstrapAdmin: boolean
   onLogout: () => void
 }) {
   /*
@@ -107,21 +116,29 @@ export function SignupView({
 
   if (submitted) {
     /*
-     * 접수 확인. 위에서 말한 한 렌더를 위한 화면이고, 셸이 대기 화면으로 바꾸기 전까지만 보인다.
+     * The receipt. This is the one render mentioned above, visible until the shell swaps to the
+     * next screen.
      *
-     * 대기 화면(`PendingApprovalView`)과 문장이 다르다. 여기는 **방금 일어난 일**을 알리는
-     * 자리이고("접수되었습니다"), 그쪽은 **지금 상태**를 설명하는 자리다("검토하고 있습니다").
-     * 다시 로그인해서 들어온 사람에게 "접수되었습니다" 라고 하면 방금 한 번 더 신청한 것처럼
-     * 읽힌다.
+     * Its sentence differs from the waiting screen's (`PendingApprovalView`) deliberately. This
+     * place reports WHAT JUST HAPPENED; that one describes the CURRENT STATE. Telling somebody who
+     * has just signed in again that their request "has been received" reads as if they had
+     * accidentally submitted a second one.
+     *
+     * An LPX administrator has nothing to wait for: the server gave them the system administrator
+     * role on submission and the next render takes them into the application. Promising them a
+     * review would leave them waiting for an approval that is never coming, or signing up twice.
      */
     return (
       <AuthGateCard>
         <div className={`${ui.alert} ${ui.alertSuccess}`} role="status">
-          회원가입 요청이 정상적으로 접수되었습니다.
+          {bootstrapAdmin
+            ? '등록이 완료되었습니다.'
+            : '회원가입 요청이 정상적으로 접수되었습니다.'}
         </div>
         <p className={styles.lead}>
-          시스템 관리자님께서 요청을 신속히 검토한 후, 승인 처리를 진행할 예정입니다. 잠시만
-          기다려주시면 감사드리겠습니다.
+          {bootstrapAdmin
+            ? 'LPX 관리자 계정이므로 별도 승인 없이 시스템관리자 권한으로 등록되었습니다. 곧 화면이 전환됩니다.'
+            : '시스템 관리자님께서 요청을 신속히 검토한 후, 승인 처리를 진행할 예정입니다. 잠시만 기다려주시면 감사드리겠습니다.'}
         </p>
       </AuthGateCard>
     )
@@ -130,8 +147,9 @@ export function SignupView({
   return (
     <AuthGateCard wide>
       <p className={styles.lead}>
-        TMS 를 처음 사용하는 계정입니다. 아래 정보로 회원가입을 요청하면 관리자 승인 후 사용할 수
-        있습니다.
+        {bootstrapAdmin
+          ? 'TMS 를 처음 사용하는 계정입니다. LPX 관리자 권한이 확인되었으므로, 아래 정보로 등록하시면 승인 절차 없이 시스템관리자 권한으로 바로 사용하실 수 있습니다.'
+          : 'TMS 를 처음 사용하는 계정입니다. 아래 정보로 회원가입을 요청하면 관리자 승인 후 사용할 수 있습니다.'}
       </p>
 
       {/*
@@ -230,7 +248,13 @@ export function SignupView({
             className={`${ui.btn} ${ui.btnPrimary}`}
             disabled={!nameGiven || register.isPending}
           >
-            {register.isPending ? '요청 중…' : '회원가입 요청'}
+            {register.isPending
+              ? bootstrapAdmin
+                ? '등록 중…'
+                : '요청 중…'
+              : bootstrapAdmin
+                ? '등록하기'
+                : '회원가입 요청'}
           </button>
         </div>
       </form>

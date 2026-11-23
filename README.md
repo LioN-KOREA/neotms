@@ -425,40 +425,64 @@ It is a **real role with real rows**, not a flag the code special-cases. There i
 anywhere in `hasPermission`, which keeps the property this rewrite exists for: one server-side source
 for every permission decision, auditable with a `SELECT`.
 
+`NEOTMS_SYSADMIN` and the codes the ETL carried over from legacy are the only `role_code` values that
+mean anything. A role created on the **역할 관리** screen gets a minted one — `ROLE_` plus a UUID, from
+`newRoleCode()` — because the column is a surrogate key and the box that used to ask an administrator
+to invent one asked them to follow rules they had no reason to know, *permanently*: a Korean label is
+refused by the shape rule, and nothing in this system can rename a code once it is stored. What an
+administrator types now is the **name**, which is required for the same reason — with a minted code it
+is the only thing that tells two roles apart in the assignment dropdown.
+
 **A way in for LPX administrators.** An account holding LPX's own superuser authority
-`lpx.admin.access` is allowed past the coarse gate, and if its NEOTMS staff row is missing, inactive,
-or has no role, `staff_bootstrap_superuser()` provisions or repairs one and assigns 시스템관리자. Then
-the ordinary path takes over: the role is read back out of the database like everybody else's. In
-practice, **an LPX superuser just logs in and it works.**
+`lpx.admin.access` is allowed past the coarse gate. What happens next depends on whether it has a
+staff row at all, and the two cases go through different doors:
 
-The function repairs before it creates, which is the behaviour to know about if you are watching the
-table:
+- **No row.** It is shown the **sign-up form**, exactly like any other new employee — and the
+  submission is approved on the spot. `staff_self_register_bootstrap()` creates the row holding
+  시스템관리자 with `view_scope = 'Y'` and `created_by = 'lpx-bootstrap-signup'`; there is nothing to
+  wait for and nobody to approve it.
 
-1. a row already carrying this OIDC subject is **reactivated**, and only its blanks are filled —
-   an explicitly assigned role or a `view_scope` of `'N'` is never overwritten;
-2. otherwise an **unclaimed legacy row with a matching email** is adopted. Adopting beats creating
-   because `mgr_id` is what every legacy `REG_ID` points at, so a duplicate row would split one
-   person's project history in two;
-3. only if neither applies is a row **created**, with `mgr_id` derived from the email local part and
-   `created_by = 'lpx-bootstrap'`.
+  The form is there rather than a silent mint at first request, which is what this used to do. That
+  version never learned the English name that goes on foreign documents, the phone number or the
+  position, and it left a row indistinguishable from one a person had filled in. Five fields and one
+  button is a small price for a record of who let themselves in.
 
-It is one SQL statement, so it is atomic without a transaction — which matters here specifically,
-because Supavisor's transaction mode hands the connection back at `COMMIT` and a read-then-write
-sequence from the Lambda could be spread across backends. Two administrators signing in at the same
-second cannot produce two staff rows for one person.
+- **A row that cannot be used** — inactive, or no role. `staff_bootstrap_superuser()` repairs it at
+  sign-in, as before, and only its blanks are filled: an explicitly assigned role or a `view_scope`
+  of `'N'` is never overwritten. Neither state has a form to offer. An inactive account is
+  deliberately never shown one (minting a second row for somebody an administrator switched off
+  would hand back the access that was removed), and a row with no role already has a session — the
+  waiting screen — so there is nothing to submit.
+
+In practice, **an LPX superuser logs in, fills in five fields, and is an administrator.**
+
+> Both functions are one SQL statement, so each is atomic without a transaction — which matters here
+> specifically, because Supavisor's transaction mode hands the connection back at `COMMIT` and a
+> read-then-write sequence from the Lambda could be spread across backends. Two administrators
+> signing in at the same second cannot produce two staff rows for one person.
+
+**What the application no longer reaches.** `staff_bootstrap_superuser()` has three branches —
+repair the subject's own row, adopt an unclaimed legacy row by email, mint a new one — and since the
+guard only calls it for a row that EXISTS, the last two are now reachable only by hand, from psql.
+That is deliberate, and it costs one thing worth knowing: an administrator whose legacy row arrived
+from the ETL inactive or soft-deleted gets a **fresh** row from the sign-up form rather than their
+old one adopted, so their history stays under the old `mgr_id` until somebody merges the two. The
+alternative was an adopt-by-email branch inside the one write path an unapproved account can reach,
+and §6.1 of `db/001_schemas.sql` explains at length why that is refused.
 
 Every bootstrap writes one `console.warn` to CloudWatch beginning `NEOTMS BOOTSTRAP:`, carrying the
 identity, the staff row, the role and what was wrong before. **That log is the authoritative audit
-record**, because the adopt-and-repair branches leave no trace in `staff` that is distinguishable from
-ordinary use. To review what the door has been used for:
+record**, because the repair branch leaves no trace in `staff` that is distinguishable from ordinary
+use. To review what the door has been used for:
 
 ```sql
 SELECT s.mgr_id, s.mgr_name, s.mgr_email, r.role_code, s.view_scope, s.active,
        s.created_by, s.created_at, s.updated_at
   FROM staff s
   LEFT JOIN sys_role r ON r.id = s.role_id
- WHERE s.created_by = 'lpx-bootstrap'      -- created by the bootstrap
-    OR r.role_code  = 'NEOTMS_SYSADMIN'    -- superuser, however acquired
+ WHERE s.created_by IN ('lpx-bootstrap',          -- minted silently at sign-in
+                        'lpx-bootstrap-signup')   -- minted through the sign-up form
+    OR r.role_code  = 'NEOTMS_SYSADMIN'           -- superuser, however acquired
  ORDER BY s.created_at;
 ```
 
@@ -1031,6 +1055,15 @@ an email local part that collides with an existing `mgr_id` (expect a numeric su
 Latin characters at all (expect the `user` fallback), and a deactivated or soft-deleted unclaimed row
 whose email matches (expect it **not** adopted). Each of those is a branch whose only other test is
 a comment.
+
+For `staff_self_register_bootstrap()` -- the administrator sign-up, section 2 of the same block --
+four cases, and they were rehearsed this way before it shipped: a brand-new administrator (expect
+`NEOTMS_SYSADMIN`, `view_scope 'Y'`, `created_by 'lpx-bootstrap-signup'`, and all five form fields
+stored), the same subject twice (expect the same id and nothing rewritten -- not even the name), an
+ordinary sign-up alongside it (expect `role_id` still NULL, proving the two paths did not merge),
+and a pre-existing row holding a deliberately narrow role (expect that role and its `view_scope`
+**kept**, with only `active` repaired). The last one is the case a reviewer should insist on: it is
+the difference between a recovery path and a privilege escalation.
 
 **And once it is applied, insert a row.** `010_currency.sql` exists because every file in `db/`
 applied cleanly, every test passed, and the first customer anybody tried to register failed on a

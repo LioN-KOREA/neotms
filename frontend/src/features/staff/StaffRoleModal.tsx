@@ -138,7 +138,12 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
             <option value="">(역할 없음 — 로그인만 되고 아무것도 할 수 없습니다)</option>
             {roles.map((role) => (
               <option key={role.id} value={role.id}>
-                {role.roleName ? `${role.roleName} (${role.roleCode})` : role.roleCode}
+                {/*
+                  No code in brackets beside the name. A minted code is `ROLE_` plus a UUID and
+                  means nothing, so in a dropdown it is noise. Only rows carried over from legacy
+                  have no name, and those are the one case where the code is the only clue.
+                */}
+                {role.roleName || role.roleCode}
               </option>
             ))}
             {/*

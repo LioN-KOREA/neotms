@@ -117,6 +117,20 @@ export interface ProfileView {
   prefill: ProfilePrefill
   /** OIDC subject. 등록 전에도 아는 유일한 식별자. */
   sub: string
+  /**
+   * Whether submitting the sign-up form will be approved on the spot. Sent only with
+   * `'unregistered'`.
+   *
+   * True for an account holding the LPX bootstrap authority (`lpx.admin.access`). It is sent
+   * because the form's wording has to change: without it the form promises that an administrator
+   * will review the request, and the person is inside the application a second later. One of those
+   * two sentences is false.
+   *
+   * A LABEL, not a capability. Approval is decided again on the server when the form is submitted,
+   * from the authority list on the verified token, so a client that sets this on itself gains
+   * nothing but a wrong sentence.
+   */
+  bootstrapAdmin?: boolean
   staffId?: string
   /** 레거시 `MGR_ID`. 동료와 옛 문서가 쓰는 식별자라서 화면에 보여준다. */
   mgrId?: string
@@ -413,10 +427,15 @@ export interface RecentSearchForgetInput {
 export interface RoleAdminRow {
   id: string
   /**
-   * The permanent identifier. NOT editable, and the omission is deliberate: the bootstrap function
-   * looks its role up by code, the seed re-asserts grants `ON CONFLICT (role_code)`, and
-   * `sys_role_grant_all_permissions(text)` takes one as an argument. Renaming the LABEL is what
-   * people actually want, and that is `roleName`.
+   * The internal identifier. Minted by the server (`ROLE_` plus a UUID), and not editable.
+   *
+   * Not editable because things resolve a role BY this value: the two bootstrap functions look up
+   * the role to give an administrator, the seed re-asserts grants `ON CONFLICT (role_code)`, and
+   * `sys_role_grant_all_permissions(text)` takes one as its argument. The human-readable label is
+   * `roleName`, and that can be changed.
+   *
+   * Only the RESERVED codes mean anything - `NEOTMS_SYSADMIN` and the ones the ETL carried over
+   * from legacy. A code minted for a new role means nothing at all.
    */
   roleCode: string
   roleName: string | null
@@ -440,15 +459,25 @@ export interface RoleAdminListView {
   items: RoleAdminRow[]
 }
 
+/**
+ * Creating a role. **There is no `roleCode` field.**
+ *
+ * The server mints it (`newRoleCode()`). Asking a person for a surrogate key made a box whose
+ * rules they had no reason to know: a Korean label is refused by the shape rule, which reads as the
+ * form being broken, and a plausible English one typed in a hurry is PERMANENT, because nothing
+ * here can rename a code.
+ *
+ * `roleName` is therefore required. It is now the only thing that tells two roles apart on screen,
+ * and a nameless role shows as a line of hexadecimal in the assignment dropdown.
+ */
 export interface RoleCreateInput {
-  roleCode: string
-  roleName?: string | null
+  roleName: string
   active?: boolean
 }
 
-/** `roleCode` is absent — see `RoleAdminRow.roleCode`. */
+/** `roleCode` is absent - see `RoleAdminRow.roleCode`. The name may be changed, never blanked. */
 export interface RoleUpdateInput {
-  roleName?: string | null
+  roleName?: string
   active?: boolean
 }
 

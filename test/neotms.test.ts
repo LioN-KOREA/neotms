@@ -2382,16 +2382,25 @@ describe("역할 관리 - editing what a role means", () => {
     expect(assignment![0]).toContain("holdsBootstrapAuthority(account)");
   });
 
-  test("a role's code cannot be renamed, by any route", () => {
+  test("a role's code is minted by the server, and then permanent", () => {
     /*
-     * Three things resolve a role BY CODE: `staff_bootstrap_superuser()` finds the role to give the
-     * first administrator, the seed re-asserts grants `ON CONFLICT (role_code)`, and
-     * `sys_role_grant_all_permissions(text)` takes one as its argument. A rename leaves all three
-     * looking for a row that no longer answers - and the bootstrap's failure is silent until the
-     * day somebody needs it.
+     * Two properties. The second is the old one; the first is why the screen stopped asking.
      *
-     * Pinned in all three places it could be let back in: the writable-column list, the request
-     * schema, and the form.
+     * MINTED. `role_code` is a surrogate key - nothing reads meaning out of it except the handful
+     * of reserved codes the seed writes - so the box asking an administrator to invent one asked
+     * for a value whose rules they had no reason to know. Both failures were real: a Korean label
+     * is refused by the shape rule, which reads as the form being broken, and an English one typed
+     * in a hurry is PERMANENT. The request schema no longer has the field at all, which is what
+     * makes "it stopped asking" true of the API and not only of the form.
+     *
+     * PERMANENT. Four things resolve a role BY CODE: `staff_bootstrap_superuser()` and
+     * `staff_self_register_bootstrap()` find the role to give an administrator, the seed re-asserts
+     * grants `ON CONFLICT (role_code)`, and `sys_role_grant_all_permissions(text)` takes one as its
+     * argument. A rename leaves all four looking for a row that no longer answers - and the
+     * bootstrap's failure is silent until the day somebody needs it.
+     *
+     * Pinned in every place either property could be let back in: the writable-column list, the
+     * INSERT, the generator, the two schemas, and the form.
      */
     const dbops = tsCode("staff/NeotmsRoleAdmin.dbops.ts");
     const fields = /const ROLE_ADMIN_FIELDS[\s\S]*?\];/.exec(dbops);
@@ -2400,16 +2409,32 @@ describe("역할 관리 - editing what a role means", () => {
     expect(fields![0]).toContain("active");
     expect(fields![0]).not.toContain("role_code");
 
-    // The update schema is derived by omission, so a field added to create cannot be forgotten.
+    // The code the INSERT writes comes from the generator, and the request cannot reach it.
+    const create = /export const RoleCreateOps[\s\S]*?^\}\);/m.exec(dbops);
+    expect(create).not.toBeNull();
+    expect(create![0]).toContain('param("role_code", newRoleCode(), "text")');
+    expect(create![0]).not.toContain("input.roleCode");
+    // And the generator is random, not derived from anything somebody typed. A code derived from
+    // the Korean label would put a second, stale copy of the name in a column nothing can rename.
+    expect(dbops).toMatch(/newRoleCode[\s\S]{0,300}randomUUID\(\)/);
+
     const schemas = tsCode("neotms.schemas.ts");
+    const createSchema = /export const RoleAdminCreateSchema[\s\S]*?\}\);/.exec(schemas);
+    expect(createSchema).not.toBeNull();
+    expect(createSchema![0]).not.toContain("roleCode");
+    // Required, because with a minted code the name is the only thing that tells two roles apart
+    // on screen - and a nameless role reads as a line of hexadecimal in the assignment dropdown.
+    expect(createSchema![0]).toContain("v.minLength(1)");
+    // The update schema is derived from create, so a field added there cannot be forgotten here.
     expect(schemas).toContain(
-      'export const RoleAdminUpdateSchema = v.partial(v.omit(RoleAdminCreateSchema, ["roleCode"]))',
+      "export const RoleAdminUpdateSchema = v.partial(RoleAdminCreateSchema)",
     );
 
-    // And the form shows it as text when editing rather than as a disabled input.
+    // And the form: no input for a code anywhere, shown as text when editing.
     const form = src("features", "roles", "RoleFormModal.tsx");
-    expect(form).toContain("isEdit ? (");
-    expect(form).toContain("역할 코드는 변경할 수 없습니다");
+    expect(form).not.toContain('id="role-code"');
+    expect(form).toContain("{role.roleCode}");
+    expect(form).toContain("바꿀 수 없습니다");
   });
 
   test("the permission and attribute editors are a replace, not a diff", () => {
@@ -2721,13 +2746,116 @@ describe("self-registration", () => {
     )?.[0];
     expect(bootstrap).toMatch(/lower\(\s*(btrim|trim)\(\s*mgr_email/);
 
-    const selfRegister = /CREATE OR REPLACE FUNCTION staff_self_register[\s\S]*?\n\$\w*\$;/.exec(
+    const selfRegister = /CREATE OR REPLACE FUNCTION staff_self_register\([\s\S]*?\n\$\w*\$;/.exec(
       sqlAll(),
     )?.[0];
     expect(selfRegister).not.toMatch(/lower\(\s*(btrim|trim)\(\s*mgr_email/);
     // The only row this function may look up by is the verified OIDC subject.
     expect(selfRegister).toMatch(/FROM staff WHERE lpx_sub = p_lpx_sub/);
     expect(selfRegister).not.toMatch(/WHERE[\s\S]{0,80}mgr_email\s*=/);
+  });
+
+  test("an LPX administrator is offered the sign-up form, not minted behind it", () => {
+    /*
+     * The guard used to mint a staff row for a holder of the bootstrap authority on their first
+     * request, silently. They never saw the form, so NEOTMS never learned the English name that
+     * goes on foreign documents, the phone number or the position - and the row it left could not
+     * be told apart from one a person had filled in.
+     *
+     * What this pins is the EXCLUSION. `whyUnusable` has three answers and only two of them are
+     * repairs of a row that already exists; "missing" has to fall through to `unregistered` so the
+     * form is offered at all. Drop `unusable !== "missing"` and the branch fires first, the form is
+     * never reached, and the regression looks like nothing whatsoever to anybody who was not
+     * expecting a form - which is how it got shipped the first time.
+     *
+     * The other two stay, and they are the way back in for an administrator who has locked
+     * themselves out: an `inactive` row is deliberately never offered the form, and a `no role` row
+     * already has a session - the waiting screen - so there is nothing to submit.
+     */
+    const guard = tsCode("../auth/NeotmsAuthGuard.ts");
+    const branch = /if \(unusable [^{]*\{/.exec(guard);
+    expect(branch).not.toBeNull();
+    expect(branch![0]).toContain('unusable !== "missing"');
+    expect(branch![0]).toContain("holdsBootstrapAuthority(account)");
+  });
+
+  test("approval on arrival is decided from the token, and what it grants is a literal", () => {
+    /*
+     * Three properties, each closing the same hole from a different side.
+     *
+     *   1. The CHOICE between the two sign-up functions is made from the verified authority list,
+     *      never from the request body - and in exactly one module, so there is one place to read.
+     *   2. Neither function takes a role, a scope or an active flag. The test above says why that
+     *      matters for `staff_self_register`; if it did not also hold here, writing two functions
+     *      instead of one function with a boolean would have bought nothing.
+     *   3. What "approved" MEANS is a literal in SQL - the reserved role code and view_scope 'Y'.
+     *      'Y' is not cosmetic: a superuser whose scope is anything else can open every screen and
+     *      see nothing on any of them.
+     */
+    const manager = tsCode("profile/NeotmsRegistrationManager.ts");
+    expect(manager).toContain("holdsBootstrapAuthority(identity.account)");
+    expect(manager).toMatch(/bootstrapAdmin[\s\S]{0,200}StaffSelfRegisterBootstrapOps/);
+
+    // Two files may name the bootstrap ops: the one that defines it and the one that guards it.
+    const callers = walkTs(path.join(neotmsLambdaDir, ".."))
+      .filter((file) => readFileSync(file, "utf8").includes("StaffSelfRegisterBootstrapOps"))
+      .map((file) => path.basename(file))
+      .sort();
+    expect(callers).toEqual(["NeotmsRegistrationManager.ts", "NeotmsStaff.dbops.ts"]);
+
+    const fn = /CREATE OR REPLACE FUNCTION staff_self_register_bootstrap\([\s\S]*?\n\$\w*\$;/.exec(
+      sqlAll(),
+    );
+    expect(fn).not.toBeNull();
+    const signature =
+      /staff_self_register_bootstrap\(([\s\S]*?)\)\s*\n?RETURNS/.exec(fn![0])?.[1] ?? "";
+    expect([...signature.matchAll(/(p_\w+)\s+text/g)].map((m) => m[1]).sort()).toEqual([
+      "p_email",
+      "p_ip",
+      "p_lpx_sub",
+      "p_name",
+      "p_name_eng",
+      "p_phone",
+      "p_position",
+    ]);
+    for (const forbidden of ["role_id", "view_scope", "active", "boolean", "p_role"]) {
+      expect(signature).not.toContain(forbidden);
+    }
+
+    // It wraps the ordinary function rather than copying its mgr_id minting - the third copy of
+    // that collision loop would be the one whose bugs nobody sees until two people sign up at once.
+    expect(fn![0]).toContain("staff_self_register(");
+    expect(fn![0]).toMatch(/role_code = 'NEOTMS_SYSADMIN'/);
+    expect(fn![0]).toMatch(/view_scope = 'Y'/);
+    // Its own audit marker, so a form submission is distinguishable from a silent mint.
+    expect(fn![0]).toContain("lpx-bootstrap-signup");
+  });
+
+  test("the sign-up form does not promise an approval to somebody who needs none", () => {
+    /*
+     * The form's two sentences used to be one. An administrator who is approved on submission was
+     * told "관리자 승인 후 사용할 수 있습니다" and then shown a confirmation saying their request was
+     * queued for a review - and they would be inside the application a second later. Neither
+     * sentence is harmful; both are false, and being told you are waiting when you are not is how
+     * somebody concludes the screen is broken and signs up again.
+     *
+     * The server decides which sentence applies (`ProfileView.bootstrapAdmin`), so the promise of a
+     * review has to sit INSIDE that conditional rather than in the paragraph above it.
+     */
+    const view = readFileSync(
+      path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "frontend",
+        "src",
+        "features",
+        "auth",
+        "SignupView.tsx",
+      ),
+      "utf8",
+    );
+    expect(view).toMatch(/bootstrapAdmin[\s\S]{0,400}관리자 승인 후 사용할 수 있습니다/);
+    expect(view).toContain("승인 절차 없이");
   });
 
   test("009 is idempotent at every statement, like the rest of db/", () => {
