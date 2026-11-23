@@ -445,14 +445,51 @@ describe("production data protection", () => {
     expect(dbSecret("dev").DeletionPolicy).toBe("Delete");
   });
 
-  test("the session table expires rows by TTL", () => {
-    // TTL is the only thing that deletes a session record. If the attribute name here and the one
-    // the ops module writes ever diverge, sessions accumulate forever and nothing visibly breaks.
-    synth().hasResourceProperties("AWS::DynamoDB::GlobalTable", {
-      TimeToLiveSpecification: { AttributeName: "NTTTL", Enabled: true },
-    });
+  test("every DynamoDB table expires its rows by TTL", () => {
+    /*
+     * TTL is the only thing that deletes either kind of row, and in both cases its absence is
+     * silent: sessions would accumulate forever, and attachment tokens would stay valid after the
+     * S3 lifecycle rule had already deleted the bytes they point at - turning "this link has
+     * expired" into "this link is broken".
+     *
+     * Asserted over ALL tables rather than with `hasResourceProperties`, which passes as soon as
+     * one resource of the type matches: the moment a second table existed, the old form could no
+     * longer say which of the two it had checked. A table added later with no TTL fails here.
+     */
+    const tables = Object.values(synth().findResources("AWS::DynamoDB::GlobalTable"));
+    expect(tables.map((t) => t.Properties.TableName as string).sort()).toEqual([
+      "neotms-attachments",
+      "neotms-sessions",
+    ]);
+    for (const table of tables) {
+      expect(table.Properties.TimeToLiveSpecification).toEqual({
+        AttributeName: "NTTTL",
+        Enabled: true,
+      });
+    }
   });
 });
+
+type CorsRule = { AllowedMethods?: string[]; AllowedOrigins?: unknown[] };
+
+/** The attachment bucket's CORS rules, in template order. */
+function attachmentCorsRules(stage: "dev" | "prod"): CorsRule[] {
+  const buckets = Object.values(synth(stage).findResources("AWS::S3::Bucket"));
+  const matches = buckets.filter(
+    (b) =>
+      typeof b.Properties.BucketName === "string" &&
+      (b.Properties.BucketName as string).includes("-attachments-"),
+  );
+  expect(matches).toHaveLength(1);
+  return (matches[0].Properties.CorsConfiguration?.CorsRules ?? []) as CorsRule[];
+}
+
+/** The logical id of the one distribution, so an intrinsic can be shown to point AT it. */
+function distributionLogicalId(stage: "dev" | "prod"): string {
+  const ids = Object.keys(synth(stage).findResources("AWS::CloudFront::Distribution"));
+  expect(ids).toHaveLength(1);
+  return ids[0];
+}
 
 describe("CORS", () => {
   test("the HTTP API declares no CORS configuration", () => {
@@ -463,6 +500,66 @@ describe("CORS", () => {
     synth().hasResourceProperties("AWS::ApiGatewayV2::Api", {
       CorsConfiguration: Match.absent(),
     });
+  });
+
+  test("the deployed console may PUT straight to the attachment bucket", () => {
+    /*
+     * The bug this exists to prevent, and it had already happened: attachment bytes never pass
+     * through the function - the browser PUTs them to a presigned URL - so the BUCKET has to allow
+     * the console's origin, and that origin is a CloudFront domain that no config file can name.
+     * Production's `allowedOriginUrls` is empty by design, so the rule built in the constructor
+     * allowed nobody at all and every upload failed its preflight.
+     *
+     * A refused preflight writes nothing anywhere: no S3 access-log line, no 4xx metric, no
+     * CloudWatch entry. The browser reports a bare network error, so the only thing that can catch
+     * this is an assertion on the template.
+     */
+    const rules = attachmentCorsRules("prod");
+    expect(rules).toHaveLength(1);
+    expect(rules[0].AllowedMethods).toContain("PUT");
+    // Not merely "some intrinsic": the origin must be built from THIS distribution's domain.
+    expect(JSON.stringify(rules[0].AllowedOrigins)).toContain(distributionLogicalId("prod"));
+  });
+
+  test("a developer origin does not displace the console's own", () => {
+    // Development has both, and they are different browsers: a Vite dev server on localhost and the
+    // deployed console. Allowing only the configured one is what production got wrong.
+    const rules = attachmentCorsRules("dev");
+    expect(rules).toHaveLength(2);
+    expect(rules[0].AllowedOrigins).toEqual(["http://localhost:5173"]);
+    expect(JSON.stringify(rules[1].AllowedOrigins)).toContain(distributionLogicalId("dev"));
+  });
+
+  test("no CORS rule names an empty set of origins", () => {
+    /*
+     * S3 requires at least one origin per rule. `AllowedOrigins: []` - which is what production
+     * synthesised while `allowedOriginUrls` was empty - is refused at DEPLOY time with a
+     * `MalformedXML` naming neither the bucket nor the rule, so the whole stack fails to create a
+     * bucket for a reason that reads as nothing in particular.
+     */
+    for (const stage of ["dev", "prod"] as const) {
+      for (const rule of attachmentCorsRules(stage)) {
+        expect(rule.AllowedOrigins?.length ?? 0).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test("mailed attachment links point at the console, in both stages", () => {
+    /*
+     * `NEOTMS_PUBLIC_BASE_URL` is the host a TRANSLATOR will click, so the two values the config
+     * alone can produce are both wrong: development's first origin is `http://localhost:5173`,
+     * which would mail a link to the recipient's own machine, and production's list is empty, which
+     * makes the function refuse to send at all. The distribution is the answer in both stages.
+     */
+    for (const stage of ["dev", "prod"] as const) {
+      const fn = Object.values(synth(stage).findResources("AWS::Lambda::Function")).find((f) =>
+        String(f.Properties.FunctionName).endsWith("-api"),
+      )!;
+      const variables = fn.Properties.Environment.Variables as Record<string, unknown>;
+      const base = JSON.stringify(variables.NEOTMS_PUBLIC_BASE_URL);
+      expect(base).toContain(distributionLogicalId(stage));
+      expect(base).not.toContain("localhost");
+    }
   });
 
   test("no allowed origin is a wildcard, in any stage", () => {
@@ -1285,6 +1382,7 @@ describe("the empty-database bootstrap", () => {
       // when a syntax error is most expensive: against live data, with the old tables still
       // there and the application already deployed against the new ones.
       "003_access_control.sql",
+      "004_recent_searches.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -1554,6 +1652,644 @@ describe("사용자 관리 route gating", () => {
       )
       .map((file) => path.relative(neotmsLambdaDir, file));
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("the PO request mail and its attachments", () => {
+  const src = (...segments: string[]) =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  test("the attachment picker is a button, and the same file can be picked twice", () => {
+    /*
+     * Two invariants, because they fail as the same symptom - a button that does nothing.
+     *
+     * The real `<input type="file">` is hidden and a button clicks it. That is not decoration: the
+     * browser draws the control's own button INSIDE the field and will not take this app's styling,
+     * so the only way for the picker to look like the dialog's other buttons is for it to BE one.
+     *
+     * And the hidden input's value is cleared after every pick. Without that, choosing a file,
+     * taking it back out and choosing the SAME file again raises no `change` event at all - the
+     * value has not changed - so the picker is dead for exactly one input: the file somebody just
+     * decided they did want after all. The copy has to come BEFORE the clear, because
+     * `input.files` is a live list and the clear empties it; reversed, every pick uploads nothing
+     * and reports no error.
+     */
+    const modal = src("features", "purchaseorders", "PoRequestMailModal.tsx");
+
+    expect(modal).toMatch(/type="file"[\s\S]{0,120}hidden/);
+    expect(modal).toContain("fileInput.current?.click()");
+
+    const picker = modal.slice(modal.indexOf("ref={fileInput}"));
+    const copy = picker.indexOf("Array.from(e.target.files");
+    const clear = picker.indexOf("e.target.value = ''");
+    expect(copy).toBeGreaterThanOrEqual(0);
+    expect(clear).toBeGreaterThan(copy);
+  });
+
+  test("exactly one route in this API is unauthenticated, and it is the attachment download", () => {
+    /*
+     * THE most consequential assertion in this file. Every other route is behind the guard; this
+     * one is reached by a translator - somebody with no account here - clicking a link in a mail.
+     *
+     * A whitelist of one, so that a second public route cannot be added without this test being
+     * edited, and editing it means writing down why. The failure a drive-by `publicRoute: true`
+     * would cause is not a visible bug: the endpoint simply starts answering everybody.
+     */
+    const handler = lambdaSource("neotms.handler.ts");
+    const publicRoutes = handler
+      .split("\n")
+      .filter((l) => l.includes("publicRoute: true") && /path:/.test(l) && /method:/.test(l));
+
+    expect(publicRoutes).toHaveLength(1);
+    const route = publicRoutes[0]!;
+    expect(route).toContain("GET");
+    expect(route).toContain("${ATTACHMENTS}/:token");
+    // It must not ALSO claim another tier - two answers to "who may call this".
+    expect(route).not.toContain("permission:");
+    expect(route).not.toContain("anyStaff");
+    expect(route).not.toContain("superuser");
+    expect(route).not.toContain("account:");
+  });
+
+  test("the public download answers a redirect, never bytes, and is never cached", () => {
+    /*
+     * Three properties, each guarding a different leak:
+     *
+     *   * A 302 rather than a body, because the bytes must not pass through Lambda - a 100MB file
+     *     would hit the 6MB response payload limit and bill for the transfer twice.
+     *   * `no-store`, because a shared cache holding this would serve one translator's 60-second
+     *     presigned URL to the next request for the same token.
+     *   * `no-referrer`, because without it the presigned URL's host sees this system's URL -
+     *     token and all - in the `Referer` header, which puts a working link in somebody else's
+     *     access log.
+     */
+    const handler = lambdaSource("neotms.handler.ts");
+    const download = /const handleDownloadAttachment[\s\S]*?\n};/.exec(handler);
+    expect(download).not.toBeNull();
+    expect(download![0]).toContain("status: 302");
+    expect(download![0]).toContain("Location:");
+    expect(download![0]).toContain('"Cache-Control": "no-store, max-age=0"');
+    expect(download![0]).toContain('"Referrer-Policy": "no-referrer"');
+    // The body is empty: a body on a redirect is read by nothing and would only be somewhere for
+    // the presigned URL to be logged.
+    expect(download![0]).toMatch(/body: ""/);
+  });
+
+  test("a token names one object, and expiry is checked rather than assumed", () => {
+    /*
+     * What bounds the unauthenticated route. The token resolves to a row the SERVER wrote, naming
+     * one key the server chose; nothing in the request can widen that.
+     *
+     * The expiry check matters on its own: DynamoDB sweeps a TTL row within ~48 hours of its
+     * timestamp rather than at it, so trusting absence would let a link work for up to two days
+     * past the 21 the translator was promised.
+     */
+    const manager = tsCode("attachments/NeotmsAttachmentManager.ts");
+    const resolve = /export async function resolveDownload[\s\S]*?\n}/.exec(manager);
+    expect(resolve).not.toBeNull();
+    expect(resolve![0]).toMatch(/record\.expiresAt <= Date\.now\(\)/);
+    expect(resolve![0]).toContain("record.objectKey");
+    // The key comes from the row, never from the request.
+    expect(resolve![0]).not.toMatch(/input\.|request\./);
+
+    // 256 bits of randomness is what makes the token unguessable.
+    expect(manager).toContain("randomBytes(32)");
+  });
+
+  test("the uploader cannot choose where in the bucket a file lands", () => {
+    /*
+     * The key is built by the server from the PO id and the token. The file NAME goes through
+     * `safeKeyPart`, and the part that matters is the path separators: a file called
+     * `../../etc/passwd` would otherwise pick its own location in the bucket.
+     *
+     * The original name is kept untouched in DynamoDB, because that is what the translator should
+     * see as the link text and as the downloaded filename.
+     */
+    const manager = tsCode("attachments/NeotmsAttachmentManager.ts");
+    expect(manager).toContain("safeKeyPart");
+    const sanitiser = /const safeKeyPart[\s\S]*?;\n/.exec(manager);
+    expect(sanitiser).not.toBeNull();
+    expect(sanitiser![0]).toMatch(/replace\(\/\[\\\\\/\]\/g/);
+    // The key is a template the server owns; `fileName` only reaches it through the sanitiser.
+    expect(manager).toMatch(/objectKey = `po-request\/\$\{input\.poId\}\/\$\{token\}\//);
+  });
+
+  test("a mail can only link to files uploaded against the PO it is for", () => {
+    /*
+     * The client names tokens, so the server has to refuse one that belongs elsewhere. A token is
+     * unguessable, so this is not about guessing - it is about a token that has LEAKED, which is
+     * the expected state of affairs: every token has already been mailed to a translator. Without
+     * this check, one of those could be re-mailed against any PO by anyone who can reach the
+     * endpoint.
+     *
+     * The refusal says the same thing as "no such file", so the endpoint cannot be used to learn
+     * that a token is real but belongs to somebody else.
+     */
+    const manager = tsCode("purchase-orders/NeotmsPoRequestMailManager.ts");
+    const resolve = /async function resolveAttachments[\s\S]*?\n}/.exec(manager);
+    expect(resolve).not.toBeNull();
+    expect(resolve![0]).toMatch(/record\.poId !== poId/);
+    expect(resolve![0]).toMatch(/record\.expiresAt <= Date\.now\(\)/);
+    // One message for both refusals.
+    const messages = [...resolve![0].matchAll(/no longer available/g)];
+    expect(messages.length).toBe(2);
+  });
+
+  test("the PO is read through its scope before anything is signed in to", () => {
+    /*
+     * The handover mail's rule, and the reason is the same: trying the Hiworks credentials first
+     * would hand somebody guessing at PO ids two facts instead of none - that the sign-in worked,
+     * and that the PO does not exist.
+     *
+     * The approval check sits between them. It is after the scoped read (so a PO you cannot see
+     * answers 404, not "not approved") and before the sign-in.
+     */
+    const manager = tsCode("purchase-orders/NeotmsPoRequestMailManager.ts");
+    const send = /export async function sendPoRequestMail[\s\S]*?\n}/.exec(manager)![0];
+
+    const read = send.indexOf("PoGetOps");
+    const approved = send.indexOf("row.poApproved");
+    const login = send.indexOf("hiworksLogin");
+    expect(read).toBeGreaterThan(-1);
+    expect(approved).toBeGreaterThan(read);
+    expect(login).toBeGreaterThan(approved);
+  });
+
+  test("the mail escapes everything a person typed", () => {
+    /*
+     * The body is HTML built by concatenation, and three of the values in it are typed by people:
+     * the remarks, the file names, and the names carried on the PO. This mail goes OUTSIDE the
+     * company, so an unescaped one is markup in somebody else's inbox - and a file called
+     * `<img src=x onerror=...>.pdf` is not a hypothetical, it is a file name.
+     *
+     * The URL is escaped too, which is the easy one to miss: it sits in an `href`, so a quote in
+     * it would close the attribute and open another.
+     */
+    const mail = lambdaSource("purchase-orders/NeotmsPORequestEmail.ts");
+
+    // Every interpolation of a caller-supplied value goes through esc/escLines.
+    for (const field of ["facts.translatorName", "facts.pmName", "facts.languages", "facts.volume", "facts.deadline"]) {
+      expect(mail).toContain(`esc(${field})`);
+    }
+    expect(mail).toContain("escLines(choices.note.trim())");
+    expect(mail).toContain("esc(file.url)");
+    expect(mail).toContain("esc(file.fileName)");
+
+    // And nothing is interpolated raw. The template literal must not contain a bare ${facts.x}.
+    expect(mail).not.toMatch(/\$\{facts\.\w+\}/);
+    expect(mail).not.toMatch(/\$\{choices\.note\}/);
+
+    // The link carries the file name as its text, which is what the request asked for.
+    expect(mail).toMatch(/<a href="\$\{esc\(file\.url\)\}"[\s\S]*?esc\(file\.fileName\)/);
+  });
+
+  test("the file-type lists agree between the server, the schema and the screen", () => {
+    /*
+     * Three copies, as always, and each disagreement fails differently: a format the screen offers
+     * but the schema rejects is a 400 on send; one the schema allows but the mail cannot label
+     * goes out as a bare constant like `SDLPPX` in a mail to a customer's translator.
+     *
+     * The lists are deliberately different from each other - 작업파일 has sdlppx and 원본 does
+     * not - so this cannot be collapsed into one list.
+     */
+    const mail = lambdaSource("purchase-orders/NeotmsPORequestEmail.ts");
+    const serverList = (name: string): string[] => {
+      const m = new RegExp(`export const ${name} = \\[([^\\]]*)\\] as const`).exec(mail);
+      expect(m).not.toBeNull();
+      return [...m![1]!.matchAll(/"([A-Z]+)"/g)].map((x) => x[1]!);
+    };
+    const original = serverList("PO_ORIGINAL_FORMATS");
+    const workspace = serverList("PO_WORKSPACE_FORMATS");
+
+    expect(original).toEqual(["PDF", "PPT", "WORD", "HWP", "OTHERS"]);
+    expect(workspace).toEqual(["SDLPPX", "PDF", "PPT", "WORD", "HWP", "OTHERS"]);
+
+    // The screen's copies.
+    const types = src("apis", "neotms.types.ts");
+    const frontList = (name: string): string[] => {
+      const m = new RegExp(`export const ${name} = \\[([^\\]]*)\\] as const`).exec(types);
+      expect(m).not.toBeNull();
+      return [...m![1]!.matchAll(/'([A-Z]+)'/g)].map((x) => x[1]!);
+    };
+    expect(frontList("PO_ORIGINAL_FORMATS")).toEqual(original);
+    expect(frontList("PO_WORKSPACE_FORMATS")).toEqual(workspace);
+
+    /*
+     * Every code has a label, and the labels are the only place Korean appears - the constants
+     * themselves are English because they are application logic. `OTHERS` is the one worth naming:
+     * it is 기타 on screen and in the mail, and `OTHERS` everywhere else.
+     */
+    for (const code of new Set([...original, ...workspace])) {
+      expect(mail).toMatch(new RegExp(`${code}: "`));
+      expect(types).toMatch(new RegExp(`${code}: '`));
+    }
+    expect(mail).toContain('OTHERS: "기타"');
+  });
+
+  test("the 21 days are enforced in three places that have to agree", () => {
+    /*
+     * The link lives as long as the DynamoDB row; the file lives as long as the S3 object; and the
+     * mail tells the translator a number. Three layers, and the failures differ:
+     *
+     *   * Row outlives object -> the link works and answers 404. Reads as "broken", not "expired".
+     *   * Object outlives row -> bytes nobody can reach, billed for, forever.
+     *   * Mail says a different number -> the translator plans around the wrong date.
+     *
+     * The S3 rule is deliberately a day longer, because lifecycle expiry runs daily and DynamoDB
+     * sweeps within ~48h - equal numbers would occasionally delete the object out from under a
+     * live token.
+     */
+    const dbops = tsCode("attachments/NeotmsAttachment.dbops.ts");
+    expect(dbops).toContain("export const ATTACHMENT_TTL_DAYS = 21");
+
+    const storage = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "infra", "constructs", "NeotmsStorage.ts"),
+      "utf8",
+    );
+    const rule = /id: "expire-mailed-attachments"[\s\S]*?\}/.exec(storage);
+    expect(rule).not.toBeNull();
+    expect(rule![0]).toContain("prefix: \"po-request/\"");
+    expect(rule![0]).toContain("cdk.Duration.days(22)");
+
+    // And what the mail promises.
+    expect(lambdaSource("purchase-orders/NeotmsPORequestEmail.ts")).toContain("21일간 유효합니다");
+  });
+
+  test("the attachment table expires rows by TTL, and is its own table", () => {
+    /*
+     * The TTL attribute name has to match what the ops module writes, and the value has to be
+     * SECONDS - DynamoDB silently never expires a row whose timestamp is in milliseconds, and
+     * nothing notices because the application checks the expiry itself. The rows would just
+     * accumulate forever.
+     */
+    const template = synth();
+    template.hasResourceProperties("AWS::DynamoDB::GlobalTable", {
+      TableName: Match.stringLikeRegexp("attachments$"),
+      TimeToLiveSpecification: { AttributeName: "NTTTL", Enabled: true },
+    });
+    expect(tsCode("attachments/NeotmsAttachment.dbops.ts")).toMatch(
+      /NTTTL: \{ N: String\(Math\.floor\(record\.expiresAt \/ 1000\)\) \}/,
+    );
+  });
+
+  test("sending is gated on the PO_EMAIL permission, which nothing granted before", () => {
+    /*
+     * `NEOTMS_PERMISSION_PO_EMAIL` was defined with the rest of the vocabulary and deliberately
+     * granted to nobody - db/003_access_control.sql says so in as many words, because granting a
+     * permission with no feature behind it reads, later, as a right somebody chose to hand out.
+     *
+     * It has a feature now. The migration's reasoning still holds for databases migrated before
+     * today, so the first person to use this has to be given it on the 역할 관리 screen - which is
+     * worth the test, because "the button is not there" is the symptom.
+     */
+    const handler = lambdaSource("neotms.handler.ts");
+    const routes = handler
+      .split("\n")
+      .filter((l) => /request-mail|ATTACHMENT_UPLOADS/.test(l) && /method:/.test(l));
+    expect(routes).toHaveLength(2);
+    for (const route of routes) {
+      expect(route).toContain("NEOTMS_PERMISSION_PO_EMAIL");
+    }
+
+    // The screen asks the same question before showing the button.
+    const view = src("features", "purchaseorders", "PurchaseOrdersView.tsx");
+    expect(view).toContain("may(profile, NEOTMS_PERMISSION_PO_EMAIL)");
+    // And an unapproved PO cannot be mailed, matching the printable document's rule.
+    expect(view).toContain("disabled={!row.poApproved}");
+  });
+});
+
+describe("recent searches", () => {
+  const src = (...segments: string[]) =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  /** The quoted scope literals out of one SQL CHECK. */
+  const scopesInCheck = (sql: string): string[] => {
+    const check = /CONSTRAINT ck_staff_recent_search_scope CHECK \(scope IN \(([\s\S]*?)\)\)/.exec(
+      sql,
+    );
+    expect(check).not.toBeNull();
+    return [...check![1]!.matchAll(/'([a-z/-]+)'/g)].map((m) => m[1]!).sort();
+  };
+
+  test("the scope list is the same in all four places it exists", () => {
+    /*
+     * A scope is written down four times: the request schema's picklist, the CHECK in
+     * 001_schemas.sql, the CHECK in 004_recent_searches.sql, and the string each screen passes to
+     * `useRecentSearch`. Four copies is three chances to drift, and each disagreement fails
+     * differently:
+     *
+     *   * A screen sending a scope the schema does not list gets a 400 on every search, which is
+     *     at least loud.
+     *   * A scope in the schema but not in the CHECK passes validation and dies at the database as
+     *     a 23514 - a 500 for the user, naming a constraint.
+     *   * A scope in the CHECKs but in neither the schema nor a screen is dead weight that reads
+     *     like a screen somebody forgot to finish.
+     *   * 001 and 004 disagreeing means a migrated database and a fresh one accept different
+     *     scopes, which only shows up on whichever one was not tested.
+     *
+     * The DDL duplication is unavoidable - 001 builds a new database and 004 migrates an existing
+     * one - so this is the test that keeps the two copies honest. It has already been checked
+     * against two real databases: the table 004 creates is byte-identical to 001's.
+     */
+    const schemaScopes = (() => {
+      const block = /export const RECENT_SEARCH_SCOPES = \[([\s\S]*?)\] as const/.exec(
+        tsCode("neotms.schemas.ts"),
+      );
+      expect(block).not.toBeNull();
+      return [...block![1]!.matchAll(/"([a-z/-]+)"/g)].map((m) => m[1]!).sort();
+    })();
+
+    expect(schemaScopes.length).toBe(7);
+    expect(scopesInCheck(sql("001_schemas.sql"))).toEqual(schemaScopes);
+    expect(scopesInCheck(sql("004_recent_searches.sql"))).toEqual(schemaScopes);
+
+    /*
+     * And the screens. Every scope must be used by exactly one screen - a scope nothing passes is
+     * dead, and two screens sharing one would pool two different lists of searches into one
+     * suggestion box.
+     */
+    const used: string[] = [];
+    for (const file of [
+      ["features", "projects", "ProjectsView.tsx"],
+      ["features", "jobs", "JobsView.tsx"],
+      ["features", "purchaseorders", "PurchaseOrdersView.tsx"],
+      ["features", "customers", "CustomersView.tsx"],
+      ["features", "translators", "TranslatorsView.tsx"],
+      ["features", "payment", "PoPaymentView.tsx"],
+      ["features", "payment", "InvoicePaymentView.tsx"],
+    ]) {
+      const call = /useRecentSearch\('([a-z/-]+)'\)/.exec(src(...file));
+      expect(call).not.toBeNull();
+      used.push(call![1]!);
+    }
+    expect(used.sort()).toEqual(schemaScopes);
+  });
+
+  test("a search is recorded when it is submitted, never while it is typed", () => {
+    /*
+     * The suggestion list holds five terms. Recording on every keystroke fills all five with the
+     * prefixes of one word - '현', '현대', '현대차' - so the feature destroys itself on first use,
+     * and it does it quietly: the list is full, the entries are real, and every one is useless.
+     *
+     * So `record` is called from each screen's `onSearch`, which is the form's submit handler and
+     * therefore the moment the person committed to a term. The hook deliberately does not call it
+     * itself - it could have intercepted the form's submit event, and then "when is a search
+     * recorded" would not be visible in any screen's code.
+     */
+    for (const file of [
+      ["features", "projects", "ProjectsView.tsx"],
+      ["features", "jobs", "JobsView.tsx"],
+      ["features", "purchaseorders", "PurchaseOrdersView.tsx"],
+      ["features", "customers", "CustomersView.tsx"],
+      ["features", "translators", "TranslatorsView.tsx"],
+      ["features", "payment", "PoPaymentView.tsx"],
+      ["features", "payment", "InvoicePaymentView.tsx"],
+    ]) {
+      const code = src(...file)
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/\/\/[^\n]*/g, " ");
+
+      // Inside onSearch, which is the submit handler.
+      const onSearch = /const onSearch = \(e: FormEvent\) => \{[\s\S]*?\n  \}/.exec(code);
+      expect(onSearch).not.toBeNull();
+      expect(onSearch![0]).toContain("recent.record(");
+
+      // And nowhere else. An onChange that records is the failure this test exists for.
+      expect((code.match(/recent\.record\(/g) ?? []).length).toBe(1);
+      expect(code).not.toMatch(/onChange[^\n]*recent\.record/);
+    }
+  });
+
+  test("every search box turns the browser's own autofill off", () => {
+    /*
+     * Without `autoComplete="off"` the browser's form history takes the field and the datalist is
+     * never drawn. The symptom is not "no suggestions" - it is "suggestions, but they are the
+     * wrong ones", because what appears is whatever that person has typed into any similar box on
+     * any site. The feature looks broken and its data looks wrong at the same time, and nothing
+     * errors.
+     *
+     * Paired with `list`, so the two cannot drift apart: an input offering recent searches must
+     * also be telling the browser to stay out of the way.
+     */
+    const views = [
+      ["features", "projects", "ProjectsView.tsx"],
+      ["features", "jobs", "JobsView.tsx"],
+      ["features", "purchaseorders", "PurchaseOrdersView.tsx"],
+      ["features", "customers", "CustomersView.tsx"],
+      ["features", "translators", "TranslatorsView.tsx"],
+      ["features", "payment", "PoPaymentView.tsx"],
+      ["features", "payment", "InvoicePaymentView.tsx"],
+    ];
+
+    for (const view of views) {
+      const code = src(...view);
+      const listed = [...code.matchAll(/list="([a-z-]+-recent)"\s+autoComplete="off"/g)];
+      expect(listed).toHaveLength(1);
+    }
+  });
+
+  test("the endpoints read and write only the caller's own rows", () => {
+    /*
+     * This is the one table in the schema that is private to a person. The protection is not a
+     * check somewhere - it is that no request shape can name whose rows to touch: the staff id
+     * comes from the guard, and every statement puts it in the WHERE clause.
+     *
+     * `anyStaff` is the right tier for the same reason. Reading your own recent searches is not a
+     * privilege a role grants; gating it on a permission would mean a role could be configured
+     * such that somebody cannot see their own search history, which is not a sentence anybody
+     * would write on purpose.
+     */
+    const handler = lambdaSource("neotms.handler.ts");
+    const routes = handler
+      .split("\n")
+      .filter((l) => l.includes("RECENT_SEARCHES") && /method:/.test(l));
+    expect(routes).toHaveLength(3);
+    for (const route of routes) {
+      expect(route).toContain("anyStaff: true");
+      expect(route).not.toContain("permission:");
+      expect(route).not.toContain("superuser:");
+    }
+    // Under /me/, with the other endpoint whose row set is chosen by who is asking.
+    expect(handler).toContain('const RECENT_SEARCHES = "/api/v0/me/recent-searches"');
+
+    // Every statement is scoped by staff_id, and none of them takes it from the body.
+    const dbops = tsCode("profile/NeotmsRecentSearch.dbops.ts");
+    const statements = [...dbops.matchAll(/sql: `([^`]*)`/g)].map((m) => m[1]!);
+    expect(statements.length).toBeGreaterThanOrEqual(4);
+    for (const statement of statements) {
+      // Every statement carries the caller's id. The INSERT carries it in VALUES rather than in a
+      // WHERE, so the assertion is on the parameter and not on the clause - and the reads and
+      // deletes are checked for the predicate separately below.
+      expect(statement).toContain(":staff_id");
+    }
+    for (const statement of statements.filter((sql) => !/INSERT INTO/.test(sql))) {
+      expect(statement).toMatch(/staff_id = :staff_id/);
+    }
+    const manager = tsCode("profile/NeotmsRecentSearchManager.ts");
+    expect((manager.match(/caller\.staffId/g) ?? []).length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("the five-term limit is enforced by the write, with the read as a backstop", () => {
+    /*
+     * Pruning on write rather than trimming on read is what keeps the table's size a function of
+     * how many people and screens there are, instead of how much anybody searches. The read still
+     * ranks and cuts at the same number, which covers the window between a record and its prune.
+     *
+     * The prune is a SEPARATE statement in the same transaction, and that is load-bearing: folded
+     * into the INSERT as a data-modifying CTE it could not see the row just written - the shared
+     * snapshot rule - so it would keep the previous five and leave a sixth behind. Verified
+     * against a real database: eight terms recorded, five kept, newest first.
+     */
+    const dbops = tsCode("profile/NeotmsRecentSearch.dbops.ts");
+    expect(dbops).toContain("export const RECENT_SEARCH_LIMIT = 5");
+    // Both the prune and the read use the constant rather than a literal 5.
+    expect((dbops.match(/\$\{String\(RECENT_SEARCH_LIMIT\)\}/g) ?? []).length).toBe(2);
+
+    const manager = tsCode("profile/NeotmsRecentSearchManager.ts");
+    const record = /export async function recordSearch[\s\S]*?\n}/.exec(manager);
+    expect(record).not.toBeNull();
+    expect(record![0]).toContain("pgTransaction");
+    // Record first, then prune: the other order prunes before the new row exists.
+    expect(record![0].indexOf("RecentSearchRecordOps")).toBeLessThan(
+      record![0].indexOf("RecentSearchPruneOps"),
+    );
+  });
+
+  test("recording a search cannot turn a working search into a visible error", () => {
+    /*
+     * The write happens after the search the user asked for has already run. A failure costs one
+     * row in a suggestion list; surfacing it costs the user an error box on a screen where
+     * nothing they wanted had failed. So the server answers 204 either way and logs, and the
+     * client swallows it too.
+     *
+     * This is the opposite of every other write in the app, which is exactly why it is pinned -
+     * the next person to touch it will reasonably assume the house rule applies.
+     */
+    const manager = tsCode("profile/NeotmsRecentSearchManager.ts");
+    const record = /export async function recordSearch[\s\S]*?\n}/.exec(manager)![0];
+    /*
+     * The catch must SWALLOW it. Asserting only that a catch exists is not enough - a catch that
+     * logs and rethrows reads the same at a glance and behaves like no catch at all, which is the
+     * mutation this assertion was added for.
+     *
+     * Sliced rather than matched with a regex: the catch body contains a template literal, so its
+     * `${...}` braces defeat any pattern that stops at the first `}`.
+     */
+    const catchAt = record.indexOf("} catch (err) {");
+    expect(catchAt).toBeGreaterThan(-1);
+    const caught = record.slice(catchAt);
+    expect(caught).toContain("console.warn");
+    expect(caught).not.toContain("throw");
+    expect(record).toMatch(/status: 204/);
+    // `runDb` would turn a throw into a 500, so it must not wrap this one.
+    expect(record).not.toContain("runDb");
+
+    // Forgetting, by contrast, reports failure: the user asked for it to be gone.
+    const forget = /export async function forgetSearch[\s\S]*?\n}/.exec(manager)![0];
+    expect(forget).toContain("runDb");
+
+    const mutation = src("apis", "queries", "neotms.mutation.ts");
+    const useRecord = /export function useRecordSearch[\s\S]*?\n}/.exec(mutation);
+    expect(useRecord).not.toBeNull();
+    expect(useRecord![0]).toContain("onError");
+  });
+});
+
+describe("tables and the PO명 removal", () => {
+  /** Every `.tsx` under frontend/src, recursively. */
+  const walkTsx = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return walkTsx(full);
+      return entry.name.endsWith(".tsx") ? [full] : [];
+    });
+
+  const frontendSrc = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "frontend",
+    "src",
+  );
+
+  test("every table's empty-state row spans exactly its own columns", () => {
+    /*
+     * `TableState` renders one `<td colSpan={n}>` carrying the loading, error and empty messages.
+     * When `n` disagrees with the number of `<th>`, nothing errors: too small leaves a gap at the
+     * end of the row, too large stretches the cell past the last column and can push the table
+     * wider than its container. Either way it only shows up on an empty list, which is the state
+     * nobody opens a screen to look at.
+     *
+     * Asserted as "the two numbers agree" rather than as a list of expected widths. A test that
+     * names the numbers has to be edited whenever a column is added - and when it was written that
+     * way here it asserted that `colSpan={10}` and `colSpan={11}` each appeared once, which was
+     * satisfied by the jobs table spanning eleven of its ten columns and the PO table spanning ten
+     * of its eleven. Two bugs using the right pair of numbers, and the comment had the tables the
+     * wrong way round.
+     */
+    const mismatches: string[] = [];
+
+    for (const file of walkTsx(frontendSrc)) {
+      const source = readFileSync(file, "utf8");
+      for (const head of source.matchAll(/<thead>([\s\S]*?)<\/thead>/g)) {
+        const columns = (head[1]!.match(/<th[\s/>]/g) ?? []).length;
+        // The empty-state cell belongs to the table whose header it follows.
+        const after = source.slice(head.index! + head[0].length);
+        const span = /colSpan=\{(\d+)\}/.exec(after);
+        if (!span) continue;
+        const declared = Number(span[1]);
+        if (declared !== columns) {
+          mismatches.push(`${path.basename(file)}: ${String(columns)} columns, colSpan=${span[1]}`);
+        }
+      }
+    }
+
+    expect(mismatches).toEqual([]);
+  });
+
+  test("PO명 is gone from every screen, and still accepted by the API", () => {
+    /*
+     * The feedback was that nobody needed it. What "remove it from the UI but keep it" has to mean,
+     * stated as four separate things, because doing three of them leaves a worse state than doing
+     * none:
+     *
+     *   1. No input asks for it. A required field with no input refuses every save.
+     *   2. No screen displays it. A value somebody can read but not edit is worse than one they
+     *      cannot see - and the rows loaded from the legacy ETL still have names in them.
+     *   3. The API still takes it, so a future screen needs no migration. That is the whole reason
+     *      for keeping the column.
+     *   4. The schema no longer requires it. It was `minLength(1)`, so leaving that in place would
+     *      refuse every PO create with a 400 naming a field that has no input - unanswerable from
+     *      the user's side.
+     */
+    const screens = walkTsx(frontendSrc).filter((file) =>
+      /PurchaseOrder|PoPayment|InvoiceForm|Settlement|ProjectDetail|TranslatorSwap/.test(file),
+    );
+    expect(screens.length).toBeGreaterThanOrEqual(6);
+
+    for (const file of screens) {
+      const source = readFileSync(file, "utf8");
+      // Comments explaining the removal are expected; `poName` as a VALUE is not. The one
+      // permitted appearance is sending null.
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\n]*/g, " ");
+      const uses = [...code.matchAll(/poName/g)];
+      const nulls = [...code.matchAll(/poName: null/g)];
+      expect(uses.length).toBe(nulls.length);
+      expect(code).not.toContain("PO명");
+    }
+
+    // The API still accepts it, and no longer demands it.
+    const schemas = tsCode("neotms.schemas.ts");
+    expect(schemas).toContain("poName: settable(text(500))");
+    expect(schemas).not.toMatch(/poName:[^\n]*minLength\(1\)/);
+    // The write path keeps its column spec, so a future screen writes it with no migration.
+    expect(tsCode("purchase-orders/NeotmsPurchaseOrder.dbops.ts")).toContain("po_name");
   });
 });
 
@@ -4602,12 +5338,14 @@ describe("date defaults, bulk operations and in-place editing", () => {
     expect(view).toContain("<StatusChip value={po.poMoneyState} />");
     expect(view).not.toMatch(/poMoneyState\s*\}\s*\)/);
 
-    // Both tables grew a leading checkbox column, and the PO table then grew an 승인 column on top
-    // of it - so the two no longer match: jobs span ten, POs eleven. A missed one is a cell short
-    // and the empty-table message sits under the wrong heading.
-    expect(view.match(/colSpan=\{10\}/g)).toHaveLength(1);
-    expect(view.match(/colSpan=\{11\}/g)).toHaveLength(1);
-    expect(view).not.toContain("colSpan={9}");
+    /*
+     * Both tables carry a leading checkbox column and the PO table an 승인 column, so both are ten
+     * wide and both empty-state rows span ten. The invariant itself is asserted for every table in
+     * the application by "every table's empty-state spans exactly its own columns" below - this is
+     * the local statement of the number, which is worth having because these two tables are the
+     * ones that keep gaining columns.
+     */
+    expect(view.match(/colSpan=\{10\}/g)).toHaveLength(2);
     // `indeterminate` is a DOM property with no HTML attribute, so it can only be set through a ref.
     // Without it a partial selection renders as an empty box, and the header reads "nothing selected"
     // while 선택 삭제 is live.
@@ -5386,8 +6124,16 @@ describe("approving purchase orders in bulk", () => {
     const poHead = [...source.matchAll(thead)].at(-1)?.[1] ?? "";
     expect(poHead).toContain("승인");
     expect(source).toContain("<ApprovalChip approved={po.poApproved} />");
-    expect((poHead.match(/<th[\s/>]/g) ?? []).length).toBe(11);
-    expect(source).toContain("colSpan={11}");
+    /*
+     * Ten, not eleven: PO명 was removed from every screen after the feedback that nobody needed it
+     * (the column and the API field stay, and the form sends null). The `colSpan` is asserted
+     * against the header count rather than as a second literal, so the two cannot drift - which is
+     * how the jobs table came to span eleven columns of ten for as long as it did.
+     */
+    const poColumns = (poHead.match(/<th[\s/>]/g) ?? []).length;
+    expect(poColumns).toBe(10);
+    expect(source).toContain(`colSpan={${String(poColumns)}}`);
+    expect(poHead).not.toContain("PO명");
   });
 });
 

@@ -27,10 +27,29 @@ export interface NeotmsStorageProps {
   readonly config: NeotmsStageConfig;
 }
 
+/**
+ * The CORS rule that makes a browser PUT to the attachment bucket legal.
+ *
+ * Named once because two places need it: the configured developer origins, below, and the deployed
+ * console's own origin, which is only known once the distribution exists (see
+ * `allowOriginOnAttachments`). Two rules built from the same shape cannot drift in the headers or
+ * the methods they allow - only in the origins, which is the one thing that differs.
+ */
+function attachmentCorsRule(allowedOrigins: string[]): s3.CorsRule {
+  return {
+    allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET, s3.HttpMethods.HEAD],
+    allowedOrigins,
+    allowedHeaders: ["*"],
+    exposedHeaders: ["ETag"],
+    maxAge: 3000,
+  };
+}
+
 export class NeotmsStorage extends Construct {
   public readonly attachmentBucket: s3.Bucket;
   public readonly exportBucket: s3.Bucket;
   public readonly sessionTable: dynamodb.TableV2;
+  public readonly attachmentTable: dynamodb.TableV2;
   public readonly logArchiveBucket: s3.Bucket;
 
   constructor(scope: Construct, id: string, props: NeotmsStorageProps) {
@@ -53,15 +72,19 @@ export class NeotmsStorage extends Construct {
       enforceSSL: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: retain,
-      cors: [
-        {
-          allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET, s3.HttpMethods.HEAD],
-          allowedOrigins: config.allowedOriginUrls,
-          allowedHeaders: ["*"],
-          exposedHeaders: ["ETag"],
-          maxAge: 3000,
-        },
-      ],
+      /*
+       * No rule at all when the list is empty, rather than a rule allowing nobody.
+       *
+       * S3 requires every CORS rule to name at least one origin; `AllowedOrigins: []` is refused at
+       * deploy time with a `MalformedXML` that names neither the bucket nor the rule. Production's
+       * `allowedOriginUrls` is deliberately empty (see NeotmsConfig), so without this guard the
+       * production stack could not create this bucket at all - and the deployed console gets its
+       * access from `allowOriginOnAttachments` below, not from this list.
+       */
+      cors:
+        config.allowedOriginUrls.length > 0
+          ? [attachmentCorsRule([...config.allowedOriginUrls])]
+          : [],
       lifecycleRules: [
         {
           /*
@@ -82,6 +105,25 @@ export class NeotmsStorage extends Construct {
           id: "expire-staging",
           prefix: "tmp/",
           expiration: cdk.Duration.days(1),
+        },
+        {
+          /*
+           * Files mailed to a translator, which the PO request mail links to for 21 days.
+           *
+           * The number has to match ATTACHMENT_TTL_DAYS in the Lambda, and the two are enforced at
+           * different layers for different failures: the DynamoDB TTL stops the LINK working, and
+           * this stops the FILE existing. Without this rule a revoked or expired link would leave
+           * the bytes in the bucket forever, which is the opposite of what a translator is told
+           * when they are given a link that expires.
+           *
+           * Deliberately a day longer than the token. S3 lifecycle expiry runs once a day and
+           * DynamoDB TTL sweeps within ~48h of the timestamp, so making them equal would
+           * occasionally delete the object while a live token still pointed at it - and that
+           * failure reads as "the link is broken" rather than "the link has expired".
+           */
+          id: "expire-mailed-attachments",
+          prefix: "po-request/",
+          expiration: cdk.Duration.days(22),
         },
         ...(retain
           ? [
@@ -187,5 +229,64 @@ export class NeotmsStorage extends Construct {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: retain },
       removalPolicy: retain ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
+
+    /*
+     * Attachment tokens.
+     *
+     * One row per file mailed to a translator: token -> object key, with a 21-day TTL. It exists
+     * because Hiworks cannot attach files and an S3 presigned URL cannot live 21 days - SigV4 caps
+     * one at 7, and a URL signed with the function's own temporary credentials dies within hours.
+     * The mail therefore links to this system, and a click turns a token into a short-lived
+     * presigned URL. See NeotmsAttachment.dbops.ts.
+     *
+     * A SECOND table rather than a prefix in the session table, though the key shape is the same.
+     * The two hold different things for different readers: a session row identifies a staff member
+     * and is read on every authenticated request; a row here authorises one file and is read by
+     * somebody outside the company clicking a link in a mail. One table would mean one name, one
+     * set of metrics and one blast radius for two unrelated concerns - and a table called
+     * `-sessions` holding translators' download tokens is a name that misleads whoever reads it
+     * next. On-demand billing makes the second table cost nothing until it is used.
+     */
+    this.attachmentTable = new dynamodb.TableV2(this, "AttachmentTable", {
+      tableName: `${config.resourcePrefix}-attachments`,
+      partitionKey: { name: "NTPK", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "NTSK", type: dynamodb.AttributeType.STRING },
+      billing: dynamodb.Billing.onDemand(),
+      /*
+       * The attribute name must match what NeotmsAttachment.dbops.ts writes, and the value must be
+       * SECONDS. DynamoDB silently never expires a row whose TTL is in milliseconds, and nothing
+       * notices because the application checks the expiry itself - the rows would just accumulate
+       * forever.
+       */
+      timeToLiveAttribute: "NTTTL",
+      encryption: dynamodb.TableEncryptionV2.awsManagedKey(),
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: retain },
+      removalPolicy: retain ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+    });
+  }
+
+  /**
+   * Let a browser served from `origin` upload attachments.
+   *
+   * This exists because `config.allowedOriginUrls` cannot name the deployed console. That list is
+   * what a DEVELOPER's browser is served from; the console itself lives on a CloudFront domain that
+   * does not exist until the distribution is created, and production's list is empty on purpose. So
+   * the rule built in the constructor allows the console nothing, and a presigned PUT from the
+   * deployed console fails its preflight.
+   *
+   * That failure is worth spelling out, because it is why this was missed: a refused preflight
+   * produces no S3 access-log entry, no 4xx metric and no CloudWatch log line anywhere in this
+   * stack. The browser reports a bare network error, so the upload looks like the FUNCTION's
+   * problem - or like the user's connection - rather than like a bucket setting.
+   *
+   * A second rule rather than an edit to the first: S3 answers a preflight from the first rule whose
+   * origin matches, so two rules read as "the origins we configured" and "this deployment's own
+   * console" instead of one list that silently mixes the two.
+   *
+   * The twin of `NeotmsSite.allowOwnOriginOnApi`, and for the same reason. Called from the stack,
+   * which is where both constructs exist; the site has no other business with storage.
+   */
+  public allowOriginOnAttachments(origin: string): void {
+    this.attachmentBucket.addCorsRule(attachmentCorsRule([origin]));
   }
 }

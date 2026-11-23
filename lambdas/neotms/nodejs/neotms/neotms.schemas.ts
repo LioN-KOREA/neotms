@@ -36,6 +36,10 @@
 import * as v from "valibot";
 import { HANDOVER_FORMATS, HANDOVER_LAYOUTS } from "./handover/NeotmsHandoverMail.js";
 import {
+  PO_ORIGINAL_FORMATS,
+  PO_WORKSPACE_FORMATS,
+} from "./purchase-orders/NeotmsPORequestEmail.js";
+import {
   NEOTMS_PERMISSIONS,
   NEOTMS_USER_ATTRIBUTES,
 } from "../auth/NeotmsAuthorities.js";
@@ -325,7 +329,21 @@ export const JobUpdateSchema = v.partial(v.omit(JobCreateSchema, ["projectId"]))
  */
 export const PurchaseOrderCreateSchema = v.object({
   jobId: IdSchema,
-  poName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(500)),
+  /**
+   * The PO's own name. NO LONGER COLLECTED, and optional for that reason.
+   *
+   * This was required and non-empty. The screens stopped asking for it - the feedback was that
+   * nobody needed it - and the field is kept rather than removed because it may find a use. So the
+   * validation had to be relaxed in step with the form: left as `minLength(1)`, every create would
+   * be refused with a 400 naming a field that no screen has an input for, which is unanswerable
+   * from the user's side.
+   *
+   * `settable`, so a future screen can set it or clear it with no migration and no schema change.
+   * What it must not become is `''`: the write path reads null as "clear this", and an empty string
+   * stores a value that every `IS NULL` test then misses, leaving the column half blank and half
+   * empty-string.
+   */
+  poName: settable(text(500)),
   poWorkCode: settable(CodeSchema),
   /** Was a CAT-tool analysis used to price this PO rather than a flat volume. */
   poCatUse: v.optional(v.boolean()),
@@ -763,6 +781,128 @@ export const StaffAdminUpdateSchema = v.partial(
 );
 
 /* -------------------------------------------------------------------------- */
+/* PO request mail - telling a translator that work is waiting                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Registering one file before the browser PUTs it to S3.
+ *
+ * `sizeBytes` is declared by the client and is NOT the enforcement - a client can say anything, and
+ * the real ceiling is the presigned PUT, which S3 refuses past the size it was signed for. It is
+ * here so the refusal happens before a 100MB upload starts rather than after it finishes, which is
+ * the difference between a message and a wasted five minutes on a site connection.
+ *
+ * `fileName` is kept as typed. It becomes the link text in the mail and the download's filename, so
+ * 번역본.docx has to survive intact; the S3 KEY is sanitised separately, in the manager, because
+ * that is where path separators would do damage.
+ */
+export const AttachmentUploadSchema = v.object({
+  poId: IdSchema,
+  fileName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(255)),
+  /**
+   * Shape-checked only. The browser reports it from the file, and S3 stores whatever is presented;
+   * nothing downstream makes a decision on it beyond handing it back on download.
+   */
+  contentType: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(200)),
+  sizeBytes: v.pipe(v.number(), v.integer(), v.minValue(0)),
+});
+
+/**
+ * Sending the mail.
+ *
+ * The formats are two separate lists because the form has two rows: 원본 (the source document) and
+ * 작업파일 (the CAT package). Only the first is required - plenty of jobs have no workspace file,
+ * and a form that demanded one would be asking the PM to lie.
+ *
+ * The attachments are TOKENS, not URLs. The client never sees an object key and never composes a
+ * link: it uploads, gets a token back, and names the tokens here. The server turns each one into a
+ * URL at send time, which is what keeps "which file may this mail link to" a server-side decision.
+ */
+export const PoRequestMailSchema = v.object({
+  originalFormats: v.pipe(
+    v.array(v.picklist(PO_ORIGINAL_FORMATS)),
+    v.minLength(1, "pick at least one"),
+  ),
+  /** May be empty: not every job has a workspace file. */
+  workspaceFormats: v.array(v.picklist(PO_WORKSPACE_FORMATS)),
+  /**
+   * The 요청사항 box, typed when sending. Optional, and optional means EMPTY rather than absent -
+   * the row is on the form either way, carrying its three standing requests.
+   */
+  note: v.optional(v.pipe(v.string(), v.maxLength(2000)), ""),
+  /**
+   * Up to ten files. The ceiling is about the mail rather than about storage: a table cell with
+   * thirty links in it is not a list anybody reads, and a translator given thirty files has been
+   * sent a folder, not an assignment.
+   */
+  attachments: v.pipe(
+    v.array(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(200))),
+    v.maxLength(10, "at most ten files"),
+  ),
+  /**
+   * Where it goes. Defaults to the translator's address on the PO, and is editable because a
+   * translator may ask for a different one - the same reasoning as the handover mail's recipient.
+   */
+  recipient: v.pipe(v.string(), v.trim(), v.email("must be an email address"), v.maxLength(300)),
+  hiworksId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
+  /** NOT trimmed. A leading or trailing space may be part of a password, and only Hiworks knows. */
+  hiworksPassword: v.pipe(v.string(), v.minLength(1), v.maxLength(300)),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Recent searches - the caller's own suggestion list                         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The list screens that have a search box, named by their own route path.
+ *
+ * One naming scheme, not two: the scope a screen sends is the path it is mounted at, so there is
+ * nothing to keep in step by hand. The same seven strings are the CHECK on
+ * `staff_recent_search.scope`, and a test asserts the two lists are equal - a scope the schema
+ * accepts and the CHECK refuses would be a 23514 on a request that passed validation.
+ *
+ * A picklist rather than free text because the scope arrives from the client. Left open, a typo
+ * writes rows that no screen ever reads back, and the symptom is an empty suggestion list with
+ * data in the table.
+ */
+export const RECENT_SEARCH_SCOPES = [
+  "projects",
+  "jobs",
+  "purchase-orders",
+  "customers",
+  "translators",
+  "payment/purchase-orders",
+  "payment/invoices",
+] as const;
+
+/**
+ * Recording one search.
+ *
+ * `term` is bounded at 100 characters, matching the column's CHECK. The point of the bound is that
+ * this string is offered back to the person as a suggestion: something pasted by accident would be
+ * a suggestion nobody can read, in a list they cannot otherwise edit.
+ *
+ * An empty term is accepted by the schema and ignored by the manager, because submitting an empty
+ * search box is a normal way to clear the filter - not a malformed request.
+ */
+export const RecentSearchRecordSchema = v.object({
+  scope: v.picklist(RECENT_SEARCH_SCOPES),
+  term: v.pipe(v.string(), v.trim(), v.maxLength(100)),
+});
+
+/**
+ * Forgetting one term, or a whole scope.
+ *
+ * `term` absent or null means "all of this scope's terms". The feature records what somebody typed,
+ * so it needs an undo: a mistyped search otherwise sits in the list until five more searches push
+ * it out, and "search five other things" is not an instruction worth giving anybody.
+ */
+export const RecentSearchForgetSchema = v.object({
+  scope: v.picklist(RECENT_SEARCH_SCOPES),
+  term: settable(v.pipe(v.string(), v.trim(), v.maxLength(100))),
+});
+
+/* -------------------------------------------------------------------------- */
 /* sys_role - the role administration screen                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -873,6 +1013,10 @@ export const SelfProfileSchema = v.object({
 /* Inferred types                                                             */
 /* -------------------------------------------------------------------------- */
 
+export type AttachmentUploadInput = v.InferOutput<typeof AttachmentUploadSchema>;
+export type PoRequestMailSend = v.InferOutput<typeof PoRequestMailSchema>;
+export type RecentSearchRecord = v.InferOutput<typeof RecentSearchRecordSchema>;
+export type RecentSearchForget = v.InferOutput<typeof RecentSearchForgetSchema>;
 export type RoleAdminCreate = v.InferOutput<typeof RoleAdminCreateSchema>;
 export type RoleAdminUpdate = v.InferOutput<typeof RoleAdminUpdateSchema>;
 export type RolePermissionsInput = v.InferOutput<typeof RolePermissionsSchema>;

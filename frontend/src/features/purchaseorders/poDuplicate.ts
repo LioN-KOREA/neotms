@@ -41,7 +41,9 @@ export function duplicatePurchaseOrderInput(row: PurchaseOrderRow): PurchaseOrde
   return {
     jobId: row.jobId,
     // 이름은 서버에서 필수다. 작업 복제와 같은 처리다.
-    poName: row.poName || row.poCode,
+    // 복제에서도 PO명 은 비운다. 이전에는 원본의 이름이나 코드를 물려줬는데, 코드를 물려주면
+    // 새 PO 의 이름이 **다른 PO 의 코드**가 되어 남는다.
+    poName: null,
     poWorkCode: row.poWorkCode,
     poCatUse: row.poCatUse,
     poCatWord: row.poCatWord,

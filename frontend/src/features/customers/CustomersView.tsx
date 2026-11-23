@@ -15,6 +15,8 @@ import { Amount } from '@/shared/ui/Amount'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
 import { ActiveChip } from '@/shared/ui/StatusChip'
+import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
+import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { CustomerFormModal } from './CustomerFormModal'
 
@@ -65,8 +67,14 @@ export function CustomersView() {
   const mayUpdate = may(profile, NEOTMS_PERMISSION_CUSTOMER_UPDATE)
   const mayDelete = may(profile, NEOTMS_PERMISSION_CUSTOMER_DELETE)
 
+  // 이 화면의 최근 검색어. scope 는 이 화면의 라우트 경로다.
+  const recent = useRecentSearch('customers')
+
   const onSearch = (e: FormEvent) => {
     e.preventDefault()
+    // 제출이 곧 '이 말로 검색하겠다' 다. 입력 중에 기록하면 한 단어의 접두사들이
+    // 다섯 칸을 모두 차지한다 — useRecentSearch 의 주석 참고.
+    recent.record(keyword)
     setFilters({ q: keyword })
   }
 
@@ -115,10 +123,14 @@ export function CustomersView() {
             <input
               className={`${ui.input} ${ui.searchInput}`}
               type="search"
+              id="cf-q"
               placeholder="고객사명 · 이메일 · 분야"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
+              list="cf-q-recent"
+              autoComplete="off"
             />
+            <RecentSearchHints id="cf-q-recent" recent={recent} />
             <button type="submit" className={ui.btn}>
               조회
             </button>

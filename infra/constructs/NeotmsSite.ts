@@ -289,6 +289,7 @@ function handler(event) {
     });
 
     this.allowOwnOriginOnApi(api);
+    this.useOwnOriginForMailLinks(api);
   }
 
   /**
@@ -311,5 +312,23 @@ function handler(event) {
       "NEOTMS_ALLOWED_ORIGIN_URLS",
       [...api.allowedOriginUrls, this.siteUrl].join(","),
     );
+  }
+
+  /**
+   * Point the links in outgoing mail at this distribution.
+   *
+   * `NeotmsApi` can only guess at this - it takes the first configured origin - and both guesses are
+   * wrong in a way that stays invisible until a translator complains. In development the first
+   * origin is `http://localhost:5173`, so an attachment link mailed OUT of the system would point at
+   * the recipient's own machine; in production the list is empty, so there is no link at all and the
+   * function refuses to send rather than mail one that cannot work.
+   *
+   * The distribution is the right answer in both stages, and not only because it is reachable: the
+   * attachment route is served through this distribution's `/api/*` behaviour, so a link built from
+   * the API Gateway host would be answered by the gateway with a 403 that mentions nothing a
+   * translator could act on.
+   */
+  private useOwnOriginForMailLinks(api: NeotmsApi): void {
+    api.fn.addEnvironment("NEOTMS_PUBLIC_BASE_URL", this.siteUrl);
   }
 }

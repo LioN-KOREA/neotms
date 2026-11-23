@@ -64,6 +64,20 @@ export class NeotmsStack extends cdk.Stack {
       api: this.api,
     });
 
+    /*
+     * The console's own origin has to reach the attachment bucket directly.
+     *
+     * Attachment bytes never pass through the function - the browser PUTs them to a presigned URL -
+     * so the bucket needs its own CORS entry for the console, and that origin is only known once the
+     * distribution exists. Wired here rather than inside either construct because it is the one
+     * thing storage and the site have to say to each other, and neither owns the other.
+     *
+     * No dependency cycle: the bucket now refers to the distribution, the distribution refers to the
+     * HTTP API's id, and only the API's integration refers to the function. (The function's
+     * environment refers to both the bucket and the distribution, which is the same direction.)
+     */
+    this.storage.allowOriginOnAttachments(this.site.siteUrl);
+
     this.fxRate = new NeotmsFxRate(this, "FxRate", {
       config,
       database: this.database,

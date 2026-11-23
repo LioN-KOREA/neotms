@@ -329,6 +329,87 @@ export interface RoleListView {
  * Richer than `RoleOption`, which is the assignment dropdown's shape, and read from a different
  * endpoint for a different audience — `GET /api/v0/admin/role-grants`, superuser only.
  */
+/**
+ * 목록 화면의 검색창이 제안할, 그 사람이 최근에 쓴 검색어.
+ *
+ * `scope` 는 그 화면의 **라우트 경로**다('projects', 'payment/invoices'). 이름 체계를 둘로 두지
+ * 않기 위한 선택이고, 서버의 `RECENT_SEARCH_SCOPES` 와 DB 의 CHECK 가 같은 일곱 값을 쓴다.
+ *
+ * 이 앱에서 **한 사람에게만 속하는 유일한 데이터**다. 다른 모든 목록은 열람 범위가 '내 것' 과
+ * '전체' 를 가르지만, 이건 전체가 없다 — 남의 검색어를 읽는 요청 모양이 서버에 존재하지 않는다.
+ */
+/** 원본 문서가 될 수 있는 형식. 서버의 `PO_ORIGINAL_FORMATS` 와 같은 값이어야 한다. */
+export const PO_ORIGINAL_FORMATS = ['PDF', 'PPT', 'WORD', 'HWP', 'OTHERS'] as const
+/** 작업파일이 될 수 있는 형식. 위와 같되 Trados 패키지가 추가된다. */
+export const PO_WORKSPACE_FORMATS = ['SDLPPX', 'PDF', 'PPT', 'WORD', 'HWP', 'OTHERS'] as const
+
+export type PoOriginalFormat = (typeof PO_ORIGINAL_FORMATS)[number]
+export type PoWorkspaceFormat = (typeof PO_WORKSPACE_FORMATS)[number]
+
+/** 화면에 쓰는 이름. 코드 쪽은 영문이고, 보이는 쪽만 한국어다. */
+export const PO_FORMAT_LABELS: Record<string, string> = {
+  PDF: 'PDF',
+  PPT: 'PPT',
+  WORD: 'WORD',
+  HWP: 'HWP',
+  SDLPPX: 'sdlppx',
+  OTHERS: '기타',
+}
+
+/** 파일 하나를 S3 에 올리기 전에 서버에 등록한다. */
+export interface AttachmentUploadInput {
+  poId: string
+  fileName: string
+  contentType: string
+  sizeBytes: number
+}
+
+export interface AttachmentUpload {
+  /** 여기로 PUT 한다. 15분 뒤 만료된다. */
+  uploadUrl: string
+  /** 메일을 보낼 때 서버에 넘기는 값. 화면은 S3 키를 보지 않는다. */
+  token: string
+  fileName: string
+}
+
+export interface PoRequestMailInput {
+  originalFormats: PoOriginalFormat[]
+  workspaceFormats: PoWorkspaceFormat[]
+  note?: string
+  /** URL 이 아니라 토큰이다. 링크는 서버가 만든다. */
+  attachments: string[]
+  recipient: string
+  hiworksId: string
+  hiworksPassword: string
+}
+
+export interface PoRequestMailSent {
+  subject: string
+  recipient: string
+  attachments: number
+}
+
+export interface RecentSearchRow {
+  scope: string
+  /** 최신순, 최대 5개. */
+  terms: string[]
+}
+
+export interface RecentSearchView {
+  items: RecentSearchRow[]
+}
+
+export interface RecentSearchRecordInput {
+  scope: string
+  term: string
+}
+
+/** `term` 이 없으면 그 화면의 검색어 **전체**를 지운다. */
+export interface RecentSearchForgetInput {
+  scope: string
+  term?: string | null
+}
+
 export interface RoleAdminRow {
   id: string
   /**
@@ -861,7 +942,14 @@ export interface PurchaseOrderRow {
 export interface PurchaseOrderInput {
   /** 필수. 발주는 작업에 달린다 — 그래서 원가가 매출에 대응된다. */
   jobId: string
-  poName: string
+  /**
+   * 화면에서 더 이상 입력받지 않는다. 폼은 null 을 보낸다.
+   *
+   * 타입에서 지우지 않은 것은 서버가 아직 이 칸을 받기 때문이다 — 쓸 곳이 생기면 화면만 고치면
+   * 되고, 마이그레이션도 스키마 변경도 필요하지 않다. 빈 문자열이 아니라 null 인 이유는
+   * 서버 쪽 `poName` 주석에 적혀 있다.
+   */
+  poName?: string | null
   poWorkCode?: string | null
   poCatUse?: boolean | null
   poCatWord?: string | null

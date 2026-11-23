@@ -54,6 +54,7 @@ import {
   NEOTMS_PERMISSION_PO_APPROVE,
   NEOTMS_PERMISSION_PO_CREATE,
   NEOTMS_PERMISSION_PO_DELETE,
+  NEOTMS_PERMISSION_PO_EMAIL,
   NEOTMS_PERMISSION_PO_READ,
   NEOTMS_PERMISSION_PO_UPDATE,
   NEOTMS_PERMISSION_PROJECT_CREATE,
@@ -97,6 +98,10 @@ import {
   PurchaseOrderCreateSchema,
   PurchaseOrderUpdateSchema,
   SelfProfileSchema,
+  AttachmentUploadSchema,
+  PoRequestMailSchema,
+  RecentSearchForgetSchema,
+  RecentSearchRecordSchema,
   RoleAdminCreateSchema,
   RoleAdminUpdateSchema,
   RolePermissionsSchema,
@@ -157,6 +162,13 @@ import {
 } from "./codes/NeotmsCodeManager.js";
 import { listFxRates } from "./fx/NeotmsFxRateManager.js";
 import { listRoles, listStaff, updateStaff } from "./staff/NeotmsStaffAdminManager.js";
+import { createUpload, resolveDownload } from "./attachments/NeotmsAttachmentManager.js";
+import { sendPoRequestMail } from "./purchase-orders/NeotmsPoRequestMailManager.js";
+import {
+  forgetSearch,
+  listRecentSearches,
+  recordSearch,
+} from "./profile/NeotmsRecentSearchManager.js";
 import {
   createRole,
   deleteRole,
@@ -602,6 +614,29 @@ const handleUpdateStaff: RRHandler = async (request) => {
 };
 
 /*
+ * Recent searches - the caller's own suggestion list for the list screens.
+ *
+ * All three take the caller and nothing else identifies whose rows are touched, which is the whole
+ * security story: there is no request shape that reads another person's searches, so there is
+ * nothing to check for one.
+ *
+ * `anyStaff`, not a permission. Reading your own recent searches is not a privilege a role grants -
+ * it is the same tier as `/api/v0/me`, which is why these live under that path.
+ */
+const handleListRecentSearches: RRHandler = async (request) =>
+  listRecentSearches(callerOf(request));
+
+const handleRecordSearch: RRHandler = async (request) => {
+  const parsed = parseBody(RecentSearchRecordSchema, request.body);
+  return parsed.ok ? recordSearch(callerOf(request), parsed.value) : parsed.response;
+};
+
+const handleForgetSearch: RRHandler = async (request) => {
+  const parsed = parseBody(RecentSearchForgetSchema, request.body);
+  return parsed.ok ? forgetSearch(callerOf(request), parsed.value) : parsed.response;
+};
+
+/*
  * Role administration - what a role MEANS, and what a person may BE named as.
  *
  * Every one of these is `superuser: true` rather than permission-gated, and the reason is on
@@ -644,6 +679,57 @@ const handleSetStaffAttributes: RRHandler = async (request) => {
   if (!id) return NOT_A_RECORD_ID;
   const parsed = parseBody(StaffAttributesSchema, request.body);
   return parsed.ok ? setStaffAttributes(callerOf(request), id, parsed.value) : parsed.response;
+};
+
+/*
+ * The PO request mail, and the files it links to.
+ *
+ * `handleDownloadAttachment` is the odd one. It takes no caller, answers a 302 rather than a body,
+ * and is reached by somebody outside the company - see `NeotmsRoute.publicRoute` for why that is
+ * safe and what bounds it.
+ *
+ * The redirect is built by hand rather than through `ok`, because a `Location` header with a 302 is
+ * the entire response: a body on a redirect is read by nothing and would only be a place for the
+ * presigned URL to leak into a log.
+ */
+const handleCreateAttachmentUpload: RRHandler = async (request) => {
+  const parsed = parseBody(AttachmentUploadSchema, request.body);
+  return parsed.ok ? createUpload(callerOf(request), parsed.value) : parsed.response;
+};
+
+const handleDownloadAttachment: RRHandler = async (request) => {
+  const token = request.pathParams?.["token"];
+  if (!token) return { status: 404, body: "No such file" };
+
+  const resolved = await resolveDownload(token);
+  if (resolved.status !== 200) return resolved as ResponseData<string>;
+
+  return {
+    status: 302,
+    headers: {
+      Location: (resolved.body as { location: string }).location,
+      /*
+       * A redirect to a presigned URL must never be cached. A shared or proxy cache holding this
+       * would serve one translator's 60-second URL to the next request for the same token, and a
+       * browser holding it would keep following a URL that stopped working a minute later.
+       */
+      "Cache-Control": "no-store, max-age=0",
+      /*
+       * No referrer on the hop to S3. Without this the presigned URL's host sees this system's URL
+       * - token and all - in the `Referer` header, which puts a working download link into
+       * somebody else's access log.
+       */
+      "Referrer-Policy": "no-referrer",
+    },
+    body: "",
+  };
+};
+
+const handleSendPoRequestMail: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(PoRequestMailSchema, request.body);
+  return parsed.ok ? sendPoRequestMail(callerOf(request), id, parsed.value) : parsed.response;
 };
 
 /* -------------------------------------------------------------------------- */
@@ -726,6 +812,29 @@ export type NeotmsRoute = {
    * handler from quietly treating an unapproved account as a caller.
    */
   account?: true;
+  /**
+   * NOBODY IS ASKED TO SIGN IN. One route carries this, and it is the only unauthenticated
+   * endpoint in the API.
+   *
+   * `GET /api/v0/attachments/:token` is clicked by a translator, in a mail, on a machine that has
+   * never heard of NEOTMS. There is no account to require: inventing one would mean asking
+   * somebody outside the company to register with a system in order to read a file that was
+   * deliberately mailed to them.
+   *
+   * The token IS the authorization, and what that buys is bounded on every side:
+   *
+   *   * 256 bits from `randomBytes`, so it cannot be guessed or enumerated.
+   *   * One row, naming one object key that the SERVER chose at upload time. Nothing in the
+   *     request can widen it, list a bucket or traverse a path.
+   *   * A 21-day TTL, checked in the handler as well as swept by DynamoDB - which deletes within
+   *     ~48h of the timestamp rather than at it, so absence alone would be two days too generous.
+   *   * Revocable: deleting the row kills the link, which is the property that chose this design
+   *     over a CloudFront signed URL.
+   *
+   * It answers a redirect, never bytes. The only thing it discloses is a 60-second presigned URL
+   * for the one file the token names.
+   */
+  publicRoute?: true;
 };
 
 const CUSTOMERS = "/api/v0/customers";
@@ -779,6 +888,20 @@ const FX_RATES = "/api/v0/fx-rates";
  * that is the moment to split it the way `/codes` and `/admin/codes` are split - not before.
  */
 const ADMIN_STAFF = "/api/v0/admin/staff";
+/**
+ * The caller's own recent search terms. Under `/me/` because that is what the path means here -
+ * the row set is chosen by who is asking, not by a permission.
+ */
+/**
+ * Files mailed to a translator.
+ *
+ * `/attachments/:token` is deliberately short and deliberately not under `/me/` or `/admin/`: it is
+ * the URL that goes in a mail to somebody outside the company, and it will be read by people
+ * deciding whether to trust it.
+ */
+const ATTACHMENTS = "/api/v0/attachments";
+const ATTACHMENT_UPLOADS = "/api/v0/attachments/uploads";
+const RECENT_SEARCHES = "/api/v0/me/recent-searches";
 const ADMIN_ROLES = "/api/v0/admin/roles";
 /**
  * The role administration listing: every role, its grants, and how many people hold it.
@@ -921,6 +1044,33 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: `${ADMIN_STAFF}/:id`, method: "PATCH", handler: handleUpdateStaff, permission: NEOTMS_PERMISSION_STAFF_UPDATE },
   { path: ADMIN_ROLES, method: "GET", handler: handleListRoles, permission: NEOTMS_PERMISSION_STAFF_READ },
 
+  // -- The PO request mail, and its attachments ------------------------------
+  //
+  // The upload is gated on NEOTMS_PERMISSION_PO_EMAIL rather than on PO_UPDATE, because the only
+  // thing it is for is composing this mail: somebody who may edit a PO but not mail it has no use
+  // for a presigned PUT into the attachment bucket.
+  //
+  // The download is the one unauthenticated route in this table. Everything about why that is
+  // acceptable is on `NeotmsRoute.publicRoute`; what matters here is that it is a GET, answers a
+  // redirect, and names a token rather than a key.
+  { path: `${PURCHASE_ORDERS}/:id/request-mail`, method: "POST", handler: handleSendPoRequestMail, permission: NEOTMS_PERMISSION_PO_EMAIL },
+  { path: ATTACHMENT_UPLOADS, method: "POST", handler: handleCreateAttachmentUpload, permission: NEOTMS_PERMISSION_PO_EMAIL },
+  { path: `${ATTACHMENTS}/:token`, method: "GET", handler: handleDownloadAttachment, publicRoute: true },
+
+  // -- Recent searches (the caller's own) -----------------------------------
+  //
+  // Under `/me/`, with the other endpoint that answers "about the person asking". `anyStaff` is
+  // the right tier for the reason given on the handlers: this is one person's own convenience
+  // data, not company data a role grants access to.
+  //
+  // The DELETE carries a body, which is unusual and deliberate. The alternative is the term in the
+  // path - `DELETE /me/recent-searches/projects/현대차` - and a search term in a URL is a search
+  // term in the access log, in the browser history and in any proxy in between. The terms are
+  // what somebody typed while looking for a customer's work; they belong in a body.
+  { path: RECENT_SEARCHES, method: "GET", handler: handleListRecentSearches, anyStaff: true },
+  { path: RECENT_SEARCHES, method: "POST", handler: handleRecordSearch, anyStaff: true },
+  { path: RECENT_SEARCHES, method: "DELETE", handler: handleForgetSearch, anyStaff: true },
+
   // -- Role administration (superuser only) ---------------------------------
   //
   // The two tiers on one path are deliberate. `GET /admin/roles` lists role NAMES for the
@@ -970,8 +1120,9 @@ const AUTHENTICATED_PATH_PREFIX = "/api/v0/";
  * undeclared one is never reported by anybody.
  */
 function routeAllows(route: NeotmsRoute, caller: NeotmsCaller): ResponseData<string> | null {
-  // Listed first so the three tiers are visible in one place, though `handleRequest` branches on
-  // `account` before it gets here - a route on that tier has no caller to check.
+  // Listed first so the tiers are visible in one place, though `handleRequest` branches on
+  // `publicRoute` and `account` before it gets here - neither has a caller to check.
+  if (route.publicRoute) return null;
   if (route.account) return null;
   if (route.anyStaff) return null;
   /*
@@ -1057,6 +1208,17 @@ export const handleRequest: RRHandler = async (request) => {
    * produces a `NeotmsCaller` or a refusal, and nothing downstream has to handle a third thing. The
    * two routes on this tier read their identity with `identityOf`, and `callerOf` throws on them.
    */
+  /*
+   * The unauthenticated tier, before anything is asked of the request.
+   *
+   * It sits above the account branch because it needs even less: no token, no cookie, no identity.
+   * Everything this route may do is decided by the token in its path, and the reasoning for that
+   * is on `NeotmsRoute.publicRoute`.
+   */
+  if (route.publicRoute) {
+    return withCors(await route.handler(routed));
+  }
+
   if (route.account) {
     const identity = await requireLpxAccountOnly(request.headers);
     if (!identity.ok) return withCors(identity.response);

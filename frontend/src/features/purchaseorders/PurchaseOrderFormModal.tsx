@@ -126,7 +126,6 @@ export function PurchaseOrderFormModal({
   )
 
   const [form, setForm] = useState({
-    poName: po?.poName ?? '',
     poWorkCode: po?.poWorkCode ?? '번역',
     poCatUse: po?.poCatUse ?? false,
     poCatWord: po?.poCatWord ?? '',
@@ -361,7 +360,6 @@ export function PurchaseOrderFormModal({
     }))
   }
 
-  const name = form.poName.trim()
   /*
    * 작업 조회가 끝나기 전에는 저장할 수 없다.
    *
@@ -370,10 +368,18 @@ export function PurchaseOrderFormModal({
    * **조용히 버린다**(언어 상세 테이블에 쓸 일이 없으므로 문장 자체가 만들어지지 않는다).
    * 화면은 저장 성공을 알리고 값은 사라지는 조합이라, 막는 쪽이 맞다.
    */
-  const canSave = name.length > 0 && !!job && !pending && !jobQuery.isLoading
+  /*
+   * PO명 은 더 이상 입력받지 않으므로 저장 조건에서도 빠졌다.
+   *
+   * 이전에는 `name.length > 0` 이 첫 조건이었다 — 필수 입력이었기 때문이다. 입력란을 없애면서
+   * 그 조건을 남겨 두면 어떤 발주도 저장할 수 없다(`form.poName` 이 늘 빈 문자열이므로).
+   * 서버의 `poName` 은 그대로 남아 있고 null 로 보낸다 — 나중에 쓸 자리를 비워 두는 것이다.
+   */
+  const canSave = !!job && !pending && !jobQuery.isLoading
 
   const onSubmit = async () => {
-    if (!job || name.length === 0) return
+    // PO명 의 길이 검사가 여기에도 있었다. `canSave` 와 같은 이유로 빠진다.
+    if (!job) return
 
     /*
      * 업무 구분에 맞는 쪽만 보낸다. 반대쪽을 같이 보내면 서버가 거절하거나(23514·23503) 버린다.
@@ -403,7 +409,12 @@ export function PurchaseOrderFormModal({
       : {}
 
     const common: PurchaseOrderUpdate = {
-      poName: name,
+      /*
+       * 화면에서 뺐지만 **보내기는 한다**, null 로. 서버의 칸은 그대로 남아 있고(나중에 쓸
+       * 가능성이 있다고 들었다), 빈 문자열이 아니라 null 인 것이 중요하다 — `settable` 은
+       * null 을 "지워라" 로 읽고, `''` 는 모든 `IS NULL` 검사를 빠져나가는 값을 저장한다.
+       */
+      poName: null,
       poWorkCode: form.poWorkCode.trim() || null,
       poCatUse: form.poCatUse,
       /*
@@ -454,11 +465,11 @@ export function PurchaseOrderFormModal({
 
     if (po) {
       await updatePo.mutateAsync({ id: po.id, input: common })
-      onSaved(`${name} PO를 수정했습니다.`)
+      onSaved(`${po.poCode} PO를 수정했습니다.`)
     } else {
-      const input: PurchaseOrderInput = { ...common, jobId: job.id, poName: name }
+      const input: PurchaseOrderInput = { ...common, jobId: job.id, poName: null }
       const created = await createPo.mutateAsync(input)
-      onSaved(`${name} PO를 등록했습니다. (코드: ${created.poCode})`)
+      onSaved(`${created.poCode} PO를 등록했습니다.`)
     }
     onClose()
   }
@@ -528,19 +539,6 @@ export function PurchaseOrderFormModal({
               projectId={jobScopeProjectId}
             />
           )}
-        </div>
-
-        <div className={ui.fieldWide}>
-          <label className={`${ui.label} ${ui.required}`} htmlFor="po-name">
-            PO명
-          </label>
-          <input
-            id="po-name"
-            className={ui.input}
-            value={form.poName}
-            onChange={(e) => set('poName', e.target.value)}
-            required
-          />
         </div>
 
         {/*

@@ -16,6 +16,8 @@ import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Fe
 import { Icon } from '@/shared/ui/Icon'
 import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
+import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
+import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { HandoverMailModal } from './HandoverMailModal'
 import { ProjectFormModal } from './ProjectFormModal'
@@ -139,8 +141,14 @@ export function ProjectsView() {
    */
   const rangeReversed = !!draft.from && !!draft.to && draft.from > draft.to
 
+  // 이 화면의 최근 검색어. scope 는 이 화면의 라우트 경로다.
+  const recent = useRecentSearch('projects')
+
   const onSearch = (e: FormEvent) => {
     e.preventDefault()
+    // 제출이 곧 '이 말로 검색하겠다' 다. 입력 중에 기록하면 한 단어의 접두사들이
+    // 다섯 칸을 모두 차지한다 — useRecentSearch 의 주석 참고.
+    recent.record(draft.q)
     /*
      * 기준은 **날짜가 하나라도 있을 때만** 주소에 적는다.
      *
@@ -222,6 +230,14 @@ export function ProjectsView() {
             <label className={ui.label} htmlFor="pf-q">
               검색어
             </label>
+            {/*
+              * `autoComplete="off"` 가 있어야 최근 검색어가 보인다.
+              *
+              * 끄지 않으면 브라우저 자체의 입력 기록이 이 칸을 차지하고, `list` 로 붙인
+              * 제안은 그 뒤에 가려진다. 증상이 '제안이 안 뜬다' 가 아니라 '전에 친 엉뚱한
+              * 말들이 뜬다' 로 나타나서, 기능이 아예 없는 것처럼 보인다. 일곱 개 목록
+              * 화면의 검색창이 모두 같은 이유로 이 속성을 달고 있다.
+              */}
             <input
               id="pf-q"
               className={`${ui.input} ${ui.searchInput}`}
@@ -229,7 +245,10 @@ export function ProjectsView() {
               placeholder="프로젝트명 · 코드 · 고객사"
               value={draft.q}
               onChange={(e) => setDraft((p) => ({ ...p, q: e.target.value }))}
+              list="pf-q-recent"
+              autoComplete="off"
             />
+            <RecentSearchHints id="pf-q-recent" recent={recent} />
           </div>
 
           <div className={ui.filterField}>

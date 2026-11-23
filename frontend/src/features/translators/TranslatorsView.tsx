@@ -15,6 +15,8 @@ import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
 import { ActiveChip } from '@/shared/ui/StatusChip'
+import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
+import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { TranslatorFormModal } from './TranslatorFormModal'
 
@@ -79,8 +81,14 @@ export function TranslatorsView() {
   const mayUpdate = may(profile, NEOTMS_PERMISSION_TRANSLATOR_UPDATE)
   const mayDelete = may(profile, NEOTMS_PERMISSION_TRANSLATOR_DELETE)
 
+  // 이 화면의 최근 검색어. scope 는 이 화면의 라우트 경로다.
+  const recent = useRecentSearch('translators')
+
   const onSearch = (e: FormEvent) => {
     e.preventDefault()
+    // 제출이 곧 '이 말로 검색하겠다' 다. 입력 중에 기록하면 한 단어의 접두사들이
+    // 다섯 칸을 모두 차지한다 — useRecentSearch 의 주석 참고.
+    recent.record(draft.q)
     setFilters(draft)
   }
 
@@ -137,7 +145,10 @@ export function TranslatorsView() {
               placeholder="이름 · 이메일 · 다른 표기"
               value={draft.q}
               onChange={(e) => setDraft((p) => ({ ...p, q: e.target.value }))}
+              list="tf-q-recent"
+              autoComplete="off"
             />
+            <RecentSearchHints id="tf-q-recent" recent={recent} />
           </div>
 
           {/* 필터에서도 드롭다운이어야 한다. 서버는 이 값을 `=` 로 비교하므로 자유 입력은

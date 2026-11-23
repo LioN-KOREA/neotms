@@ -335,6 +335,8 @@ because Supavisor routes on the tenant encoded in the username.
 | `001_schemas.sql` | **the whole structure.** Extensions, the five code sequences plus the invoice-code one, all 32 tables with their table and column comments, the constraints that cannot be written inline, the three functions the application calls by name, `fx_rate_latest`, and all 82 indexes |
 | `002_initial_seeding.sql` | **the rows the application will not run without.** The `sys_code` domains (분야, 세부 분야, 작업 종류, 단가 단위, 언어, 사용 프로그램, 업무 구분, 업무 분류), the eight currencies, the eleven `sys_menu` rows, and the 시스템관리자 role granted over all of them |
 | `003_access_control.sql` | **only for a database that already has data.** Moves it from the legacy menu × action matrix (`sys_role_auth`) to named permissions (`sys_role_permission`), and derives who may be named as a 담당영업 or 담당PM (`staff_attribute`). A database built from `001` has the new shape already and must **not** be given this file. See §6.3 |
+| *(no SQL for the PO request mail)* | the PO request mail stores nothing in Postgres — its attachment tokens live in DynamoDB, created by CDK. See §6.4 |
+| `004_recent_searches.sql` | **only for a database that already has data.** Adds `staff_recent_search`, the five most recent search terms per person per list screen. Additive and re-runnable; apply it **before** the deploy, because the screens read it as soon as they load. A database built from `001` has the table already |
 | `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
 
 These two replace the sixteen numbered migrations that used to build the schema a step
@@ -381,7 +383,15 @@ run. Both files are `ON CONFLICT DO NOTHING` throughout and re-runnable by const
 repeating an interrupted one is the correct response and does not need the half-done state unpicked
 first.
 
-**`003_access_control.sql` is not part of this sequence.** It migrates a database that already
+**`003_access_control.sql` and `004_recent_searches.sql` are not part of this sequence.** Both
+migrate a database that already holds data, and `001` builds what they produce.
+
+`004` is the mild one: additive, re-runnable, nothing to read afterwards, and it must be applied
+**before** the matching deploy — the list screens ask for recent searches as soon as they load, and
+until the table exists that request answers `42P01`. The failure is confined to the suggestion list,
+but it is a console error on every list screen.
+
+**`003` is the one to read about first.** It migrates a database that already
 holds data, and `001` builds the shape it produces — so on a new database it is not merely
 unnecessary, it fails: its sections 2 and 3 read `sys_role_auth`, which `001` no longer creates. Give
 it only to an existing database, and read §6.3 before you do, because its last section is not
@@ -508,6 +518,7 @@ of the symptom points away from the cause.
 | `001_schemas.sql` | every table, index, sequence, function and view | nothing works. The API answers `42P01` on the first query of every screen |
 | `002_initial_seeding.sql` | the `sys_code` domains, the currencies, the menus and the one role | **the loud part is loud and the quiet part is quiet.** Without the currencies **every create in the system fails**, on a field nobody touched, reporting a constraint name. Without the menus every screen is unreachable *including for the superuser*, because the permission system is per menu. Without the codes every dropdown on the project, customer and translator forms is empty and `GET /api/v0/codes` answers `200 []` — a project still saves, so this one is only noticed by somebody looking for a 분야 that is not there |
 
+| `004_recent_searches.sql` | **on an existing database only** — `staff_recent_search` | every list screen logs a failed request for recent searches, and the search box offers no suggestions. Nothing else breaks: searching, filtering and every list still work, because the suggestion list is the only thing that reads this table |
 | `003_access_control.sql` | **on an existing database only** — the permission rows and the PM / 담당영업 attributes | every screen answers 403, for everybody. The deployed application asks `sys_role_permission` what a role may do; until this runs that table does not exist, so the answer is "nothing" and the message blames the role. The reverse mistake is louder and better: running it against a *new* database fails on apply, because `sys_role_auth` is not there to read |
 
 Both install files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
@@ -1164,6 +1175,77 @@ No resume stall to work around: Supabase bills a flat monthly compute price and 
 pause, so the first query of the day is as fast as any other. Note that on port 6543 you are in
 transaction mode — no prepared statements, no `SET` that outlives a statement, no advisory locks held
 across one.
+
+### 6.4 The PO request mail — what has to exist before it works
+
+No SQL. What it needs is a **deploy** and one **grant**, and both are easy to miss because the
+symptom of each is "the button isn't there".
+
+| What | Where it comes from | If it is missing |
+|---|---|---|
+| `staff_recent_search`-style token table (`<prefix>-attachments`, DynamoDB) | CDK, `NeotmsStorage` | every send fails; the uploads cannot be registered |
+| `NEOTMS_ATTACHMENT_TABLE_NAME` | CDK, `NeotmsApi` | every send fails; nothing can be registered |
+| `NEOTMS_PUBLIC_BASE_URL` | CDK, `NeotmsSite` — the distribution's own domain | blank is refused rather than guessed: sending **with attachments** answers 500 instead of mailing a link that cannot work |
+| A CORS rule naming the console's origin on `<prefix>-attachments` (S3) | CDK, `NeotmsStorage.allowOriginOnAttachments`, called from the stack | **the upload fails and nothing anywhere records why** — see below |
+| `NEOTMS_PERMISSION_PO_EMAIL` on somebody's role | **역할 관리**, by hand | the 의뢰메일 button is not rendered, and the endpoint answers 403 |
+
+That last row is the one to read twice. `db/003_access_control.sql` deliberately granted
+`PO_EMAIL` to **nobody**, because at the time no feature stood behind it and a permission handed
+out for a feature that does not exist reads, a year later, as a right somebody chose to give. The
+feature exists now, so the first person to use it has to be given the permission on the 역할 관리
+screen.
+
+#### The bucket's CORS rule is part of the feature
+
+Attachment bytes never pass through the function: the browser is handed a presigned PUT and sends
+them straight to S3. That is what makes a 100MB cap plausible at all on a 6MB response budget — and
+it means the **bucket**, not the API, has to allow the console's origin.
+
+That origin cannot be written in `NeotmsConfig`. The console is served from a CloudFront domain that
+does not exist until the distribution is created, and `allowedOriginUrls` is the list of a
+*developer's* origins (production's is deliberately empty). So the stack adds it afterwards, the same
+way `NeotmsSite.allowOwnOriginOnApi` adds it to the function's allow-list.
+
+Worth knowing because of how it fails. A refused preflight produces **no** S3 access-log entry, no
+4xx metric, and no log line anywhere in this stack; the browser reports a bare network error. So the
+upload looks like a bug in the function, or like the user's connection. Three assertions in
+`test/neotms.test.ts` (`describe("CORS")`) check the synthesised template instead, because the
+template is the only place this is visible before a human tries it.
+
+**If a custom domain is ever added** to the distribution, the console moves to an origin this rule
+does not name and uploads break again, with that same symptom. Add it to `allowedOriginUrls` in the
+same change that adds the certificate.
+
+#### Why the mail links to us and not to S3
+
+Hiworks' mail API has no attachment parameter, so files go to S3 and the mail carries links. The
+link cannot be an S3 presigned URL: SigV4 caps one at **7 days**, and a URL signed with the
+function's own role credentials stops working when those temporary credentials expire — hours, not
+weeks. There is no presigned URL that lives 21 days.
+
+So each link points at `/api/v0/attachments/{token}`, and a click is resolved to a fresh
+60-second presigned URL at that moment. The consequences worth knowing:
+
+* **This is the only unauthenticated route in the API.** A translator has no account here. The
+  token is the authorization — 256 bits of randomness, naming one object key the server chose, for
+  as long as its DynamoDB row lives. The route answers a redirect, never bytes, and is served
+  `no-store` and `no-referrer` so neither a cache nor a referrer header can carry a working link
+  anywhere else.
+* **A link can be withdrawn.** Deleting the row kills it. That is the property that chose this
+  design over CloudFront signed URLs, which cannot be revoked before they expire. (The endpoint
+  that does the deleting is not built yet — `AttachmentDeleteOps` is there and nothing calls it.)
+* **21 days is enforced in three places and they have to agree**: the DynamoDB TTL (the link), the
+  S3 lifecycle rule on `po-request/` (the bytes, deliberately 22 days so a daily sweep cannot
+  delete an object out from under a live token), and the sentence in the mail that tells the
+  translator the number.
+
+#### Sending is gated on approval
+
+An unapproved PO cannot be mailed, the same rule the printable purchase order follows: the approval
+is what commits the company to the amount, and this mail tells a translator to start work on it.
+The button is disabled with that explanation until the PO is approved.
+
+---
 
 ### 6.3 `003_access_control.sql` — moving a live database to named permissions
 

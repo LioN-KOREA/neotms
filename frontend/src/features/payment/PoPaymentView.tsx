@@ -21,6 +21,8 @@ import { ApprovalChip, StatusChip } from '@/shared/ui/StatusChip'
 import { describeBulk, runSequential } from '@/shared/utils/bulk'
 import { dateKstOffsetDays, formatDate, formatDateTime } from '@/shared/utils/format'
 import { decimalSum, krwToShow } from '@/shared/utils/money'
+import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
+import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { ALL_ALREADY_APPROVED, approvalPrompt, unapprovedOf } from './poBulkApprove'
 import { PoDocButtons, type PoPrintRequest } from './print/PoDocButtons'
@@ -212,8 +214,14 @@ export function PoPaymentView() {
     [rows],
   )
 
+  // 이 화면의 최근 검색어. scope 는 이 화면의 라우트 경로다.
+  const recent = useRecentSearch('payment/purchase-orders')
+
   const onSearch = (e: FormEvent) => {
     e.preventDefault()
+    // 제출이 곧 '이 말로 검색하겠다' 다. 입력 중에 기록하면 한 단어의 접두사들이
+    // 다섯 칸을 모두 차지한다 — useRecentSearch 의 주석 참고.
+    recent.record(draft.q)
     setFilters(draft)
   }
 
@@ -229,7 +237,8 @@ export function PoPaymentView() {
   }
 
   const onApprove = async (row: PurchaseOrderRow, next: boolean) => {
-    const label = row.poName || row.poCode
+    // PO명 은 화면에서 빠졌으므로 코드가 그 PO를 가리키는 유일한 이름이다.
+    const label = row.poCode
     if (
       !next &&
       !window.confirm(
@@ -373,10 +382,13 @@ export function PoPaymentView() {
               id="pay-q"
               className={`${ui.input} ${ui.searchInput}`}
               type="search"
-              placeholder="PO명 · 코드 · 작업 · 번역가"
+              placeholder="코드 · 작업 · 번역가"
               value={draft.q}
               onChange={(e) => setDraft((p) => ({ ...p, q: e.target.value }))}
+              list="pay-q-recent"
+              autoComplete="off"
             />
+            <RecentSearchHints id="pay-q-recent" recent={recent} />
           </div>
 
           <div className={ui.filterField}>
@@ -523,7 +535,7 @@ export function PoPaymentView() {
                   />
                 </th>
                 <th>코드</th>
-                <th>PO명 · 작업</th>
+                <th>작업</th>
                 <th>번역가</th>
                 <th>원가(원화)</th>
                 <th>마감일</th>
@@ -562,11 +574,15 @@ export function PoPaymentView() {
                     />
                   </td>
                   <td className={ui.cellMono}>{row.poCode}</td>
+                  {/*
+                    * PO명 이 빠지면서 작업이 윗줄로 올라왔다. 아랫줄에 프로젝트만 남기는 것은
+                    * 두 줄의 역할이 "무엇인가"와 "어디에 속한 것인가"로 갈리기 때문이다 —
+                    * 이전처럼 한 줄에 ' · ' 로 붙여 두면 작업명과 프로젝트명이 한 문장처럼
+                    * 읽힌다.
+                    */}
                   <td>
-                    <div>{row.poName || '(이름 없음)'}</div>
+                    <div>{row.jobName || row.jobCode || '-'}</div>
                     <div className={ui.cellMuted}>
-                      {row.jobName || row.jobCode || '-'}
-                      {' · '}
                       <Link className={ui.btnLink} to={`/projects/${row.projectId}`}>
                         {row.prjName || row.prjCode || '프로젝트'}
                       </Link>

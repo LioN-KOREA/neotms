@@ -103,8 +103,8 @@ export function TranslatorSwapModal({ purchaseOrder: po, onClose, onSaved }: Pro
     await updatePo.mutateAsync({ id: po.id, input: { translatorId: nextId } })
     onSaved(
       nextId === null
-        ? `PO [${po.poName || po.poCode}] 의 번역가 지정을 해제했습니다.`
-        : `PO [${po.poName || po.poCode}] 의 번역가를 ${picked?.title} 로 바꿨습니다.`,
+        ? `PO [${po.poCode}] 의 번역가 지정을 해제했습니다.`
+        : `PO [${po.poCode}] 의 번역가를 ${picked?.title} 로 바꿨습니다.`,
     )
     onClose()
   }

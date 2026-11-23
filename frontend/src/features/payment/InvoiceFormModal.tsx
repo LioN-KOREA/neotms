@@ -485,7 +485,7 @@ export function InvoiceFormModal({ invoice, onClose, onSaved }: Props) {
               <tr>
                 <th />
                 <th>코드</th>
-                <th>PO명 · 작업</th>
+                <th>작업</th>
                 <th>원가(원화)</th>
                 <th>마감일</th>
                 <th>진행</th>
@@ -522,10 +522,7 @@ export function InvoiceFormModal({ invoice, onClose, onSaved }: Props) {
                       />
                     </td>
                     <td className={ui.cellMono}>{row.poCode}</td>
-                    <td>
-                      <div>{row.poName || '(이름 없음)'}</div>
-                      <div className={ui.cellMuted}>{row.jobName || row.jobCode || '-'}</div>
-                    </td>
+                    <td>{row.jobName || row.jobCode || '-'}</td>
                     <td>
                       <Amount value={krwToShow(row.poPriceKrw, row.poPriceKsum)} kind="cost" />
                     </td>

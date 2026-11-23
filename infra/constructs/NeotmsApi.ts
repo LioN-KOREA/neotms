@@ -122,6 +122,18 @@ export class NeotmsApi extends Construct {
         NEOTMS_DB_CA_CERT: database.caCertPem,
         NEOTMS_SESSION_TABLE_NAME: storage.sessionTable.tableName,
         NEOTMS_ATTACHMENT_BUCKET_NAME: storage.attachmentBucket.bucketName,
+        NEOTMS_ATTACHMENT_TABLE_NAME: storage.attachmentTable.tableName,
+        /*
+         * Where the links in an outgoing mail point. The console's origin, not the API's - a link
+         * built from the API Gateway host answers 403 to the translator with no explanation.
+         *
+         * OVERWRITTEN by `NeotmsSite.useOwnOriginForMailLinks` with the distribution's own domain,
+         * which is the only correct value and is not knowable here. What is left is what a stack
+         * deployed WITHOUT a site would carry, and for production that is the empty string - which
+         * `NeotmsPoRequestMailManager` treats as "this deployment cannot build links yet" and
+         * refuses to send on, rather than mailing a link to nowhere.
+         */
+        NEOTMS_PUBLIC_BASE_URL: config.allowedOriginUrls[0] ?? "",
         NEOTMS_EXPORT_BUCKET_NAME: storage.exportBucket.bucketName,
         NEOTMS_ALLOWED_ORIGIN_URLS: config.allowedOriginUrls.join(","),
         NEOTMS_OIDC_ISSUER: config.auth.oidcIssuer,
@@ -204,6 +216,7 @@ export class NeotmsApi extends Construct {
     // Read-write rather than put-only: the presign flow needs to HEAD the object on confirm, and a
     // delete needs to remove it.
     storage.attachmentBucket.grantReadWrite(this.fn);
+    storage.attachmentTable.grantReadWriteData(this.fn);
     // Spill target for a rendered report too large for Lambda's 6MB response payload. The function
     // both writes it and presigns a read of it. No KMS grant: with the Data API's 1 MiB cap gone,
     // nothing inside PostgreSQL writes here, so the bucket no longer needs SSE-KMS.

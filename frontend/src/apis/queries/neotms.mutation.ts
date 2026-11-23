@@ -24,7 +24,12 @@ import {
   updateJob,
   updateProject,
   updatePurchaseOrder,
+  createAttachmentUpload,
   createRole,
+  forgetSearch,
+  recordSearch,
+  sendPoRequestMail,
+  uploadAttachmentBytes,
   deleteRole,
   setRolePermissions,
   setStaffAttributes,
@@ -47,6 +52,10 @@ import type {
   PurchaseOrderInput,
   PurchaseOrderUpdate,
   SelfProfileInput,
+  AttachmentUploadInput,
+  PoRequestMailInput,
+  RecentSearchForgetInput,
+  RecentSearchRecordInput,
   RoleCreateInput,
   RolePermissionsInput,
   RoleUpdateInput,
@@ -222,6 +231,79 @@ export function useUpdateStaff() {
   return useMutation({
     mutationFn: ({ id, input }: { id: string; input: StaffUpdateInput }) => updateStaff(id, input),
     onSuccess: () => invalidateAll(qc, STAFF_AFFECTS),
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* PO 의뢰 메일                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 파일 하나를 등록하고 곧바로 올린다.
+ *
+ * 두 단계를 한 뮤테이션으로 묶은 이유는 **중간 상태가 쓸모없기 때문**이다. 등록만 되고 업로드가
+ * 안 된 토큰은 가리킬 파일이 없는 토큰이고, 화면이 그걸 들고 할 수 있는 일이 없다. 묶어 두면
+ * 호출하는 쪽은 "파일을 추가했다" 와 "실패했다" 두 가지만 다루면 된다.
+ *
+ * 무효화할 것이 없다 — 이 호출은 어떤 목록도 바꾸지 않는다.
+ */
+export function useUploadAttachment() {
+  return useMutation({
+    mutationFn: async ({ input, file }: { input: AttachmentUploadInput; file: File }) => {
+      const registered = await createAttachmentUpload(input)
+      await uploadAttachmentBytes(registered.uploadUrl, file)
+      return registered
+    },
+  })
+}
+
+/**
+ * 의뢰 메일을 보낸다.
+ *
+ * 무효화하지 않는다. 메일을 보내도 PO 의 어떤 칸도 바뀌지 않기 때문이다 — 발송 기록을 남기는
+ * 칸이 아직 없고, 그건 이 기능의 남은 일이다(보냈는지 확인하려면 Hiworks 의 보낸편지함을 본다).
+ */
+export function useSendPoRequestMail() {
+  return useMutation({
+    mutationFn: ({ poId, input }: { poId: string; input: PoRequestMailInput }) =>
+      sendPoRequestMail(poId, input),
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 최근 검색어                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 검색 한 번을 기록한다.
+ *
+ * **오류를 삼킨다.** 이 파일의 다른 모든 쓰기와 반대이므로 적어 둔다: 이 호출은 사용자가 요청한
+ * 검색이 이미 끝난 뒤에 부수적으로 일어난다. 실패를 화면에 띄우면 원하던 일은 다 됐는데 오류가
+ * 보이고, 실제로 잃은 것은 제안 목록의 한 줄이다. 서버도 같은 이유로 204 를 준다.
+ *
+ * 성공하면 검색어 목록만 무효화한다 — 목록 데이터와는 무관하다.
+ */
+export function useRecordSearch() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: RecentSearchRecordInput) => recordSearch(input),
+    onSuccess: () => invalidateAll(qc, [neotmsKeys.recentSearches]),
+    // react-query 가 오류를 "처리됐다" 고 보게 해서, 화면에 올라가지 않게 한다.
+    onError: (error) => {
+      console.warn('최근 검색어를 기록하지 못했습니다. 검색 자체에는 영향이 없습니다.', error)
+    },
+  })
+}
+
+/**
+ * 검색어를 지운다. 이쪽은 **오류를 보여 준다** — 사용자가 지우라고 했으므로 "지웠다" 가 참이어야
+ * 한다. 조용히 실패하면 지운 제안이 그대로 남고, 사용자는 한 번 더 지운다.
+ */
+export function useForgetSearch() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: RecentSearchForgetInput) => forgetSearch(input),
+    onSuccess: () => invalidateAll(qc, [neotmsKeys.recentSearches]),
   })
 }
 

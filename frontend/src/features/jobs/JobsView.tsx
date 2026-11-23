@@ -20,6 +20,8 @@ import { InlinePickerCell } from '@/shared/ui/InlineEditCell'
 import { KindTag, StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import { decimalSum, krwToShow } from '@/shared/utils/money'
+import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
+import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { JobFormModal } from './JobFormModal'
 import { JobTypeSwapModal, jobTypeSummary } from './JobTypeSwapModal'
@@ -119,8 +121,14 @@ export function JobsView() {
   const mayUpdate = may(profile, NEOTMS_PERMISSION_JOB_UPDATE)
   const mayDelete = may(profile, NEOTMS_PERMISSION_JOB_DELETE)
 
+  // 이 화면의 최근 검색어. scope 는 이 화면의 라우트 경로다.
+  const recent = useRecentSearch('jobs')
+
   const onSearch = (e: FormEvent) => {
     e.preventDefault()
+    // 제출이 곧 '이 말로 검색하겠다' 다. 입력 중에 기록하면 한 단어의 접두사들이
+    // 다섯 칸을 모두 차지한다 — useRecentSearch 의 주석 참고.
+    recent.record(draft.q)
     setFilters(draft)
   }
 
@@ -216,7 +224,10 @@ export function JobsView() {
               placeholder="작업명 · 코드 · 프로젝트"
               value={draft.q}
               onChange={(e) => setDraft((p) => ({ ...p, q: e.target.value }))}
+              list="jf-q-recent"
+              autoComplete="off"
             />
+            <RecentSearchHints id="jf-q-recent" recent={recent} />
           </div>
 
           <div className={ui.filterField}>

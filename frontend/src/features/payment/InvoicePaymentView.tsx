@@ -17,6 +17,8 @@ import { Icon } from '@/shared/ui/Icon'
 import { StatusChip } from '@/shared/ui/StatusChip'
 import { dateKstOffsetDays, formatDate } from '@/shared/utils/format'
 import { decimalSum } from '@/shared/utils/money'
+import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
+import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { InvoiceFormModal } from './InvoiceFormModal'
 import { InvoicePrintModal } from './print/InvoicePrintModal'
@@ -149,8 +151,14 @@ export function InvoicePaymentView() {
    */
   const cost = useMemo(() => decimalSum(rows.map((r) => r.poKsum)), [rows])
 
+  // 이 화면의 최근 검색어. scope 는 이 화면의 라우트 경로다.
+  const recent = useRecentSearch('payment/invoices')
+
   const onSearch = (e: FormEvent) => {
     e.preventDefault()
+    // 제출이 곧 '이 말로 검색하겠다' 다. 입력 중에 기록하면 한 단어의 접두사들이
+    // 다섯 칸을 모두 차지한다 — useRecentSearch 의 주석 참고.
+    recent.record(draft.q)
     setFilters(draft)
   }
 
@@ -220,7 +228,10 @@ export function InvoicePaymentView() {
               placeholder="인보이스 코드 · 번역가"
               value={draft.q}
               onChange={(e) => setDraft((p) => ({ ...p, q: e.target.value }))}
+              list="inv-q-recent"
+              autoComplete="off"
             />
+            <RecentSearchHints id="inv-q-recent" recent={recent} />
           </div>
 
           <div className={ui.filterField}>

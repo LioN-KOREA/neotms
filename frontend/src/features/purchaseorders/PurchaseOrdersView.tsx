@@ -10,6 +10,7 @@ import { may } from '@/shared/permissions'
 import {
   NEOTMS_PERMISSION_PO_CREATE,
   NEOTMS_PERMISSION_PO_DELETE,
+  NEOTMS_PERMISSION_PO_EMAIL,
   NEOTMS_PERMISSION_PO_UPDATE,
 } from '@/apis/neotms.authorities'
 import { Amount } from '@/shared/ui/Amount'
@@ -19,6 +20,9 @@ import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import { decimalSum, krwToShow } from '@/shared/utils/money'
 import { InlinePickerCell } from '@/shared/ui/InlineEditCell'
+import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
+import { PoRequestMailModal } from './PoRequestMailModal'
+import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { PoDocButtons, type PoPrintRequest } from '@/features/payment/print/PoDocButtons'
 import { PoPrintModal } from '@/features/payment/print/PoPrintModal'
@@ -49,7 +53,7 @@ import {
  * 같다 — 미지정 발주를 찾아 주는 화면에서 그걸 고치려면 수정 모달을 열어야 한다는 것은, 찾는
  * 일과 고치는 일을 다른 화면에 둔다는 뜻이다. 그 모달에는 환산 금액과 환율이 함께 열린다.
  *
- * 나머지 칸(PO명·납기·진행)이 프로젝트 상세에서는 제자리 수정이 되고 여기서는 아닌 것은
+ * 나머지 칸(납기·진행)이 프로젝트 상세에서는 제자리 수정이 되고 여기서는 아닌 것은
  * 의도다. 저쪽은 **한 프로젝트의 발주 열몇 건**을 훑으며 손보는 화면이고, 여기는 **전체 발주를
  * 조건으로 걸러 보는** 화면이다. 거른 결과를 고치면 그 행이 조건에서 빠져 눈앞에서 사라지므로
  * (진행을 '완료' 로 바꾸면 진행=진행중 필터에서 빠진다), 여기서의 제자리 수정은 "방금 무엇을
@@ -100,8 +104,21 @@ export function PurchaseOrdersView() {
   const mayUpdate = may(profile, NEOTMS_PERMISSION_PO_UPDATE)
   const mayDelete = may(profile, NEOTMS_PERMISSION_PO_DELETE)
 
+  // 이 화면의 최근 검색어. scope 는 이 화면의 라우트 경로다.
+  const recent = useRecentSearch('purchase-orders')
+  const [mailing, setMailing] = useState<PurchaseOrderRow | null>(null)
+  /*
+   * 의뢰 메일을 보낼 수 있는가. 수정 권한과 별개다 — 발주서를 고치는 일과 회사 밖으로 파일을
+   * 내보내는 일은 다른 결정이고, 그래서 `NEOTMS_PERMISSION_PO_EMAIL` 이 따로 있다. 이 권한은
+   * 기능이 없던 동안 아무에게도 부여되지 않았으므로, 처음 쓰려면 역할 관리에서 켜야 한다.
+   */
+  const mayMail = may(profile, NEOTMS_PERMISSION_PO_EMAIL)
+
   const onSearch = (e: FormEvent) => {
     e.preventDefault()
+    // 제출이 곧 '이 말로 검색하겠다' 다. 입력 중에 기록하면 한 단어의 접두사들이
+    // 다섯 칸을 모두 차지한다 — useRecentSearch 의 주석 참고.
+    recent.record(draft.q)
     setFilters(draft)
   }
 
@@ -111,7 +128,8 @@ export function PurchaseOrdersView() {
   }
 
   const onDelete = async (row: PurchaseOrderRow) => {
-    const label = row.poName || row.poCode
+    // PO명 은 화면에서 빠졌으므로 코드가 그 PO를 가리키는 유일한 이름이다.
+    const label = row.poCode
     if (
       !window.confirm(
         `${label} PO를 삭제할까요?`,
@@ -164,10 +182,13 @@ export function PurchaseOrdersView() {
               id="of-q"
               className={`${ui.input} ${ui.searchInput}`}
               type="search"
-              placeholder="PO명 · 코드 · 작업 · 번역가"
+              placeholder="코드 · 작업 · 번역가"
               value={draft.q}
               onChange={(e) => setDraft((p) => ({ ...p, q: e.target.value }))}
+              list="of-q-recent"
+              autoComplete="off"
             />
+            <RecentSearchHints id="of-q-recent" recent={recent} />
           </div>
 
           <div className={ui.filterField}>
@@ -244,7 +265,6 @@ export function PurchaseOrdersView() {
             <thead>
               <tr>
                 <th>코드</th>
-                <th>PO명</th>
                 <th>작업 · 프로젝트</th>
                 <th>번역가</th>
                 <th>물량 · 단가</th>
@@ -265,12 +285,11 @@ export function PurchaseOrdersView() {
                     ? '조건에 맞는 PO가 없습니다.'
                     : '등록된 PO가 없습니다.'
                 }
-                colSpan={10}
+                colSpan={9}
               />
               {rows.map((row) => (
                 <tr key={row.id}>
                   <td className={ui.cellMono}>{row.poCode}</td>
-                  <td>{row.poName || '(이름 없음)'}</td>
                   <td className={ui.cellMuted}>
                     <div>{row.jobName || row.jobCode || '-'}</div>
                     <div>
@@ -339,6 +358,26 @@ export function PurchaseOrdersView() {
                        * PO 에서 비활성인 이유까지 전부 `PoDocButtons` 에 적혀 있다.
                        */}
                       <PoDocButtons po={row} onPick={setPrinting} />
+                      {mayMail ? (
+                        <button
+                          type="button"
+                          className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
+                          onClick={() => setMailing(row)}
+                          /*
+                           * 미승인 PO 에서는 누를 수 없다. 출력 버튼과 같은 규칙이고
+                           * (`PoDocButtons`), 이유도 같다 — 승인이 금액을 확정하는 행위이고,
+                           * 이 메일은 그 금액의 일을 시작하라고 번역가에게 알리는 것이다.
+                           */
+                          disabled={!row.poApproved}
+                          title={
+                            row.poApproved
+                              ? '번역가에게 의뢰 메일을 보냅니다.'
+                              : '승인된 PO 만 의뢰 메일을 보낼 수 있습니다.'
+                          }
+                        >
+                          의뢰메일
+                        </button>
+                      ) : null}
                       {mayUpdate ? (
                         <button
                           type="button"
@@ -378,6 +417,14 @@ export function PurchaseOrdersView() {
           purchaseOrder={editing}
           onClose={() => setEditing(undefined)}
           onSaved={setNotice}
+        />
+      ) : null}
+
+      {mailing ? (
+        <PoRequestMailModal
+          po={mailing}
+          onClose={() => setMailing(null)}
+          onSent={setNotice}
         />
       ) : null}
 

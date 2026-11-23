@@ -128,7 +128,7 @@ export function SettlementModal({ purchaseOrder: po, onClose, onSaved }: Props) 
       poMoneyGubun: form.poMoneyGubun.trim() || null,
     }
     await settle.mutateAsync({ id: po.id, input })
-    onSaved(`${po.poName || po.poCode} PO의 정산 내용을 저장했습니다.`)
+    onSaved(`${po.poCode} PO의 정산 내용을 저장했습니다.`)
     onClose()
   }
 
@@ -165,7 +165,7 @@ export function SettlementModal({ purchaseOrder: po, onClose, onSaved }: Props) 
       ) : null}
 
       <p className={ui.hint}>
-        <strong>{po.poCode}</strong> · {po.poName || '(이름 없음)'} ·{' '}
+        <strong>{po.poCode}</strong> ·{' '}
         {po.poTranName || '번역가 미지정'} — 원가 <Amount value={owed} kind="cost" />
       </p>
 

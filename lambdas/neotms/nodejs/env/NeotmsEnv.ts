@@ -74,6 +74,26 @@ const EnvSchema = v.object({
   /** Quotes, POs, delivered files and reference material. Reached by presigned URL, never proxied. */
   NEOTMS_ATTACHMENT_BUCKET_NAME: v.fallback(v.string(), ""),
   /**
+   * Maps a mailed link's token to the S3 object it stands for, with a 21-day TTL.
+   *
+   * A separate table from the sessions one, though both are single-table shaped. They hold
+   * different things with different lifetimes and different readers - a session row identifies a
+   * person and is read on every authenticated request; a row here authorises one file and is read
+   * by somebody outside the company clicking a link in a mail. Sharing a table would mean one
+   * name, one set of metrics and one blast radius for two unrelated concerns.
+   */
+  NEOTMS_ATTACHMENT_TABLE_NAME: v.fallback(v.string(), ""),
+  /**
+   * Where the links in an outgoing mail point - the console's own origin, e.g.
+   * `https://d1234.cloudfront.net`.
+   *
+   * It has to be configured rather than derived. The function sees the API Gateway host, which is
+   * not the host the console is served from, and a link built from the wrong one lands the
+   * translator on a URL that answers 403 with no explanation. Empty means "do not send mail with
+   * attachments", which the manager refuses rather than sending a broken link.
+   */
+  NEOTMS_PUBLIC_BASE_URL: v.fallback(v.string(), ""),
+  /**
    * Where a rendered report lands when it is too large to return in the response body.
    *
    * On the Data API branch this was unavoidable machinery - a result set was capped at 1 MiB, so a

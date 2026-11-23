@@ -253,7 +253,8 @@ export function ProjectDetailView() {
   }
 
   const onDeletePo = async (row: PurchaseOrderRow) => {
-    const label = row.poName || row.poCode
+    // PO명 은 화면에서 빠졌으므로 코드가 그 PO를 가리키는 유일한 이름이다.
+    const label = row.poCode
     if (!window.confirm(`${label} PO를 삭제할까요?`)) return
     await deletePo.mutateAsync(row.id)
     setNotice(`PO [${label}]를 삭제했습니다.`)
@@ -715,7 +716,7 @@ export function ProjectDetailView() {
                     error={jobsQuery.error}
                     isEmpty={jobs.length === 0}
                     emptyText="이 프로젝트에는 작업이 없습니다. 작업을 추가하면 매출이 잡힙니다."
-                    colSpan={11}
+                    colSpan={10}
                   />
                   {jobs.map((job) => {
                     const poCount = poCountByJob.get(job.id) ?? 0
@@ -962,7 +963,6 @@ export function ProjectDetailView() {
                       />
                     </th>
                     <th>PO코드</th>
-                    <th>PO명</th>
                     <th>작업</th>
                     <th>번역가</th>
                     <th>원가(원화)</th>
@@ -1000,12 +1000,6 @@ export function ProjectDetailView() {
                           />
                         </td>
                         <td className={ui.cellMono}>{po.poCode}</td>
-                        <InlineTextCell
-                          value={po.poName}
-                          editable={mayUpdatePo && !poBusy}
-                          ariaLabel={`${po.poCode} PO명`}
-                          onCommit={(poName) => patchPo(po, { poName })}
-                        />
                         <td className={ui.cellMuted}>{po.jobName || po.jobCode || '-'}</td>
                         {/*
                          * 번역가는 칸 안에서 고를 수 없어 대화상자로 연다 — 고르는 방법이

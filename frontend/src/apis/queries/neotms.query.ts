@@ -16,6 +16,7 @@ import {
   fetchPurchaseOrder,
   fetchPurchaseOrders,
   fetchReportSummary,
+  fetchRecentSearches,
   fetchRoleGrants,
   fetchRoles,
   fetchStaff,
@@ -146,6 +147,24 @@ export function useRoles(enabled = true) {
     queryFn: ({ signal }) => fetchRoles(signal),
     enabled,
     staleTime: DETAIL_STALE_MS,
+  })
+}
+
+/**
+ * 내 최근 검색어 전체.
+ *
+ * 화면별로 나누지 않고 한 번에 받는다. 목록 화면을 옮겨 다니면 화면마다 요청이 하나씩 늘어나는데,
+ * 전부 합쳐도 짧은 문자열 서른다섯 개다 — 요청 일곱 번보다 한 번이 낫다.
+ *
+ * 수명을 길게 잡는다. 내가 검색하면 그 즉시 무효화되므로(`useRecordSearch`) 이 값은 **다른
+ * 탭에서 한 검색**이 얼마나 늦게 보이는지만 정한다. 그건 늦게 보여도 되는 종류의 일이다.
+ */
+export function useRecentSearches(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.recentSearches,
+    queryFn: ({ signal }) => fetchRecentSearches(signal),
+    enabled,
+    staleTime: 1000 * 60 * 10,
   })
 }
 

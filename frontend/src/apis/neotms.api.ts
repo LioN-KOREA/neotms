@@ -29,6 +29,13 @@ import type {
   PurchaseOrderUpdate,
   ReportQuery,
   ReportResult,
+  AttachmentUpload,
+  AttachmentUploadInput,
+  PoRequestMailInput,
+  PoRequestMailSent,
+  RecentSearchForgetInput,
+  RecentSearchRecordInput,
+  RecentSearchView,
   RoleAdminListView,
   RoleAdminRow,
   RoleCreateInput,
@@ -178,6 +185,92 @@ export const fetchRoles = (signal?: AbortSignal) =>
 export const updateStaff = (id: string, input: StaffUpdateInput) =>
   neotmsApi<StaffRow>(`/api/v0/admin/staff/${encodeURIComponent(id)}`, {
     method: 'PATCH',
+    body: input,
+  })
+
+/* -------------------------------------------------------------------------- */
+/* PO 의뢰 메일과 첨부파일                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 파일 하나를 등록하고 presigned PUT 주소를 받는다.
+ *
+ * 바이트는 **이 서버를 거치지 않는다** — 브라우저가 S3 로 바로 PUT 한다. 100MB 파일을 Lambda 로
+ * 흘리면 6MB 응답 한도에 걸리고 전송 요금도 양쪽으로 붙는다. 첨부 버킷의 CORS 규칙이 그
+ * 브라우저 PUT 을 위해 존재한다.
+ */
+export const createAttachmentUpload = (input: AttachmentUploadInput) =>
+  neotmsApi<AttachmentUpload>('/api/v0/attachments/uploads', { method: 'POST', body: input })
+
+/**
+ * 받은 주소로 파일을 올린다. **`neotmsApi` 가 아니라 평범한 `fetch` 다.**
+ *
+ * 대상이 우리 API 가 아니라 S3 이기 때문이다 — 액세스 토큰을 붙이면 안 되고(남의 도메인으로
+ * 우리 토큰을 보내는 셈이다), 401 재시도 로직도 의미가 없다. 서명이 곧 권한이다.
+ *
+ * `Content-Type` 은 서명할 때 쓴 값과 **같아야** 한다. 다르면 S3 가 403 으로 거절하는데, 그
+ * 오류 본문에는 이유가 적히지 않아서 네트워크 문제처럼 보인다.
+ */
+export async function uploadAttachmentBytes(
+  uploadUrl: string,
+  file: File,
+): Promise<void> {
+  const res = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: file,
+    headers: { 'content-type': file.type || 'application/octet-stream' },
+  })
+  if (!res.ok) {
+    throw new Error(`파일을 올리지 못했습니다 (${String(res.status)}). 잠시 후 다시 시도해 주세요.`)
+  }
+}
+
+/**
+ * 번역가에게 의뢰 메일을 보낸다.
+ *
+ * 첨부는 **토큰 목록**으로 보낸다. 화면은 S3 키도 링크도 만들지 않는다 — 어떤 파일을 이 메일이
+ * 가리켜도 되는지는 서버가 정하고, 서버는 자기가 쓴 행만 믿는다.
+ *
+ * 서버는 승인되지 않은 PO 를 409 로 거절한다. 금액을 결재한 뒤에 번역가에게 착수를 알리는
+ * 순서이고, 출력용 발주서가 따르는 규칙과 같다.
+ */
+export const sendPoRequestMail = (poId: string, input: PoRequestMailInput) =>
+  neotmsApi<PoRequestMailSent>(
+    `/api/v0/purchase-orders/${encodeURIComponent(poId)}/request-mail`,
+    { method: 'POST', body: input },
+  )
+
+/* -------------------------------------------------------------------------- */
+/* 최근 검색어 — 본인 것만                                                      */
+/* -------------------------------------------------------------------------- */
+//
+// 세 호출 모두 **누구의 것인지를 보내지 않는다.** 서버가 토큰에서 호출자를 정하고 그 사람의 행만
+// 읽고 쓴다 — 남의 검색어를 읽는 요청 모양이 아예 없으므로, 그걸 막는 검사도 필요하지 않다.
+
+/** 화면별 최근 검색어 전체. 한 번에 받아서 캐시한다 — 전부 합쳐도 짧은 문자열 서른다섯 개다. */
+export const fetchRecentSearches = (signal?: AbortSignal) =>
+  neotmsApi<RecentSearchView>('/api/v0/me/recent-searches', { signal })
+
+/**
+ * 검색 한 번을 기록한다. **실패해도 204 다.**
+ *
+ * 검색 자체는 이미 성공한 뒤에 부수적으로 부르는 호출이다. 여기서 오류를 띄우면 사용자가 원한
+ * 일은 다 됐는데 화면에 빨간 상자가 뜨고, 실제로 잃은 것은 제안 목록의 한 줄이다. 서버가 그
+ * 판단을 하고 로그만 남긴다.
+ */
+export const recordSearch = (input: RecentSearchRecordInput) =>
+  neotmsApi<void>('/api/v0/me/recent-searches', { method: 'POST', body: input })
+
+/**
+ * 검색어를 지운다. `term` 을 비우면 그 화면의 전체.
+ *
+ * DELETE 에 본문을 싣는 것이 드문 모양이지만 일부러 그렇게 했다 — 대안은 경로에 검색어를 넣는
+ * 것이고(`/recent-searches/projects/현대차`), 그러면 검색어가 접속 로그와 브라우저 기록과 중간의
+ * 모든 프록시에 남는다. 거래처 일을 찾느라 입력한 말이 들어갈 자리는 본문이다.
+ */
+export const forgetSearch = (input: RecentSearchForgetInput) =>
+  neotmsApi<{ forgotten: number }>('/api/v0/me/recent-searches', {
+    method: 'DELETE',
     body: input,
   })
 

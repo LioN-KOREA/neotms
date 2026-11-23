@@ -43,6 +43,12 @@ export const neotmsKeys = {
    * 이다. 역할을 하나 만들면 둘 다 낡는다 — 접두사 하나를 무효화하면 둘 다 처리되고, 따로
    * 두면 역할을 만든 관리자에게는 바로 보이는데 배정 드롭다운에는 나타나지 않는다.
    */
+  /*
+   * 최근 검색어. 한 사람의 것이고 목록 데이터와 아무 관계가 없으므로 접두사를 따로 둔다 —
+   * 프로젝트를 하나 고쳤다고 내 검색어를 다시 읽을 이유가 없고, 그 반대도 마찬가지다.
+   */
+  recentSearches: ['recent-searches'] as const,
+
   staff: ['staff'] as const,
   roles: ['roles'] as const,
   rolesActive: ['roles', 'active'] as const,
