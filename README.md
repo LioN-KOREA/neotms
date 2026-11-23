@@ -1478,11 +1478,21 @@ paid tier is not an AWS-style SLA with credits, and a project restart is a few m
 outage. This was an accepted trade — the legacy system it replaces has no SLA either — but it should
 be a known trade rather than a discovered one.
 
-**Mail is wired but not finished.** `NEOTMS_MG_SECRET_NAME` and friends are passed to the Lambda from
-`config.mail`, but the Secrets Manager secret (`neotms-dev/mailgun` / `neotms/mailgun`) is neither
-created by CDK nor granted to the function's role, `mailgunEmailDomain` and `mailFromAddress` are
-empty, and no application code reads them. Creating the secret and adding the grant are both
-outstanding.
+**System mail (Mailgun) is wired, but nothing sends through it yet.** The mail NEOTMS sends today
+goes out from the user's own Hiworks account. For a future no-reply mail, `sendMailgunMail()` in
+`lambdas/neotms/nodejs/neotms/mail/NeotmsMailgunMail.ts` is ready to call: it reads the API key
+**and** the sending domain from the secret named by `config.mail.mailgunSecretName`
+(`neotms-dev/mailgun` / `neotms/mailgun`), and the API function is granted read on exactly that name
+(`-??????`, as for the KEXIM key). The secret is created by hand, once per stage:
+
+```bash
+aws secretsmanager create-secret --name neotms-dev/mailgun \
+  --secret-string '{"apiKey":"<mailgun-api-key>","domain":"<sending-domain>"}'
+```
+
+Both fields are required; a bare key is refused, because a key without its domain cannot send.
+The domain is deliberately not a config value, so the pair is always rotated and copied together.
+The sender is `config.mail.mailFromAddress`, or `no-reply@<domain>` when that is blank.
 
 **The rate fetcher has no dead-letter queue, no retries and no alarm, deliberately.** The next run is
 five minutes away and will do exactly the same work against the same upstream, so a retry only makes

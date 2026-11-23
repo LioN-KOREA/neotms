@@ -151,7 +151,6 @@ export class NeotmsApi extends Construct {
          */
         NEOTMS_BOOTSTRAP_AUTHORITY_ID: config.auth.bootstrapAuthorityId,
         NEOTMS_MG_SECRET_NAME: config.mail.mailgunSecretName,
-        NEOTMS_MG_EMAIL_DOMAIN: config.mail.mailgunEmailDomain,
         NEOTMS_MAIL_FROM_ADDRESS: config.mail.mailFromAddress,
         NEOTMS_MAIL_FROM_NAME: config.mail.mailFromName,
         // Keeps the SDK from re-resolving credentials on every call in a warm container.
@@ -217,6 +216,29 @@ export class NeotmsApi extends Construct {
     // delete needs to remove it.
     storage.attachmentBucket.grantReadWrite(this.fn);
     storage.attachmentTable.grantReadWriteData(this.fn);
+
+    /*
+     * The Mailgun secret (`{"apiKey", "domain"}`), granted on an ARN built from its NAME - the same
+     * pattern, and the same reasons, as the KEXIM key in NeotmsFxRate.ts: the secret is created by
+     * hand, `-??????` matches exactly the six random characters Secrets Manager appends and nothing
+     * that merely shares the prefix, and a blank name skips the grant instead of emitting
+     * `secret:-??????`. Only this function sends mail, so only this function holds the grant.
+     */
+    if (config.mail.mailgunSecretName) {
+      this.fn.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["secretsmanager:GetSecretValue"],
+          resources: [
+            cdk.Stack.of(this).formatArn({
+              service: "secretsmanager",
+              resource: "secret",
+              resourceName: `${config.mail.mailgunSecretName}-??????`,
+              arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+            }),
+          ],
+        }),
+      );
+    }
     // Spill target for a rendered report too large for Lambda's 6MB response payload. The function
     // both writes it and presigns a read of it. No KMS grant: with the Data API's 1 MiB cap gone,
     // nothing inside PostgreSQL writes here, so the bucket no longer needs SSE-KMS.

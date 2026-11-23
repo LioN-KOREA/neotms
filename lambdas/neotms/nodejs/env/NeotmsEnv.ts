@@ -178,8 +178,12 @@ const EnvSchema = v.object({
   NEOTMS_FX_SECRET_NAME: v.fallback(v.string(), ""),
 
   // -------- Mail (Mailgun, not SES) ----------------------------------------
+  /**
+   * The NAME of the secret holding `{"apiKey", "domain"}` - see mail/NeotmsMailgunSecret.ts. The key
+   * and the sending domain are both read from the secret, never from the environment.
+   */
   NEOTMS_MG_SECRET_NAME: v.fallback(v.string(), ""),
-  NEOTMS_MG_EMAIL_DOMAIN: v.fallback(v.string(), ""),
+  /** Blank means `no-reply@<domain from the secret>`. */
   NEOTMS_MAIL_FROM_ADDRESS: v.fallback(v.string(), ""),
   NEOTMS_MAIL_FROM_NAME: v.fallback(v.string(), "라이온코리아 TMS"),
 

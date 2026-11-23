@@ -6329,3 +6329,49 @@ describe("the required-field marker", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("Mailgun (system mail)", () => {
+  test("only the API function may read the Mailgun secret, and only that one secret", () => {
+    /*
+     * Same shape as the KEXIM grant above, mirrored: the API sends mail, the fetcher does not.
+     * `-??????` names exactly one secret; a `*` would also match `neotms/mailgun-old`.
+     */
+    const policies = synth().findResources("AWS::IAM::Policy");
+    const forApi: string[] = [];
+    const forOthers: string[] = [];
+    for (const [name, resource] of Object.entries(policies)) {
+      const statements = (
+        resource as { Properties: { PolicyDocument: { Statement: unknown[] } } }
+      ).Properties.PolicyDocument.Statement;
+      const text = JSON.stringify(statements);
+      if (!text.includes("mailgun")) continue;
+      (name.startsWith("Api") ? forApi : forOthers).push(text);
+    }
+    expect(forApi).toHaveLength(1);
+    expect(forOthers).toEqual([]);
+    expect(forApi[0]).toContain("secret:neotms/mailgun-??????");
+    expect(forApi[0]).not.toContain("mailgun*");
+    // And the dev stage grants its own secret, not production's.
+    const devText = JSON.stringify(synth("dev").findResources("AWS::IAM::Policy"));
+    expect(devText).toContain("secret:neotms-dev/mailgun-??????");
+    expect(devText).not.toContain("secret:neotms/mailgun-");
+  });
+
+  test("neither the key nor the domain is an environment variable", () => {
+    /*
+     * Both live in the secret. The domain used to be `NEOTMS_MG_EMAIL_DOMAIN`; it moved into the
+     * secret so the key and the domain it belongs to are always rotated and copied together.
+     */
+    for (const resource of Object.values(synth("dev").findResources("AWS::Lambda::Function"))) {
+      const env =
+        (resource as { Properties: { Environment?: { Variables: Record<string, unknown> } } })
+          .Properties.Environment?.Variables ?? {};
+      for (const key of Object.keys(env)) {
+        if (!/MG_|MAILGUN/i.test(key)) continue;
+        expect(key).toBe("NEOTMS_MG_SECRET_NAME");
+        expect(env[key]).toBe("neotms-dev/mailgun");
+      }
+    }
+    expect(Object.keys(NEOTMS_CONFIGS.dev.mail)).not.toContain("mailgunEmailDomain");
+  });
+});

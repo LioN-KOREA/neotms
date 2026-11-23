@@ -122,9 +122,14 @@ export interface NeotmsAuthConfig {
 }
 
 export interface NeotmsMailConfig {
-  /** Secrets Manager secret holding the Mailgun API key. Read at cold start, never an env var. */
+  /**
+   * Secrets Manager secret holding the Mailgun credentials as JSON: `{"apiKey": "...", "domain": "..."}`.
+   * Both the key and the sending domain are read from it at runtime (NeotmsMailgunSecret.ts) - the
+   * domain is deliberately not a config value, so the pair is always rotated and copied together.
+   * Created by hand, like the KEXIM key; the API function is granted read on exactly this name.
+   */
   readonly mailgunSecretName: string;
-  readonly mailgunEmailDomain: string;
+  /** Envelope sender for system mail. Blank means `no-reply@<domain from the secret>`. */
   readonly mailFromAddress: string;
   readonly mailFromName: string;
 }
@@ -273,7 +278,6 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
     },
     mail: {
       mailgunSecretName: "neotms-dev/mailgun",
-      mailgunEmailDomain: "",
       mailFromAddress: "",
       mailFromName: "라이온코리아 TMS",
     },
@@ -346,7 +350,6 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
     },
     mail: {
       mailgunSecretName: "neotms/mailgun",
-      mailgunEmailDomain: "",
       mailFromAddress: "",
       mailFromName: "라이온코리아 TMS",
     },
