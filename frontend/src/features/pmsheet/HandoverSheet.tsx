@@ -9,6 +9,7 @@ import { useAnswerHandover, usePendingHandovers, type PmHandover, type PmSheetRo
 import { Modal } from '@/shared/ui/Modal'
 import ui from '@/shared/ui/ui.module.css'
 import { formatHour, formatSheetDate } from './sheetFormat'
+import { isoToYmd } from './sheetModel'
 import css from './PmSheet.module.css'
 
 type Pending = PmHandover & { row: PmSheetRow }
@@ -75,7 +76,7 @@ export function HandoverSheet(props: { staffId: string | null; onNotice: (m: str
                     <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} disabled={answer.isPending} onClick={() => setReplying({ item, action: 'reject' })}>거부</button>
                   </div>
                 </td>
-                <td>{formatSheetDate(item.createdAt.slice(0, 10))}{changed.size > 0 ? <span className={`${css.badge} ${css.badgeMuted}`} title="수정 요청 뒤 다시 넘어온 인계">재인계</span> : null}</td>
+                <td>{formatSheetDate(isoToYmd(item.createdAt))}{changed.size > 0 ? <span className={`${css.badge} ${css.badgeMuted}`} title="수정 요청 뒤 다시 넘어온 인계">재인계</span> : null}</td>
                 <td>{item.fromName ?? ''}</td>
                 {COLS.map((c) => (
                   <td key={c.key} className={changed.has(c.key) ? css.hoChanged : undefined} title={changed.has(c.key) ? '지난 인계에서 바뀐 칸' : undefined}>

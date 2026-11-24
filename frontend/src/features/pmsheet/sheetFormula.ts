@@ -41,8 +41,9 @@ function tokenize(src: string): Token[] {
     }
     if (/[0-9.]/.test(c)) {
       let j = i
-      while (j < src.length && /[0-9.,]/.test(src[j]!)) j += 1
-      const n = Number(src.slice(i, j).replace(/,/g, ''))
+      // 쉼표는 숫자에 넣지 않는다 — 함수 인자 구분자다(`ROUND(x, 1)`). 엑셀도 수식 안 숫자에 쉼표를 받지 않는다.
+      while (j < src.length && /[0-9.]/.test(src[j]!)) j += 1
+      const n = Number(src.slice(i, j))
       if (!Number.isFinite(n)) throw new FormulaError(`숫자를 읽을 수 없습니다: ${src.slice(i, j)}`)
       out.push({ t: 'num', v: n })
       i = j

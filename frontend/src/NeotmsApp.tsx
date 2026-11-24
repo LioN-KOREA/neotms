@@ -16,6 +16,7 @@ import {
 } from '@/features/auth/AuthGate'
 import { SignupView } from '@/features/auth/SignupView'
 import { ErrorNotice } from '@/shared/ui/Feedback'
+import { NoticeBell } from '@/features/pmsheet/NoticeBell'
 import { Icon } from '@/shared/ui/Icon'
 import ui from '@/shared/ui/ui.module.css'
 import styles from './NeotmsApp.module.css'
@@ -265,6 +266,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
               {profile?.email ? ` · ${profile.email}` : ''}
             </span>
             {profile?.roleName ? <span className={styles.topPill}>{profile.roleName}</span> : null}
+            {profile ? <NoticeBell className={styles.topBtn} /> : null}
             <button type="button" className={styles.topBtn} onClick={onLogout}>
               <Icon name="logout" size={14} />
               로그아웃

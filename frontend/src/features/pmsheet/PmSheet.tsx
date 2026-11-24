@@ -64,6 +64,7 @@ import {
   cellValue,
   distinctValues,
   indexCells,
+  isoToYmd,
   mergeProblem,
   type DataEntry,
   type Filters,
@@ -1275,7 +1276,7 @@ function TranslatorSuggest(props: {
         >
           <b>{s.name}</b>
           <span className={css.suggestSub}>
-            이전 인계일 {s.lastHandoverAt ? formatSheetDate(s.lastHandoverAt.slice(0, 10)) : '-'} · {s.prjCode ?? ''} · {s.times}회
+            이전 인계일 {s.lastHandoverAt ? formatSheetDate(isoToYmd(s.lastHandoverAt)) : '-'} · {s.prjCode ?? ''} · {s.times}회
           </span>
         </button>
       ))}

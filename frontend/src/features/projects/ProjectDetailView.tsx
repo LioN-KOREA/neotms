@@ -59,6 +59,7 @@ import {
 } from '@/features/payment/poBulkApprove'
 import { duplicateJobInput } from '@/features/jobs/jobDuplicate'
 import { JobFormModal } from '@/features/jobs/JobFormModal'
+import { JobHandoverButton, ProjectHandoverStatus } from '@/features/pmsheet/ProjectHandover'
 import { ProjectAcceptanceModal } from './ProjectAcceptanceModal'
 import { JobPmName, JobPmSwapModal } from '@/features/jobs/JobPmSwapModal'
 import { JobTypeSwapModal, jobTypeSummary } from '@/features/jobs/JobTypeSwapModal'
@@ -731,6 +732,12 @@ export function ProjectDetailView() {
            * 상태에서 누르는 사람을 만들고, 그 클릭은 아무 일도 하지 않으므로 화면이 고장난
            * 것으로 읽힌다.
            */}
+          {jobSel.selected.length > 0 && mayUpdateProject ? (
+            <JobHandoverButton
+              jobs={jobSel.selected.map((j) => ({ id: j.id, label: `${j.jobCode} ${j.jobName ?? ''}`.trim() }))}
+              onDone={setNotice}
+            />
+          ) : null}
           {jobSel.selected.length > 0 && mayCreateJob ? (
             <button
               type="button"
@@ -976,6 +983,14 @@ export function ProjectDetailView() {
           </>
         )}
       </div>
+
+      <ProjectHandoverStatus
+        projectId={id}
+        jobLabel={(jobId) => {
+          const j = jobs.find((x) => x.id === jobId)
+          return j ? `${j.jobCode} ${j.jobName ?? ''}`.trim() : jobId
+        }}
+      />
 
       {/* ── PO ─────────────────────────────────────────────────────────── */}
 
