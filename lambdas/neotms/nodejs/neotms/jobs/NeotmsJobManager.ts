@@ -113,7 +113,17 @@ export async function createJob(
   input: JobCreate,
   ctx: WriteContext,
 ): Promise<ResponseData<JobRow | string>> {
-  const assigned: JobCreate = input.jobPmId ? input : { ...input, jobPmId: caller.staffId };
+  /*
+   * The PM of a new job defaults to whoever created it, and ONLY when the field was left out.
+   *
+   * `undefined` and `null` are different requests, here as everywhere else in this codebase: an
+   * absent key means "you decide", an explicit null means "no PM". The distinction started to
+   * matter when the job form grew a PM picker - somebody who clears that picker is shown a job with
+   * no PM, and a default that fired on null would quietly make them its PM instead. The form
+   * prefills them, so the ordinary path does not reach this line at all.
+   */
+  const assigned: JobCreate =
+    input.jobPmId === undefined ? { ...input, jobPmId: caller.staffId } : input;
   return runDb("create job", async () => {
     const visible = (await pgQuery(ProjectVisibleOps(caller, input.projectId))).data;
     if (!visible) return notFound("project");

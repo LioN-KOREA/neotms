@@ -24,6 +24,7 @@ import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
 import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { JobFormModal } from './JobFormModal'
+import { JobPmName, JobPmSwapModal } from './JobPmSwapModal'
 import { JobTypeSwapModal, jobTypeSummary } from './JobTypeSwapModal'
 
 /**
@@ -74,6 +75,8 @@ export function JobsView() {
    * 합치면 구분 하나 고치러 열었다가 다른 칸의 낡은 초안을 함께 덮어쓴다.
    */
   const [swappingType, setSwappingType] = useState<JobRow | null>(null)
+  /** The job whose PM is being reassigned. Kept apart from the form for the reason above. */
+  const [swappingPm, setSwappingPm] = useState<JobRow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   const jobsQuery = useJobs({
@@ -361,6 +364,12 @@ export function JobsView() {
                 <th>작업명</th>
                 <th>프로젝트 · 고객사</th>
                 {/*
+                 * 담당 PM. The column was missing while the data was not: every job already
+                 * carried `job_pm_id`, the reports grouped revenue by it, and no screen that
+                 * lists jobs said whose it was.
+                 */}
+                <th>담당 PM</th>
+                {/*
                  * 작업 종류 열.
                  *
                  * 걸러내기에는 있었는데 표에는 없던 값이다. 그 조합은 쓸 수 없다 — '감수' 로
@@ -392,7 +401,7 @@ export function JobsView() {
                     ? '조건에 맞는 작업이 없습니다.'
                     : '등록된 작업이 없습니다. 프로젝트를 먼저 만든 뒤 작업을 추가합니다.'
                 }
-                colSpan={10}
+                colSpan={11}
               />
               {rows.map((row) => (
                 <tr key={row.id}>
@@ -406,6 +415,17 @@ export function JobsView() {
                     </div>
                     {row.cusCodeName ? <div>{row.cusCodeName}</div> : null}
                   </td>
+                  {/*
+                   * Double-click to reassign. Both what the cell draws and the dialog it opens live
+                   * in `JobPmSwapModal`, because 프로젝트 상세 draws the same cell - see that file.
+                   */}
+                  <InlinePickerCell
+                    editable={mayUpdate}
+                    title="두 번 눌러 담당 PM 변경"
+                    onOpen={() => setSwappingPm(row)}
+                  >
+                    <JobPmName job={row} />
+                  </InlinePickerCell>
                   <td>
                     <KindTag value={row.workCode} />
                   </td>
@@ -508,6 +528,14 @@ export function JobsView() {
         <JobTypeSwapModal
           job={swappingType}
           onClose={() => setSwappingType(null)}
+          onSaved={setNotice}
+        />
+      ) : null}
+
+      {swappingPm ? (
+        <JobPmSwapModal
+          job={swappingPm}
+          onClose={() => setSwappingPm(null)}
           onSaved={setNotice}
         />
       ) : null}

@@ -60,6 +60,7 @@ import {
 import { duplicateJobInput } from '@/features/jobs/jobDuplicate'
 import { JobFormModal } from '@/features/jobs/JobFormModal'
 import { ProjectAcceptanceModal } from './ProjectAcceptanceModal'
+import { JobPmName, JobPmSwapModal } from '@/features/jobs/JobPmSwapModal'
 import { JobTypeSwapModal, jobTypeSummary } from '@/features/jobs/JobTypeSwapModal'
 import { PoDocButtons, type PoPrintRequest } from '@/features/payment/print/PoDocButtons'
 import { PoPrintModal } from '@/features/payment/print/PoPrintModal'
@@ -165,6 +166,8 @@ export function ProjectDetailView() {
    * 것을 저장**하기 때문이다 — 서식은 작업의 모든 칸을, 이쪽은 구분과 그에 딸린 값만 보낸다.
    */
   const [swappingType, setSwappingType] = useState<JobRow | null>(null)
+  /** The job whose PM is being reassigned. Kept apart from the form for the reason above. */
+  const [swappingPm, setSwappingPm] = useState<JobRow | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   /**
    * 일괄 작업 중 **첫 번째** 실패의 오류.
@@ -791,6 +794,8 @@ export function ProjectDetailView() {
                     </th>
                     <th>JOB코드</th>
                     <th>작업명</th>
+                    {/* 작업 목록 화면과 같은 열이다 — `JobPmName` 머리말 참고. */}
+                    <th>담당 PM</th>
                     {/* 작업 목록 화면과 같은 한 열이다 — JobsView 의 같은 열 주석 참고. */}
                     <th>언어 페어 · 업무 분류</th>
                     <th>물량 · 단가</th>
@@ -809,7 +814,7 @@ export function ProjectDetailView() {
                     error={jobsQuery.error}
                     isEmpty={jobs.length === 0}
                     emptyText="이 프로젝트에는 작업이 없습니다. 작업을 추가하면 매출이 잡힙니다."
-                    colSpan={10}
+                    colSpan={11}
                   />
                   {jobs.map((job) => {
                     const poCount = poCountByJob.get(job.id) ?? 0
@@ -836,6 +841,18 @@ export function ProjectDetailView() {
                           ariaLabel={`${job.jobCode} 작업명`}
                           onCommit={(jobName) => patchJob(job, { jobName })}
                         />
+                        {/*
+                         * Double-click to reassign the PM. Same cell and same dialog as 작업 목록,
+                         * from the same file - a job table that drew this one differently would be
+                         * the pair of ternaries the job-type cell above exists to avoid.
+                         */}
+                        <InlinePickerCell
+                          editable={mayUpdateJob && !jobBusy}
+                          title="두 번 눌러 담당 PM 변경"
+                          onOpen={() => setSwappingPm(job)}
+                        >
+                          <JobPmName job={job} />
+                        </InlinePickerCell>
                         {/*
                          * 두 번 눌러 업무 구분을 바꾼다. 작업 목록(`JobsView`)의 같은 칸과 **같은
                          * 함수로 그리고 같은 대화상자를 연다** — 두 화면이 각자 삼항 연산자를 들고
@@ -1270,6 +1287,14 @@ export function ProjectDetailView() {
         <JobTypeSwapModal
           job={swappingType}
           onClose={() => setSwappingType(null)}
+          onSaved={setNotice}
+        />
+      ) : null}
+
+      {swappingPm ? (
+        <JobPmSwapModal
+          job={swappingPm}
+          onClose={() => setSwappingPm(null)}
           onSaved={setNotice}
         />
       ) : null}

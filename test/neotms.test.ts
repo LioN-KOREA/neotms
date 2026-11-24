@@ -5346,6 +5346,53 @@ describe("date defaults, bulk operations and in-place editing", () => {
     }
   });
 
+  test("a job is assigned to a PM from a dialog, and both job tables say who that is", () => {
+    /*
+     * `job.job_pm_id` existed, was written by the server and appeared on no screen. That combination
+     * is an assignment nobody can see or change: whoever enters a job becomes its PM (the default in
+     * `createJob`), the reports group revenue by that column, and neither screen that lists jobs
+     * says whose revenue it is going to be.
+     *
+     * Three things have to hold together.
+     */
+    const modal = frontendCode("features", "jobs", "JobPmSwapModal.tsx");
+
+    // 1. One component draws the cell, for both tables. The rule `jobTypeSummary` is held to above.
+    expect(modal).toContain("export function JobPmName");
+
+    /*
+     * 2. The dialog sends the id ALONE. It is opened from a row in a money table, and the reason it
+     * exists rather than reusing the form is that the form carries the rate and the two totals; a
+     * body that grew a money field here would give that back.
+     */
+    expect(modal).toContain("input: { jobPmId: nextId }");
+    expect(modal).not.toMatch(/jobPrice|coinRate|jobVolume/);
+
+    for (const [feature, file] of [
+      ["jobs", "JobsView.tsx"],
+      ["projects", "ProjectDetailView.tsx"],
+    ] as const) {
+      const view = frontendCode("features", feature, file);
+      expect(view).toContain("<JobPmName job={");
+      expect(view).toContain("<JobPmSwapModal");
+      // The cell only OPENS; the dialog owns the mutation. `InlinePickerCell` is that contract.
+      expect(view).toContain('title="두 번 눌러 담당 PM 변경"');
+      // And neither view reads the name straight off the row: that is how the two cells would drift.
+      expect(view).not.toMatch(/\{(row|job)\.jobPmName\}/);
+    }
+
+    /*
+     * 3. The create form prefills the signed-in user, because the server assigns them when the field
+     * is absent. The server's own test of absence is `=== undefined`, not truthiness: the original
+     * line conflated the two emptinesses, so clearing the picker sent a falsy `null` and made the
+     * person who cleared it the PM of the job that had just told them it had none.
+     */
+    const form = frontendCode("features", "jobs", "JobFormModal.tsx");
+    expect(form).toContain("jobPmId: pm?.id ?? null");
+    expect(form).toContain("profile?.staffId");
+    expect(tsCode("jobs/NeotmsJobManager.ts")).toContain("input.jobPmId === undefined");
+  });
+
   test("select-all recomputes inside the state updater and selection is an intersection with what is on screen", () => {
     /*
      * Two bugs that only appear under load, both avoided by where the computation sits.
@@ -5499,13 +5546,14 @@ describe("date defaults, bulk operations and in-place editing", () => {
     expect(view).not.toMatch(/poMoneyState\s*\}\s*\)/);
 
     /*
-     * Both tables carry a leading checkbox column and the PO table an 승인 column, so both are ten
-     * wide and both empty-state rows span ten. The invariant itself is asserted for every table in
-     * the application by "every table's empty-state spans exactly its own columns" below - this is
-     * the local statement of the number, which is worth having because these two tables are the
-     * ones that keep gaining columns.
+     * Both tables carry a leading checkbox column, the PO table an 승인 column and the job table a
+     * 담당 PM one, so the job table is eleven wide and the PO table ten. The invariant itself is
+     * asserted for every table in the application by "every table's empty-state spans exactly its
+     * own columns" below - this is the local statement of the two numbers, worth having because
+     * these are the two tables that keep gaining columns.
      */
-    expect(view.match(/colSpan=\{10\}/g)).toHaveLength(2);
+    expect(view.match(/colSpan=\{11\}/g)).toHaveLength(1);
+    expect(view.match(/colSpan=\{10\}/g)).toHaveLength(1);
     // `indeterminate` is a DOM property with no HTML attribute, so it can only be set through a ref.
     // Without it a partial selection renders as an empty box, and the header reads "nothing selected"
     // while 선택 삭제 is live.

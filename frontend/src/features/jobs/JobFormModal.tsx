@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useCreateJob, useUpdateJob } from '@/apis/queries/neotms.mutation'
-import { useFxRate } from '@/apis/queries/neotms.query'
+import { useFxRate, useProfile } from '@/apis/queries/neotms.query'
 import {
   CODE_DOMAIN,
   codeOptions,
@@ -11,7 +11,12 @@ import {
   JOB_TYPE_LINGUISTIC,
   unsetPlaceholder,
 } from '@/apis/neotms.codes'
-import type { JobInput, JobRow, JobUpdate } from '@/apis/neotms.types'
+import {
+  ASSIGNABLE_ATTRIBUTES,
+  type JobInput,
+  type JobRow,
+  type JobUpdate,
+} from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
@@ -27,6 +32,10 @@ import {
 } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
 import { ProjectPicker } from '@/features/projects/ProjectPicker'
+import { StaffPicker } from '@/features/staff/StaffPicker'
+
+/** Index 1 of the shared list is the PM attribute. See `ASSIGNABLE_ATTRIBUTES`. */
+const PM_ATTRIBUTE = ASSIGNABLE_ATTRIBUTES[1]
 
 interface Props {
   /** null 이면 신규. */
@@ -107,6 +116,28 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
       ? { id: job.projectId, title: job.prjName || job.prjCode || job.projectId, subtitle: job.cusCodeName }
       : fixedProject,
   )
+
+  /**
+   * The PM of THIS job, which need not be the PM of its project.
+   *
+   * A new job is prefilled with the signed-in user, because that is who the server assigns when the
+   * field is absent (`createJob`). An empty picker would be a lie in the one direction that cannot
+   * be noticed: the form would say the job has no PM, and the job it saved would have one.
+   *
+   * The picker offers holders of the PM attribute, and the prefilled person may not be one of them -
+   * anybody may create a job. `RecordPicker` draws the selected row from the value it is handed
+   * rather than from the list, so that case displays correctly and only the NEXT pick is narrowed.
+   */
+  const { data: profile } = useProfile()
+  const [pm, setPm] = useState<PickerOption | null>(() => {
+    if (job) {
+      return job.jobPmId ? { id: job.jobPmId, title: job.jobPmName ?? job.jobPmId } : null
+    }
+    const mine = profile?.staffId
+    return mine
+      ? { id: mine, title: profile?.name ?? mine, subtitle: profile?.mgrId ?? null }
+      : null
+  })
 
   const [form, setForm] = useState({
     jobName: job?.jobName ?? '',
@@ -432,6 +463,11 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
     const common: JobUpdate = {
       jobName: name,
       workCode: form.workCode.trim() || null,
+      /*
+       * The PM. An emptied picker sends `null`, and the server stores that as "no PM" rather than
+       * falling back to the caller - the two emptinesses are different requests there.
+       */
+      jobPmId: pm?.id ?? null,
       jobType: form.jobType.trim() || null,
       ...detail,
       coinCode: form.coinCode.trim() || null,
@@ -594,6 +630,25 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
               </option>
             ))}
           </select>
+        </div>
+
+        {/*
+         * The job's own PM, which may differ from the project's - the whole reason the field is
+         * here. One project routinely runs with its work split between two of them, and until this
+         * picker existed the column was written only by the server's own default.
+         */}
+        <div className={ui.field}>
+          <StaffPicker
+            attribute={PM_ATTRIBUTE}
+            id="job-pm"
+            label="담당 PM"
+            value={pm}
+            onChange={(option) => {
+              setDirty(true)
+              setPm(option)
+            }}
+            disabled={pending}
+          />
         </div>
 
         {/*

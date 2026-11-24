@@ -1403,6 +1403,46 @@ it. It answers an id, a name and the legacy `mgr_id` — less than the project l
 the same people — and it refuses `NEOTMS_USER_ATTRIBUTE_SUPERUSER`, which would otherwise make it
 "who are the administrators" for every staff member in the company.
 
+### 6.6 The job's own PM — separate from the project's
+
+`job.job_pm_id` has been written since the first load and shown on no screen. That combination is an
+assignment nobody can see: whoever enters a job becomes its PM (the server names the caller when the
+field is absent), **the reports group revenue by that column** — the PM dimension is the job's PM,
+not the project's, and `NeotmsReport.dbops.ts` says so at length — and neither screen that lists jobs
+said whose revenue it was going to be.
+
+Three things now exist:
+
+- a **담당 PM** picker on the job form, prefilled with the person filling it in, because that is who
+  the server would have named anyway. An empty picker would be a lie in the direction nobody can
+  catch: the form would say the job has no PM and the saved job would have one.
+- a **담당 PM** column on both job lists — 작업 목록 and 프로젝트 상세 — drawn by one component, so
+  the two cannot drift.
+- **double-click that cell to reassign** (담당 PM 변경). It sends the id alone. The alternative is the
+  edit form, which opens the exchange rate and both totals to change a name.
+
+#### The picker narrows the next pick; it does not police the column
+
+Unlike the project's two seats, an ineligible id is **not refused** here. The list comes from the
+same `GET /api/v0/staff/assignable?attribute=...` and so shows only holders of
+`NEOTMS_USER_ATTRIBUTE_PM` — grant it on 사용자 관리 or both this picker and the project's PM picker
+are empty — but the column itself takes any staff id, and that is deliberate: anybody who can see a
+project may create work under it, and the creator default has to keep working for people who are not
+PMs. Tightening it would mean making that default conditional first, which changes who can create a
+job. Worth revisiting; not worth doing silently.
+
+#### Reassigning moves the job out of somebody's screens
+
+`job_pm_id` is one of the three row-level scope columns of a job (`j.job_pm_id`, `p.prj_mgr_id`,
+`p.prj_pm_id`) and one of the four of a PO. For a colleague who does not see every row, a
+reassignment therefore takes the job **and its POs** off their lists — including the lists of the
+person doing the reassigning, when they are handing over their own job. The dialog says so before it
+saves, because the alternative is finding out afterwards.
+
+Clearing the PM is allowed and means what it says: no one is answerable, and the job is then
+reachable only through its project's PM or 영업담당. Legacy rows arrive in that state, so there has
+to be a way back into it.
+
 ### 6.3 `003_access_control.sql` — moving a live database to named permissions
 
 The only file in `db/` that changes an existing database rather than building a new one, and the

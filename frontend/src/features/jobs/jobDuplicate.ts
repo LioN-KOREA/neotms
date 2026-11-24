@@ -40,6 +40,11 @@ export function duplicateJobInput(row: JobRow): JobInput {
     // 저장이 거절되고, 거절의 이유가 '원본에도 이름이 없었다' 임을 화면이 설명할 수 없다.
     jobName: row.jobName || row.jobCode,
     workCode: row.workCode,
+    /*
+     * The PM. A null is sent AS null: the server names the caller only when the field is absent
+     * (`createJob`), so a copy of an unassigned job stays unassigned instead of landing on whoever
+     * pressed 복제. Copying an assignment is what a copy of the work means.
+     */
     jobPmId: row.jobPmId,
     /*
      * 업무 구분과 그에 딸린 값들. 언어쌍과 업무 분류를 **둘 다** 그대로 넘기는 것이 안전한
