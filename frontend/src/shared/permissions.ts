@@ -2,6 +2,7 @@ import type { ProfileView } from '@/apis/neotms.types'
 import {
   NEOTMS_PERMISSION_CUSTOMER_READ,
   NEOTMS_PERMISSION_DASHBOARD_PM_READ,
+  NEOTMS_PERMISSION_WORKSPACE_READ,
   NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
   NEOTMS_PERMISSION_INVOICE_READ,
   NEOTMS_PERMISSION_JOB_READ,
@@ -166,6 +167,24 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     label: '대시보드(PM)',
     hint: 'PM용 대시보드',
     group: 'dashboard',
+  },
+  /*
+   * 나의 업무가 '업무' 묶음의 맨 앞이다.
+   *
+   * 프로젝트·작업·PO 는 **무엇이 있는지** 묻는 화면이고, 이 화면은 **내가 무엇을 들고 있는지**
+   * 묻는 화면이다. PM 이 하루를 시작하는 자리가 뒤쪽에 있으면, 매일 두 번씩 지나치는 화면이
+   * 목록 세 개 다음에 놓인다.
+   *
+   * 대시보드 묶음에 넣지 않은 이유는 성격이다. 대시보드는 읽는 화면이고 이 시트는 **고치는**
+   * 화면이다 — 그래서 권한도 따로이고(`WORKSPACE_READ`), 레일에서도 업무 쪽에 선다.
+   */
+  {
+    menuId: NeotmsMenuId.WORKSPACE,
+    readPermission: NEOTMS_PERMISSION_WORKSPACE_READ,
+    path: '/workspace',
+    label: '나의 업무',
+    hint: '내가 수락한 프로젝트의 PO를 한 장의 시트에서',
+    group: 'work',
   },
   {
     menuId: NeotmsMenuId.PROJECT,

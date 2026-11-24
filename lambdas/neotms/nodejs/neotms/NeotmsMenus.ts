@@ -130,6 +130,15 @@ export const NeotmsMenu = {
    * for why a missing `sys_menu` row is a silent failure rather than an error.
    */
   PAYMENT: "PAYMENT",
+  /**
+   * 나의 업무 - one PM's own worksheet.
+   *
+   * Seeded by db/002_initial_seeding.sql and, for a database that already has data, by
+   * db/006_workspace.sql - which also adds `NEOTMS_PERMISSION_WORKSPACE_READ` to the permission
+   * CHECK and re-grants the superuser. See DASHBOARD_SALES above for why a missing `sys_menu` row
+   * is a silent failure rather than an error.
+   */
+  WORKSPACE: "WORKSPACE",
 } as const;
 
 export type NeotmsMenuId = (typeof NeotmsMenu)[keyof typeof NeotmsMenu];

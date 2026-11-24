@@ -38,6 +38,11 @@ import {
   updateRole,
   updateStaff,
   updateTranslator,
+  createWorkspaceColumn,
+  deleteWorkspaceColumn,
+  renameWorkspaceColumn,
+  reorderWorkspaceColumns,
+  writeWorkspaceCell,
 } from '../neotms.api'
 import type {
   CodeInput,
@@ -592,6 +597,9 @@ const JOB_AFFECTS = [
   neotmsKeys.purchaseOrders,
   neotmsKeys.reports,
   neotmsKeys.dashboards,
+  // 나의 업무 시트가 작업의 출발어·도착어를 그린다. 그 시트에서 고친 경우에도 필요하다 —
+  // 시트는 서버가 돌려준 행을 그리므로, 무효화하지 않으면 저장된 값과 보이는 값이 갈린다.
+  neotmsKeys.workspace,
 ] as const
 
 export function useCreateJob() {
@@ -619,6 +627,71 @@ export function useDeleteJob() {
 }
 
 /* -------------------------------------------------------------------------- */
+/* 나의 업무                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * 추가 열과 그 값. **작업·PO 를 건드리지 않으므로 `workspace` 하나만 무효화한다.**
+ *
+ * 시트의 기본 열을 고치는 것은 이 묶음이 아니다 — 그쪽은 `useUpdateJob`·
+ * `useUpdatePurchaseOrder` 를 그대로 쓰고, 그 두 훅의 무효화 목록에 `workspace` 가 들어 있다.
+ * 같은 화면에서 일어나는 두 종류의 쓰기가 서로 다른 엔드포인트로 가는 것이 이 기능의 설계이고,
+ * 그 이유는 서버의 `NeotmsWorkspaceManager` 머리말에 있다.
+ */
+const WORKSPACE_AFFECTS = [neotmsKeys.workspace] as const
+
+export function useCreateWorkspaceColumn() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (label: string) => createWorkspaceColumn({ label }),
+    onSuccess: () => invalidateAll(qc, WORKSPACE_AFFECTS),
+  })
+}
+
+export function useRenameWorkspaceColumn() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, label }: { id: string; label: string }) =>
+      renameWorkspaceColumn(id, { label }),
+    onSuccess: () => invalidateAll(qc, WORKSPACE_AFFECTS),
+  })
+}
+
+export function useDeleteWorkspaceColumn() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deleteWorkspaceColumn(id),
+    onSuccess: () => invalidateAll(qc, WORKSPACE_AFFECTS),
+  })
+}
+
+export function useReorderWorkspaceColumns() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (columnIds: string[]) => reorderWorkspaceColumns(columnIds),
+    onSuccess: () => invalidateAll(qc, WORKSPACE_AFFECTS),
+  })
+}
+
+/**
+ * 칸 하나를 저장한다.
+ *
+ * 성공했을 때 **무효화하지 않는다.** 시트는 한 칸을 고치면 바로 다음 칸으로 넘어가는 화면이고,
+ * 매 칸마다 200 건을 다시 읽으면 입력 중에 표가 갈아끼워진다 — 커서가 튀고, 아직 보내지 않은
+ * 편집이 있으면 그 칸이 옛 값으로 되돌아간다. 화면이 보낸 값을 그대로 들고 있으므로(낙관적
+ * 반영) 다시 읽을 것이 없다.
+ *
+ * **실패했을 때는** 화면이 그 칸을 서버 값으로 되돌린다(`WorkspaceGrid`). 저장되지 않은 값이
+ * 저장된 것처럼 남아 있는 것이 이 화면에서 가장 비싼 거짓말이다.
+ */
+export function useWriteWorkspaceCell() {
+  return useMutation({
+    mutationFn: (input: { columnId: string; poId: string; value: string }) =>
+      writeWorkspaceCell(input),
+  })
+}
+
+/* -------------------------------------------------------------------------- */
 /* 발주(PO) — 원가                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -641,6 +714,8 @@ const PO_AFFECTS = [
    * 발주 삭제도 같은 이유로 여기 걸린다 — 삭제된 발주는 `poCount` 에서 빠진다.
    */
   neotmsKeys.invoices,
+  // 나의 업무 시트는 PO 한 건이 한 행이다. 번역가·분량·납품일·진행상태를 고치면 그 행이 바뀐다.
+  neotmsKeys.workspace,
 ] as const
 
 export function useCreatePurchaseOrder() {

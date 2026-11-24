@@ -146,6 +146,22 @@ export const NEOTMS_PERMISSION_STAFF_READ = "NEOTMS_PERMISSION_STAFF_READ";
 export const NEOTMS_PERMISSION_STAFF_UPDATE = "NEOTMS_PERMISSION_STAFF_UPDATE";
 
 /**
+ * 나의 업무 - the caller's own worksheet, and the custom columns on it.
+ *
+ * One permission, and a read one, although the screen is the most write-heavy in the application.
+ * That is not an oversight: everything the sheet writes to a project, job or purchase order goes
+ * out through the ordinary endpoints for those rows, so editing a cell needs the same
+ * `JOB_UPDATE` or `PO_UPDATE` the forms need and a person without them gets a sheet they can read.
+ * What THIS permission opens is the screen, plus the caller's own annotation layer - which is
+ * private data rather than company data, and so is no more a privilege than `/api/v0/me`.
+ *
+ * Separate from `DASHBOARD_PM_READ` even though the audience is the same people. The two screens
+ * answer different questions - the dashboard is "what is coming", the sheet is "what am I holding"
+ * - and a grant should name one screen, which is the argument that split the two dashboards.
+ */
+export const NEOTMS_PERMISSION_WORKSPACE_READ = "NEOTMS_PERMISSION_WORKSPACE_READ";
+
+/**
  * Every permission this build knows, in the order the administration screen lists them.
  *
  * It exists so that three things cannot drift apart: what a role may be granted, what the admin
@@ -190,6 +206,7 @@ export const NEOTMS_PERMISSIONS = [
   NEOTMS_PERMISSION_MAINTENANCE_DELETE,
   NEOTMS_PERMISSION_STAFF_READ,
   NEOTMS_PERMISSION_STAFF_UPDATE,
+  NEOTMS_PERMISSION_WORKSPACE_READ,
 ] as const;
 
 export type NeotmsPermission = (typeof NEOTMS_PERMISSIONS)[number];

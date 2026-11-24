@@ -35,7 +35,7 @@ import { currentAccessToken, notifySignedOut, refreshAccessToken } from './neotm
 const TRANSIENT_RETRIES = 2
 
 export interface NeotmsRequestInit {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE' | 'PUT' | 'OPTIONS'
   /** 쿼리 문자열. undefined · null 값은 빠진다. */
   query?: Record<string, string | number | boolean | null | undefined>
   /** JSON 으로 보낼 본문. */

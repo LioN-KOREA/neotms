@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { WORKSPACE_PAGE_SIZE } from '@/shared/config'
 import {
   fetchAdminCodes,
   fetchCodes,
@@ -29,6 +30,7 @@ import {
   type ProjectListQuery,
   type PurchaseOrderListQuery,
   type TranslatorListQuery,
+  fetchWorkspace,
 } from '../neotms.api'
 import { codeOptions, codesToOptions, type CodeDomainId, type CodeOption } from '../neotms.codes'
 import type {
@@ -465,6 +467,24 @@ export function useWorkload(range: { from?: string; to?: string } = {}, enabled 
  * week. A grant made while a form is open is picked up on the next reload, which is the same
  * latency the permission matrix itself has.
  */
+/**
+ * 나의 업무 시트.
+ *
+ * `makeListHook` 을 쓰지 않는다. 응답이 `ListPage` 보다 넓고(열 정의와 '행 없는 작업' 건수가
+ * 함께 온다) 질의 파라미터도 없으므로, 묶어서 얻을 것이 없다. 커서 처리는 그 헬퍼의 것과
+ * 같은 모양으로 둔다 — 빈 문자열을 '없음' 으로 취급하는 것까지 같고, 그 이유도 같다.
+ */
+export function useWorkspace(sort: string, dir: 'asc' | 'desc') {
+  const query = { limit: WORKSPACE_PAGE_SIZE, sort, dir }
+  return useInfiniteQuery({
+    queryKey: neotmsKeys.workspaceSheet(query),
+    queryFn: ({ pageParam, signal }) => fetchWorkspace({ ...query, cursor: pageParam }, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => (last.cursor && last.cursor.length > 0 ? last.cursor : null),
+    staleTime: LIST_STALE_MS,
+  })
+}
+
 export function useAssignableStaff(attribute: AssignableAttribute) {
   return useQuery({
     queryKey: neotmsKeys.assignableStaff(attribute),

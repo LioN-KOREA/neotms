@@ -112,4 +112,18 @@ export const neotmsKeys = {
    */
   dashboards: ['dashboard'] as const,
   dashboard: (role: string) => ['dashboard', role] as const,
+
+  /*
+   * 나의 업무. 한 사람의 시트이고, 그 안의 값은 작업·PO 를 고치면 함께 낡는다.
+   *
+   * 그래서 `JOB_AFFECTS` 와 `PO_AFFECTS` 가 이 접두사를 적는다 — 시트에서 마감일을 고치면
+   * PO 가 바뀌고, PO 가 바뀌면 시트의 그 행도 바뀐다. 반대 방향도 필요하다: 작업 화면에서
+   * 출발어를 고친 담당자가 나의 업무를 열었을 때 옛 값이 그려져 있으면, 고치지 못한 것으로
+   * 읽고 한 번 더 고친다.
+   *
+   * 추가 열의 정의는 시트 응답에 함께 실려 오므로 별도 키가 없다 — 열을 만들거나 지우면 이
+   * 접두사 하나만 무효화하면 된다.
+   */
+  workspace: ['workspace'] as const,
+  workspaceSheet: (query: unknown) => ['workspace', 'sheet', query] as const,
 } as const

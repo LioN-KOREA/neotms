@@ -89,6 +89,21 @@ export const NeotmsMenuId = {
    * db/015_payment.sql 이 넣는다.
    */
   PAYMENT: 'PAYMENT',
+  /**
+   * 나의 업무 — PM 이 수락한 프로젝트의 PO 를 한 장의 시트로.
+   *
+   * 대시보드(PM) 와 **같은 사람들이 쓰는데 권한이 다르다.** 두 화면이 묻는 것이 다르기
+   * 때문이다 — 대시보드는 "무엇이 오고 있나", 이 시트는 "내가 무엇을 들고 있나" 이고, 무엇보다
+   * 이쪽은 **고치는** 화면이다. 읽기 권한 하나에 두 가지 뜻을 담지 않는다.
+   *
+   * 시트에서 값을 고치는 것은 이 권한이 아니다. 기본 열의 편집은 작업·PO 의 일반
+   * 엔드포인트로 나가므로 `JOB_UPDATE`·`PO_UPDATE` 가 각각 필요하고, 이 권한은 화면과
+   * **자기 추가 열**을 연다.
+   *
+   * `sys_menu` 행이 없으면 DASHBOARD_SALES 와 같은 방식으로 조용히 사라진다 — 그 행은
+   * db/006_workspace.sql 이 넣는다.
+   */
+  WORKSPACE: 'WORKSPACE',
 } as const
 
 export type NeotmsMenuIdValue = (typeof NeotmsMenuId)[keyof typeof NeotmsMenuId]
@@ -110,3 +125,15 @@ export const LIST_PAGE_SIZE = 50
  * 화면에 써 두더라도 사용자는 그 숫자를 전체 합계로 읽는다. 그래서 목록보다 크게 잡는다.
  */
 export const DETAIL_PAGE_SIZE = 200
+
+/**
+ * 나의 업무 시트 한 페이지의 건수.
+ *
+ * 목록(50)보다 크고 서버 상한(200)과 같다. 스프레드시트는 **훑는** 화면이다 — 담당자는 특정
+ * 행을 찾으러 오는 것이 아니라 자기가 들고 있는 일 전체를 본다. 50 건마다 '더 보기' 를 누르게
+ * 하면 그 훑기가 끊기고, 무엇보다 **화면에 보이는 것이 전부가 아니라는 사실이 묻힌다**.
+ *
+ * 상한을 넘기지 않는 이유는 `clampLimit` 이 조용히 깎기 때문이다 — 300 을 보내면 200 이
+ * 돌아오고, 요청한 쪽은 그것을 모른다.
+ */
+export const WORKSPACE_PAGE_SIZE = 200

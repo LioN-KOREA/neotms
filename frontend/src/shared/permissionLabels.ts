@@ -4,6 +4,7 @@ import {
   NEOTMS_PERMISSION_CUSTOMER_READ,
   NEOTMS_PERMISSION_CUSTOMER_UPDATE,
   NEOTMS_PERMISSION_DASHBOARD_PM_READ,
+  NEOTMS_PERMISSION_WORKSPACE_READ,
   NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
   NEOTMS_PERMISSION_INVOICE_CREATE,
   NEOTMS_PERMISSION_INVOICE_DELETE,
@@ -199,6 +200,11 @@ export const PERMISSION_GROUPS: readonly PermissionGroup[] = [
         name: NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
         label: '대시보드(영업)',
         hint: '영업 담당자용 요약 화면. 보통 담당영업에게만 준다.',
+      },
+      {
+        name: NEOTMS_PERMISSION_WORKSPACE_READ,
+        label: '나의 업무',
+        hint: 'PM 이 수락한 프로젝트의 PO 를 스프레드시트로 연다. 자기가 담당하는 건만 보이고, 추가 열은 그 사람에게만 보인다. 시트에서 값을 고치려면 그 값의 권한이 따로 필요하다 — 번역가·분량·납품일은 PO 수정, 출발어·도착어는 작업 수정이다.',
       },
       {
         name: NEOTMS_PERMISSION_DASHBOARD_PM_READ,

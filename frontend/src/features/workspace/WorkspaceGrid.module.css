@@ -1,0 +1,75 @@
+/*
+ * 나의 업무 시트의 겉틀.
+ *
+ * ReactGrid 는 **자기 크기를 모른다** — 내용만큼 커지고, 스크롤은 부모가 맡는다. 높이를 주지
+ * 않으면 200 행이 페이지를 끝까지 밀어내므로 머리글 고정(`stickyTopRows`)이 아무 일도 하지
+ * 않는다. 고정 행은 스크롤 상자 안에서만 뜻이 있다.
+ */
+.wrap {
+  height: calc(100vh - 290px);
+  min-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--nt-line);
+  border-radius: 8px;
+  background: var(--nt-surface);
+}
+
+/*
+ * ReactGrid 의 기본 색은 밝은 테마에 맞춰 박혀 있다. 이 앱의 토큰으로 덮어쓴다 — 덮어쓰지
+ * 않으면 어두운 테마에서 글자와 배경이 같은 색이 되는 칸이 생긴다.
+ */
+.wrap :global(.reactgrid-content) {
+  font-size: 12px;
+}
+
+.wrap :global(.rg-cell) {
+  color: var(--nt-ink);
+  background: var(--nt-surface);
+  border-color: var(--nt-line);
+}
+
+.wrap :global(.rg-cell.rg-header-cell) {
+  color: var(--nt-ink2);
+  background: var(--nt-tint2);
+  font-weight: 700;
+}
+
+.wrap :global(.rg-celleditor input) {
+  color: var(--nt-ink);
+  background: var(--nt-surface);
+  font-size: 12px;
+}
+
+/* 번역가 칸. 이름과 '변경' 버튼이 한 줄에 선다 — 칸 안에서 검색하지 않는 이유는 그쪽 주석에. */
+.pickerCell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  padding: 0 4px;
+  overflow: hidden;
+}
+
+.pickerText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pickerBtn {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--nt-line);
+  border-radius: 4px;
+  background: var(--nt-tint2);
+  color: var(--nt-ink2);
+  font-size: 10px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.pickerBtn:hover {
+  color: var(--nt-ink);
+  border-color: var(--nt-ink3);
+}

@@ -920,17 +920,23 @@ describe("the migration to named permissions", () => {
      * that should have been given the new right simply does not get it, and the symptom is a
      * screen refusing somebody whose role looks correct on the admin page.
      *
-     * NEOTMS_PERMISSION_PO_EMAIL is the one deliberate omission - there is no feature behind it,
-     * so granting it would hand out the ability to do nothing, which then reads as a right
-     * somebody chose to give. It has to be NAMED in the file for that to be a decision rather
-     * than an oversight, so the prose is checked for it too.
+     * Two deliberate omissions, for two different reasons, and each has to be NAMED in the file
+     * so that it reads as a decision rather than an oversight - hence the prose assertion.
+     *
+     *   * PO_EMAIL - there is no feature behind it, so granting it would hand out the ability to
+     *     do nothing, which then reads as a right somebody chose to give.
+     *   * WORKSPACE_READ - 나의 업무 has no legacy counterpart, so there is no flag to translate
+     *     FROM. Any rule this file invented would be a new grant presented as a migration; the
+     *     permission is granted per role on 사용자 관리 instead.
      */
     const granted = permissionsIn(code(2));
-    const withheld = "NEOTMS_PERMISSION_PO_EMAIL";
+    const withheld = ["NEOTMS_PERMISSION_PO_EMAIL", "NEOTMS_PERMISSION_WORKSPACE_READ"];
 
-    expect(granted).toEqual([...NEOTMS_PERMISSIONS].filter((p) => p !== withheld).sort());
-    expect(granted).not.toContain(withheld);
-    expect(section(2)).toContain(withheld);
+    expect(granted).toEqual([...NEOTMS_PERMISSIONS].filter((p) => !withheld.includes(p)).sort());
+    for (const permission of withheld) {
+      expect(granted).not.toContain(permission);
+      expect(section(2)).toContain(permission);
+    }
   });
 
   test("the two permissions that never had a flag go to whoever could already do the action", () => {
@@ -1384,6 +1390,7 @@ describe("the empty-database bootstrap", () => {
       "003_access_control.sql",
       "004_recent_searches.sql",
       "005_project_acceptance.sql",
+      "006_workspace.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -1395,7 +1402,7 @@ describe("the empty-database bootstrap", () => {
     expect(sql("verify_search.sql")).toContain("\\set ON_ERROR_STOP on");
   });
 
-  test("006 is idempotent at every statement, because there is no transaction around it", () => {
+  test("the bootstrap seed is idempotent at every statement, having no transaction around it", () => {
     /*
      * The Supabase SQL editor wraps a submission in its own transaction and rejects `\` commands,
      * so this file carries neither `BEGIN`/`COMMIT` nor `\set ON_ERROR_STOP`. The consequence is

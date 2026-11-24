@@ -833,6 +833,72 @@ export interface HandoverMailSent {
 }
 
 /* -------------------------------------------------------------------------- */
+/* 나의 업무                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** 한 사람이 자기 시트에 추가한 열. */
+export interface WorkspaceColumnDef {
+  id: string
+  label: string
+  ordNo: number
+}
+
+/**
+ * 시트의 한 행 = PO 한 건. 프로젝트와 작업 값이 함께 실려 온다.
+ *
+ * `poApproved` 와 `poMoneyState` 는 어느 열에도 그려지지 않는다. 번역가 칸을 **잠그는** 데
+ * 쓴다 — 승인된 PO 와 정산이 끝난 PO 의 번역가는 바꿀 수 없고(`mayChangeTranslator`), 서버가
+ * 판정만 보내 주면 그 규칙이 두 군데에 생긴다.
+ *
+ * `jobType` 도 같은 성격이다. MICE·IMC 작업에는 언어쌍이 없으므로 출발어·도착어 칸에 고칠
+ * 것이 없다.
+ */
+export interface WorkspaceRow {
+  poId: string
+  poCode: string
+  jobId: string
+  jobCode: string
+  jobName: string | null
+  projectId: string
+  prjCode: string
+  prjName: string | null
+  /** 인계일 — 이 PM 이 프로젝트를 수락한 시각. */
+  handoverAt: string | null
+  cusCodeName: string | null
+  cusMgrName: string | null
+  prjMgrName: string | null
+  prjField: string | null
+  jobType: string | null
+  jobSlang: string | null
+  jobElang: string | null
+  translatorId: string | null
+  poTranName: string | null
+  poVolume: string | null
+  poUnitCode: string | null
+  poEday: string | null
+  poState: string | null
+  poApproved: boolean
+  poMoneyState: string | null
+  /** PO 의 통화. 열로 그리지 않는다 — 번역가 변경 대화상자가 이 값을 쓴다. */
+  poCoinCode: string | null
+  /** 추가 열의 값. 열 id 가 키이고, 없는 키는 빈 칸이다. */
+  cells: Record<string, string>
+}
+
+/**
+ * 시트 한 페이지.
+ *
+ * 열 정의와 '행이 없는 작업' 건수가 페이지마다 함께 온다. 화면은 **첫 페이지의 것만** 읽으면
+ * 되지만, 매 페이지에 실려 오는 쪽이 안전하다 — 열 목록을 따로 받아 두면 행과 열이 서로 다른
+ * 시점의 것이 될 수 있고, 그 증상은 값이 엉뚱한 열에 들어가 보이는 것이다.
+ */
+export interface WorkspaceSheet extends ListPage<WorkspaceRow> {
+  columns: WorkspaceColumnDef[]
+  /** 수락한 프로젝트의 작업 중 살아 있는 PO 가 없어서 이 시트에 행이 없는 건수. */
+  unplacedJobs: number
+}
+
+/* -------------------------------------------------------------------------- */
 /* 작업(JOB) — 매출                                                            */
 /* -------------------------------------------------------------------------- */
 

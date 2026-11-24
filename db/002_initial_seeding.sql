@@ -685,6 +685,29 @@ ON CONFLICT (menu_id) DO NOTHING;
 
 
 -- ---------------------------------------------------------------------
+-- 3e. 나의 업무
+-- ---------------------------------------------------------------------
+-- ord_no 12, continuing 11. The PM's own worksheet: every PO under a
+-- project they have accepted, as a spreadsheet they can type into.
+--
+-- Its own menu and its own permission (NEOTMS_PERMISSION_WORKSPACE_READ)
+-- rather than a second screen behind 대시보드-PM, for the reason the two
+-- dashboards were split in the first place: a grant should name one
+-- screen. This one is also not read-only -- its cells write through to
+-- the job and PO rows underneath -- so folding it into a read permission
+-- would make that permission mean two different things.
+--
+-- The WRITES are not gated here. Editing a default column goes through
+-- the same /api/v0/jobs and /api/v0/purchase-orders endpoints the forms
+-- use, so it needs the same JOB_UPDATE / PO_UPDATE the forms need. This
+-- permission opens the sheet and the person's own custom columns.
+INSERT INTO sys_menu (menu_id, menu_name, menu_parent, menu_depth, menu_url, ord_no, active)
+VALUES
+  ('WORKSPACE', '나의 업무', NULL, 1, '/workspace', 12, true)
+ON CONFLICT (menu_id) DO NOTHING;
+
+
+-- ---------------------------------------------------------------------
 
 
 -- =====================================================================

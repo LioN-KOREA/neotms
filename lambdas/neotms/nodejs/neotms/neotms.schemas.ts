@@ -1049,6 +1049,54 @@ export const SelfProfileSchema = v.object({
 });
 
 /* -------------------------------------------------------------------------- */
+/* 나의 업무 - the caller's own sheet                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A custom column's heading, on create and on rename.
+ *
+ * 40 characters, matching `ck_workspace_column_label`. The limit is about the grid rather than
+ * about storage: this string is a column heading, and one that does not fit is one the person
+ * cannot read back.
+ *
+ * No type, no format, no width. The requirement was "freely editable", and a typed column is a
+ * column that refuses what somebody typed into it - which in a spreadsheet is the failure people
+ * abandon the feature over. Should a date column ever be wanted, it is an additive migration and a
+ * field here, not a shape this schema has to anticipate.
+ */
+export const WorkspaceColumnSchema = v.object({
+  label: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(40)),
+});
+
+/**
+ * The complete left-to-right order of the caller's custom columns.
+ *
+ * Every id, exactly once - the manager checks that against what the caller actually has and refuses
+ * a partial list rather than applying it. A list missing one column does not mean "leave that one
+ * alone": it leaves it at a stale `ord_no`, which lands it somewhere in the middle of the columns
+ * that did move.
+ */
+export const WorkspaceColumnOrderSchema = v.object({
+  columnIds: v.pipe(v.array(IdSchema), v.minLength(1), v.maxLength(100)),
+});
+
+/**
+ * One cell of one custom column.
+ *
+ * `value` is NOT `settable`: there is no difference here between clearing a cell and setting it to
+ * nothing, so an empty string carries both and the manager deletes the row. A `null` would be a
+ * second way to say the same thing, and the pair would then have to be told apart on screen.
+ *
+ * 2,000 characters, matching `ck_workspace_cell_text`. Long enough for a note, short enough that a
+ * pasted document is refused here rather than making one row of the sheet unreadable.
+ */
+export const WorkspaceCellSchema = v.object({
+  columnId: IdSchema,
+  poId: IdSchema,
+  value: v.pipe(v.string(), v.maxLength(2000)),
+});
+
+/* -------------------------------------------------------------------------- */
 /* Inferred types                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -1081,3 +1129,6 @@ export type CodeCreate = v.InferOutput<typeof CodeCreateSchema>;
 export type CodeUpdate = v.InferOutput<typeof CodeUpdateSchema>;
 export type StaffAdminUpdate = v.InferOutput<typeof StaffAdminUpdateSchema>;
 export type SelfProfile = v.InferOutput<typeof SelfProfileSchema>;
+export type WorkspaceColumnInput = v.InferOutput<typeof WorkspaceColumnSchema>;
+export type WorkspaceColumnOrder = v.InferOutput<typeof WorkspaceColumnOrderSchema>;
+export type WorkspaceCellWrite = v.InferOutput<typeof WorkspaceCellSchema>;

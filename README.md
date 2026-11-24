@@ -338,6 +338,7 @@ because Supavisor routes on the tenant encoded in the username.
 | *(no SQL for the PO request mail)* | the PO request mail stores nothing in Postgres — its attachment tokens live in DynamoDB, created by CDK. See §6.4 |
 | `004_recent_searches.sql` | **only for a database that already has data.** Adds `staff_recent_search`, the five most recent search terms per person per list screen. Additive and re-runnable; apply it **before** the deploy, because the screens read it as soon as they load. A database built from `001` has the table already |
 | `005_project_acceptance.sql` | **only for a database that already has data.** Adds `project.acceptance_status` and the `project_acceptance` record — the PM's accept / reject on a project. Additive and re-runnable; apply it **before** the deploy, because every project list and detail selects the column. A database built from `001` has both already. See §6.5 |
+| `006_workspace.sql` | **only for a database that already has data.** Adds `workspace_column` and `workspace_cell` — the custom columns of 나의 업무 and the values in them — plus `NEOTMS_PERMISSION_WORKSPACE_READ` to the permission CHECK, the sidebar row, and a re-grant of the superuser. Additive and re-runnable; apply it **before** the deploy. A database built from `001` + `002` has all of it already. See §6.7 |
 | `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
 
 These two replace the sixteen numbered migrations that used to build the schema a step
@@ -546,6 +547,7 @@ of the symptom points away from the cause.
 | `004_recent_searches.sql` | **on an existing database only** — `staff_recent_search` | every list screen logs a failed request for recent searches, and the search box offers no suggestions. Nothing else breaks: searching, filtering and every list still work, because the suggestion list is the only thing that reads this table |
 | `003_access_control.sql` | **on an existing database only** — the permission rows and the PM / 담당영업 attributes | every screen answers 403, for everybody. The deployed application asks `sys_role_permission` what a role may do; until this runs that table does not exist, so the answer is "nothing" and the message blames the role. The reverse mistake is louder and better: running it against a *new* database fails on apply, because `sys_role_auth` is not there to read |
 | `005_project_acceptance.sql` | **on an existing database only** — `project.acceptance_status` and `project_acceptance` | **the project screens stop working entirely**, which is worse than it sounds for a feature nobody has used yet: the column is in the SELECT list of every project read, so the list and the detail answer `42703` and render as an error. This is the one in this table whose symptom is bigger than its feature |
+| `006_workspace.sql` | **on an existing database only** — the two 나의 업무 tables and its permission | 나의 업무 is missing from the sidebar for everybody (nobody can hold a permission the CHECK refuses) and `GET /api/v0/workspace` answers 500 with `42P01`. Nothing else changes — no other screen reads either table — so unlike `005` the blast radius is exactly the feature |
 
 Both install files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
 applying `002` to a database that already has some of these rows adds only what is missing.
@@ -1025,7 +1027,7 @@ offline against a throwaway database:
 docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
-for f in 001_schemas 002_initial_seeding 005_project_acceptance; do
+for f in 001_schemas 002_initial_seeding 005_project_acceptance 006_workspace; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
@@ -1442,6 +1444,90 @@ saves, because the alternative is finding out afterwards.
 Clearing the PM is allowed and means what it says: no one is answerable, and the job is then
 reachable only through its project's PM or 영업담당. Legacy rows arrive in that state, so there has
 to be a way back into it.
+
+### 6.7 나의 업무 — the PM's worksheet
+
+A spreadsheet of every purchase order under a project this person is the PM of **and has accepted**.
+Fourteen fixed columns, and as many columns of their own as they care to add.
+
+#### One row is one PO
+
+A job with two POs (번역 and 감수) is two rows, which is the point — they have different translators
+and different deadlines. A job with **no** PO yet is no row at all, and that is the one thing about
+this screen worth knowing before reading anything off it: a job whose translator has not been
+engaged is invisible here. The header says how many such jobs there are and links to 작업 목록,
+because a count is not the rows but it is the difference between incomplete and incomplete in
+silence.
+
+#### Which cells write, and where
+
+| Columns | Writes | Through |
+|---|---|---|
+| 인계일, 프로젝트코드, JOB코드, PO코드, 고객사, 고객사담당자, 영업담당, 프로젝트종류 | nothing | — |
+| 출발어, 도착어 | the **job** | `PATCH /api/v0/jobs/{id}` |
+| 번역가, 분량, 납품일, 진행상태 | the row's **PO** | `PATCH /api/v0/purchase-orders/{id}` |
+| anything added by the user | `workspace_cell` | `PUT /api/v0/workspace/cells` |
+
+**The sheet has no write path of its own to a job or a PO.** Editing a cell sends the same PATCH the
+forms send, from the browser, one cell at a time. A `PUT /workspace/rows/{id}` would have been one
+request instead of two and would have had to re-implement five rules that already exist: the row
+scope on each table, the derived name columns (`po_tran_name` is looked up from the id, never taken
+from the body), the approval and settlement locks on a PO's translator, the job-type constraint that
+forbids a language pair on a MICE job, and the error translation for all of it. Each would have
+gained a second opinion, in the place nobody would look for it.
+
+The project-level columns are **read-only** for the same family of reasons. They are facts about the
+project, so one cell edit would change every row of that project — and 고객사 is worse than untidy:
+changing it moves booked revenue to another customer, which this codebase already refuses to do from
+a job. 인계일 is read-only because it is not a column at all but the timestamp of the accepting
+answer in `project_acceptance`; editing it would mean rewriting a record of something that happened.
+
+번역가 opens the same dialog the PO screens use, rather than a dropdown. The candidate list exceeds
+one page from the server, and a silently truncated list reads as "that translator does not exist",
+after which somebody registers a second row for a translator who is already there. Reusing the
+dialog also carries its locks: an approved PO's translator is the person an approval record names,
+and a settled one is the person money went to.
+
+#### Why the custom columns are two tables and not a JSON document
+
+The deciding requirement was the specified one — a value disappears when its PO does. Here that is a
+foreign key; as a per-user document it is an orphan-reaping job to write, schedule and watch, and
+until it runs the values of deleted POs are still stored. Three more point the same way: the sheet's
+rows are already scoped by SQL, so the values come back attached to their row in the same statement;
+a spreadsheet writes one cell at a time, which is one row here against a read-modify-write of a
+whole document (two open tabs would overwrite each other); and a document has a size ceiling the
+sheet grows into, which fails at save time, just after somebody typed something.
+
+One consequence to state plainly: NEOTMS soft-deletes, so a deleted PO's values stop being **visible**
+because the row left the sheet, not because the cascade fired. Undeleting that PO brings its notes
+back. That is intended, not accidental.
+
+#### Before it works
+
+- **Apply `db/006_workspace.sql`** to an existing database, before the deploy.
+- **Grant 나의 업무 on 사용자 관리.** `NEOTMS_PERMISSION_WORKSPACE_READ` is deliberately not handed
+  out by `003`'s translation — 나의 업무 has no legacy counterpart, so there is no flag to translate
+  from, and any rule that file invented would be a new grant presented as a migration. Only the
+  superuser holds it until an administrator says otherwise.
+- **The editable columns need their own permissions.** `WORKSPACE_READ` opens the screen and the
+  person's own columns; 출발어·도착어 need `JOB:update` and the four PO columns need `PO:update`.
+  Without them those cells render read-only, which is also what the server would answer.
+- A PM with no **accepted** project sees an empty sheet. Projects are accepted on 대시보드(PM).
+
+#### The grid library
+
+`@silevis/reactgrid` 4.1.17, MIT. Its peer range stops at React 18 and this console is on 19.2, so
+`frontend/package.json` carries an `overrides` entry pinning its React peers to ours. That is not a
+guess: the published bundle uses no API React 19 removed (no `findDOMNode`, no function-component
+`defaultProps`), and the combination was then exercised in a browser — rendering, a sticky header,
+text editing including Korean through the IME path, the dropdown open/select round-trip, and a
+custom cell template. v5 exists but is an alpha, and this sheet writes to the revenue tables.
+
+That browser check earned its keep immediately: it found that ReactGrid sends **one** change when an
+option is picked, carrying both the new `selectedValue` and `isOpen` going true → false. Handled as
+either/or, the open/close branch swallows every selection — the list closes, the cell keeps its old
+value, nothing errors, and the screen reads as "the dropdown does not work". A test now pins the
+shape of that handler.
 
 ### 6.3 `003_access_control.sql` — moving a live database to named permissions
 

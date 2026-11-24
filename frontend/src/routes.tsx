@@ -6,6 +6,7 @@ import { hasAttribute, may, readableNav } from '@/shared/permissions'
 import {
   NEOTMS_PERMISSION_CUSTOMER_READ,
   NEOTMS_PERMISSION_DASHBOARD_PM_READ,
+  NEOTMS_PERMISSION_WORKSPACE_READ,
   NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
   NEOTMS_PERMISSION_INVOICE_READ,
   NEOTMS_PERMISSION_JOB_READ,
@@ -21,6 +22,7 @@ import { CallbackView } from '@/features/auth/CallbackView'
 import { LogoutView } from '@/features/auth/LogoutView'
 import { CustomersView } from '@/features/customers/CustomersView'
 import { DashboardView } from '@/features/dashboard/DashboardView'
+import { WorkspaceView } from '@/features/workspace/WorkspaceView'
 import { JobsView } from '@/features/jobs/JobsView'
 import { MaintenanceView } from '@/features/maintenance/MaintenanceView'
 import { InvoicePaymentView } from '@/features/payment/InvoicePaymentView'
@@ -249,6 +251,21 @@ export const neotmsRouter = createBrowserRouter([
         element: (
           <RequireMenu permission={NEOTMS_PERMISSION_DASHBOARD_PM_READ}>
             <DashboardView role="pm" />
+          </RequireMenu>
+        ),
+      },
+      {
+        /*
+         * 나의 업무. 조건을 주소에 적지 않는 **유일한** 업무 화면이다.
+         *
+         * 적을 조건이 없기 때문이다 — 서버가 '내가 PM 이고 내가 수락한 프로젝트의 PO' 만
+         * 돌려주고, 그 조건은 고를 수 있는 것이 아니라 이 화면의 정의다. 정렬만 바뀌는데,
+         * 그것은 공유할 상태가 아니다(남에게 보내도 그 사람의 시트가 열린다).
+         */
+        path: 'workspace',
+        element: (
+          <RequireMenu permission={NEOTMS_PERMISSION_WORKSPACE_READ}>
+            <WorkspaceView />
           </RequireMenu>
         ),
       },

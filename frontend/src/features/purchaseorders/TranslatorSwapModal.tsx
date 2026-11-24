@@ -35,19 +35,35 @@ import { TranslatorPicker } from '@/features/translators/TranslatorPicker'
  * 남긴다(해제한 사람, 다시 승인한 사람). 여기서 바로 바꾸게 해 주는 것은 그 기록을 건너뛰게
  * 해 주는 일이고, 편의가 아니라 감사 기록의 구멍이다.
  */
-export function mayChangeTranslator(po: PurchaseOrderRow): boolean {
+export function mayChangeTranslator(po: Pick<PurchaseOrderRow, 'poApproved' | 'poMoneyState'>): boolean {
   return !po.poApproved && po.poMoneyState !== MONEY_STATE_PAID
 }
 
 /** 바꿀 수 없는 칸에 띄울 안내. 비활성 칸은 **왜** 비활성인지를 말해야 한다. */
-export function translatorLockReason(po: PurchaseOrderRow): string | undefined {
+export function translatorLockReason(
+  po: Pick<PurchaseOrderRow, 'poApproved' | 'poMoneyState'>,
+): string | undefined {
   if (po.poApproved) return '승인된 PO의 번역가는 바꿀 수 없습니다. 승인을 먼저 해제하세요.'
   if (po.poMoneyState === MONEY_STATE_PAID) return '정산이 끝난 PO의 번역가는 바꿀 수 없습니다.'
   return undefined
 }
 
+/**
+ * The fields this dialog reads, rather than a whole `PurchaseOrderRow`.
+ *
+ * Narrowed when 나의 업무 started opening it. That screen's rows are POs assembled by a different
+ * query - a sheet row carries its job and project denormalised onto it and omits most of a PO's
+ * forty columns - so a full `PurchaseOrderRow` would have had to be faked there, with the fields
+ * this dialog happens not to read filled in with plausible nulls. That is how a dialog comes to
+ * depend on one of them later and to read a null as fact.
+ */
+export type SwappableTranslatorPo = Pick<
+  PurchaseOrderRow,
+  'id' | 'poCode' | 'poTranName' | 'translatorId' | 'poCoinCode' | 'poApproved' | 'poMoneyState'
+>
+
 interface Props {
-  purchaseOrder: PurchaseOrderRow
+  purchaseOrder: SwappableTranslatorPo
   onClose: () => void
   onSaved: (message: string) => void
 }

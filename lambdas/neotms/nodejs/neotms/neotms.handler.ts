@@ -39,6 +39,7 @@ import {
   NEOTMS_PERMISSION_CUSTOMER_UPDATE,
   NEOTMS_PERMISSION_DASHBOARD_PM_READ,
   NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
+  NEOTMS_PERMISSION_WORKSPACE_READ,
   NEOTMS_PERMISSION_INVOICE_CREATE,
   NEOTMS_PERMISSION_INVOICE_DELETE,
   NEOTMS_PERMISSION_INVOICE_READ,
@@ -99,6 +100,9 @@ import {
   PurchaseOrderCreateSchema,
   PurchaseOrderUpdateSchema,
   SelfProfileSchema,
+  WorkspaceCellSchema,
+  WorkspaceColumnOrderSchema,
+  WorkspaceColumnSchema,
   AttachmentUploadSchema,
   PoRequestMailSchema,
   RecentSearchForgetSchema,
@@ -153,6 +157,14 @@ import {
   updateInvoice,
 } from "./invoices/NeotmsInvoiceManager.js";
 import { getDashboard } from "./dashboard/NeotmsDashboardManager.js";
+import {
+  createWorkspaceColumn,
+  deleteWorkspaceColumn,
+  getWorkspace,
+  renameWorkspaceColumn,
+  reorderWorkspaceColumns,
+  writeWorkspaceCell,
+} from "./workspace/NeotmsWorkspaceManager.js";
 import { getProfile } from "./profile/NeotmsProfileManager.js";
 import { registerSelf } from "./profile/NeotmsRegistrationManager.js";
 import { getWorkload, runReport } from "./reports/NeotmsReportManager.js";
@@ -599,6 +611,58 @@ const handleGetSalesDashboard: RRHandler = async (request) =>
 const handleGetPmDashboard: RRHandler = async (request) => getDashboard(callerOf(request), "pm");
 
 /*
+ * 나의 업무 - the caller's own worksheet, and the custom columns on it.
+ *
+ * Six routes, and none of them writes a project, a job or a purchase order. Editing one of the
+ * sheet's fourteen fixed columns is a PATCH to `/jobs/{id}` or `/purchase-orders/{id}`, sent by the
+ * browser to the same endpoint the forms use - so the approval lock on a PO's translator, the
+ * derived name columns, the job-type constraint and the row scope on each table all apply without
+ * being written a second time. NeotmsWorkspaceManager's header has the full argument.
+ *
+ * All six are on WORKSPACE_READ, including the writes, because what they write is the caller's own
+ * annotation layer rather than company data - the same reasoning that puts
+ * `/me/recent-searches` on `anyStaff`. There is deliberately no WORKSPACE_UPDATE: it would be a
+ * permission whose only effect is to stop somebody annotating their own sheet.
+ */
+const handleGetWorkspace: RRHandler = async (request) => getWorkspace(callerOf(request), request);
+
+const handleCreateWorkspaceColumn: RRHandler = async (request) => {
+  const parsed = parseBody(WorkspaceColumnSchema, request.body);
+  return parsed.ok
+    ? createWorkspaceColumn(callerOf(request), parsed.value, writeContext(request))
+    : parsed.response;
+};
+
+const handleRenameWorkspaceColumn: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(WorkspaceColumnSchema, request.body);
+  return parsed.ok
+    ? renameWorkspaceColumn(callerOf(request), id, parsed.value)
+    : parsed.response;
+};
+
+const handleDeleteWorkspaceColumn: RRHandler = async (request) => {
+  const id = recordId(request);
+  return id ? deleteWorkspaceColumn(callerOf(request), id) : NOT_A_RECORD_ID;
+};
+
+/*
+ * A PUT on the collection, not on an id. The body is the whole order, so the request says "this is
+ * how my columns are arranged" - which is one statement, one plan and one failure, where a PATCH
+ * per moved column is three of each and no way back from the second one.
+ */
+const handleReorderWorkspaceColumns: RRHandler = async (request) => {
+  const parsed = parseBody(WorkspaceColumnOrderSchema, request.body);
+  return parsed.ok ? reorderWorkspaceColumns(callerOf(request), parsed.value) : parsed.response;
+};
+
+const handleWriteWorkspaceCell: RRHandler = async (request) => {
+  const parsed = parseBody(WorkspaceCellSchema, request.body);
+  return parsed.ok ? writeWorkspaceCell(callerOf(request), parsed.value) : parsed.response;
+};
+
+/*
  * Codes - the code tables, in two halves.
  *
  * The read is `anyStaff` and the writes are MAINTENANCE, which is the whole reason there are two
@@ -949,6 +1013,9 @@ const ADMIN_STAFF = "/api/v0/admin/staff";
 const ATTACHMENTS = "/api/v0/attachments";
 const ATTACHMENT_UPLOADS = "/api/v0/attachments/uploads";
 const RECENT_SEARCHES = "/api/v0/me/recent-searches";
+const WORKSPACE = "/api/v0/workspace";
+const WORKSPACE_COLUMNS = "/api/v0/workspace/columns";
+const WORKSPACE_CELLS = "/api/v0/workspace/cells";
 const ADMIN_ROLES = "/api/v0/admin/roles";
 /**
  * The role administration listing: every role, its grants, and how many people hold it.
@@ -1066,6 +1133,15 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // collision with `recordId` and nothing for rou3 to disambiguate.
   { path: "/api/v0/dashboard/sales", method: "GET", handler: handleGetSalesDashboard, permission: NEOTMS_PERMISSION_DASHBOARD_SALES_READ },
   { path: "/api/v0/dashboard/pm", method: "GET", handler: handleGetPmDashboard, permission: NEOTMS_PERMISSION_DASHBOARD_PM_READ },
+
+  // 나의 업무. The reorder is a PUT on the collection and the rename a PATCH on an id, so no
+  // static segment ever has to compete with `:id` for a match. See the handlers above.
+  { path: WORKSPACE, method: "GET", handler: handleGetWorkspace, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: WORKSPACE_COLUMNS, method: "POST", handler: handleCreateWorkspaceColumn, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: WORKSPACE_COLUMNS, method: "PUT", handler: handleReorderWorkspaceColumns, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: `${WORKSPACE_COLUMNS}/:id`, method: "PATCH", handler: handleRenameWorkspaceColumn, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: `${WORKSPACE_COLUMNS}/:id`, method: "DELETE", handler: handleDeleteWorkspaceColumn, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: WORKSPACE_CELLS, method: "PUT", handler: handleWriteWorkspaceCell, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
 
   // -- Maintenance (the code tables) ----------------------------------------
   //

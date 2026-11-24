@@ -54,6 +54,8 @@ import type {
   TranslatorInput,
   TranslatorRow,
   WorkloadCounts,
+  WorkspaceColumnDef,
+  WorkspaceSheet,
 } from './neotms.types'
 
 /**
@@ -533,6 +535,48 @@ export interface JobListQuery extends ListQuery {
   customerId?: string | null
   corpId?: string | null
 }
+
+/* -------------------------------------------------------------------------- */
+/* 나의 업무                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 시트 한 페이지.
+ *
+ * 걸러내기 파라미터가 없다. 서버가 '내가 PM 이고 내가 수락한 프로젝트의 PO' 만 돌려주므로
+ * 범위를 좁힐 조건이 요청에 들어갈 자리가 없다 — 그 조건 자체가 이 화면의 정의다.
+ */
+export const fetchWorkspace = (query: ListQuery, signal?: AbortSignal) =>
+  neotmsApi<WorkspaceSheet>('/api/v0/workspace', { query: { ...query }, signal })
+
+export const createWorkspaceColumn = (input: { label: string }) =>
+  neotmsApi<WorkspaceColumnDef>('/api/v0/workspace/columns', { method: 'POST', body: input })
+
+export const renameWorkspaceColumn = (id: string, input: { label: string }) =>
+  neotmsApi<WorkspaceColumnDef>(`/api/v0/workspace/columns/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: input,
+  })
+
+export const deleteWorkspaceColumn = (id: string) =>
+  neotmsApi<{ deleted: boolean }>(`/api/v0/workspace/columns/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+
+/**
+ * 열 순서. **전체 목록을 보낸다.**
+ *
+ * 일부만 보내면 빠진 열은 '그대로' 가 아니라 **낡은 위치**에 남는다 — 움직인 열들 사이
+ * 어딘가로 끼어들고, 서버는 그런 요청을 거절한다.
+ */
+export const reorderWorkspaceColumns = (columnIds: string[]) =>
+  neotmsApi<WorkspaceColumnDef[]>('/api/v0/workspace/columns', {
+    method: 'PUT',
+    body: { columnIds },
+  })
+
+export const writeWorkspaceCell = (input: { columnId: string; poId: string; value: string }) =>
+  neotmsApi<{ saved: boolean }>('/api/v0/workspace/cells', { method: 'PUT', body: input })
 
 export const fetchJobs = (query: JobListQuery, signal?: AbortSignal) =>
   neotmsApi<ListPage<JobRow>>('/api/v0/jobs', { query: { ...query }, signal })

@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS sys_role_permission (
     'NEOTMS_PERMISSION_MAINTENANCE_UPDATE',
     'NEOTMS_PERMISSION_MAINTENANCE_DELETE',
     'NEOTMS_PERMISSION_STAFF_READ',
-    'NEOTMS_PERMISSION_STAFF_UPDATE'
+    'NEOTMS_PERMISSION_STAFF_UPDATE',
+    'NEOTMS_PERMISSION_WORKSPACE_READ'
   ))
 );
 
@@ -318,7 +319,21 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- do nothing -- and it would then look, to the next reader of the admin
 -- screen, like a right somebody deliberately handed out.
 --
--- The superuser role is the exception, below.
+-- NEOTMS_PERMISSION_WORKSPACE_READ is withheld too, for a different
+-- reason: there is nothing to translate it FROM. 나의 업무 is a NEOTMS
+-- screen with no legacy counterpart, so no row of SY_ROLE_AUTH says
+-- anything about who may open it, and any rule this file invented would
+-- be a grant presented as a migration. The closest flag would be
+-- PROJECT's, which would hand the sheet to everybody who can read a
+-- project -- including people who are never a PM, for whom it is an
+-- empty screen with a 열 관리 button.
+--
+-- So it is granted the way a new right should be: deliberately, per role,
+-- on 사용자 관리. db/006_workspace.sql adds it to the permission
+-- vocabulary and re-grants the superuser, and nobody else holds it until
+-- an administrator says so.
+--
+-- The superuser role is the exception to both, below.
 
 -- Re-assert the superuser role's grant, rather than relying on what the
 -- translation happened to produce.
