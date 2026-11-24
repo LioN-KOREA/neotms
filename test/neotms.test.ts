@@ -1383,6 +1383,7 @@ describe("the empty-database bootstrap", () => {
       // there and the application already deployed against the new ones.
       "003_access_control.sql",
       "004_recent_searches.sql",
+      "005_project_acceptance.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -3576,9 +3577,40 @@ describe("the 대시보드 aggregate", () => {
      *
      * Two LATERALs and no `GROUP BY`: with no grouping an aggregate over `project` returns exactly
      * one row, so the query cannot duplicate or drop a project either.
+     *
+     * Counted inside `DashboardSummaryOps` rather than over the whole file. The module holds a
+     * second statement now - the acceptance panel - which has a LATERAL of its own for a different
+     * reason, and a file-wide count would have made this assertion fail on a statement it is not
+     * about. Narrowing it is not a loosening: the fan-out this test exists for is a property of the
+     * aggregate, and the aggregate is what is now being read.
      */
-    expect([...dbops().matchAll(/LEFT JOIN LATERAL/g)]).toHaveLength(2);
-    expect(dbops()).not.toMatch(/GROUP BY/i);
+    const summary = /export const DashboardSummaryOps[\s\S]*?\n\};/.exec(dbops())?.[0] ?? "";
+    expect(summary).not.toBe("");
+    expect([...summary.matchAll(/LEFT JOIN LATERAL/g)]).toHaveLength(2);
+    expect(summary).not.toMatch(/GROUP BY/i);
+  });
+
+  test("the acceptance panel cannot show one project twice", () => {
+    /*
+     * Its own fan-out, with its own shape. A project collects an answer each time it is rejected and
+     * re-assigned, so a plain join to `project_acceptance` would list a project once per answer -
+     * each row carrying a different reason - and the panel would read as several projects in
+     * trouble rather than one with a history.
+     *
+     * `LIMIT 1` inside a LATERAL is what makes it one row per project. Asserted together with the
+     * ORDER BY, because the limit without the ordering picks an arbitrary answer, which on a
+     * re-rejected project is the WRONG reason shown beside the right project.
+     */
+    const panel = /export const DashboardAcceptanceOps[\s\S]*?\n\};/.exec(dbops())?.[0] ?? "";
+    expect(panel).not.toBe("");
+    expect([...panel.matchAll(/LEFT JOIN LATERAL/g)]).toHaveLength(1);
+    expect(panel).toContain("ORDER BY pa.created_at DESC, pa.id DESC");
+    expect(panel).toContain("LIMIT 1");
+    // And the two roles ask different questions - see ACCEPTANCE_FILTER. A PM must not be shown a
+    // project they have already rejected, with an accept button the server refuses.
+    const filter = /const ACCEPTANCE_FILTER[\s\S]*?\n\};/.exec(dbops())?.[0] ?? "";
+    expect(filter).toContain("p.acceptance_status <> 1");
+    expect(filter).toContain("p.acceptance_status = 0");
   });
 
   test("the overdue tile asks the database what day it is in Seoul", () => {
@@ -5712,6 +5744,9 @@ describe("the handover mail", () => {
     prjEday: null,
     prjEdayTime: null,
     prjContent: null,
+    // Assigned and unanswered, which is what every project starts as. Nothing in the handover mail
+    // reads it; it is here because `ProjectRow` requires it.
+    acceptanceStatus: 0,
     createdAt: null,
     updatedAt: null,
     ...over,

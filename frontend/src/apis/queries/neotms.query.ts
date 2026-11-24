@@ -4,6 +4,7 @@ import {
   fetchCodes,
   fetchCustomer,
   fetchCustomers,
+  fetchAssignableStaff,
   fetchDashboard,
   fetchFxRates,
   fetchInvoice,
@@ -30,7 +31,13 @@ import {
   type TranslatorListQuery,
 } from '../neotms.api'
 import { codeOptions, codesToOptions, type CodeDomainId, type CodeOption } from '../neotms.codes'
-import type { DashboardRole, ListPage, ListQuery, ReportQuery } from '../neotms.types'
+import type {
+  AssignableAttribute,
+  DashboardRole,
+  ListPage,
+  ListQuery,
+  ReportQuery,
+} from '../neotms.types'
 import { isDecimalString } from '../../shared/utils/money'
 import { neotmsKeys } from './neotms.keys'
 
@@ -449,6 +456,23 @@ export function useWorkload(range: { from?: string; to?: string } = {}, enabled 
  * 무효화되므로(neotms.mutation.ts), 내가 한 변경은 5분을 기다리지 않고 바로 반영된다. 5분은
  * **다른 사람이** 바꾼 것이 늦게 보이는 창일 뿐이다.
  */
+/**
+ * The eligible people for one assignee seat.
+ *
+ * A long `staleTime`, unlike a list screen's: this is a short closed list that changes only when an
+ * administrator grants or revokes an attribute, which happens when somebody joins or changes job.
+ * Re-reading it on every form open would be a call per dialog for an answer that is the same all
+ * week. A grant made while a form is open is picked up on the next reload, which is the same
+ * latency the permission matrix itself has.
+ */
+export function useAssignableStaff(attribute: AssignableAttribute) {
+  return useQuery({
+    queryKey: neotmsKeys.assignableStaff(attribute),
+    queryFn: ({ signal }) => fetchAssignableStaff(attribute, signal),
+    staleTime: 1000 * 60 * 30,
+  })
+}
+
 export function useDashboard(role: DashboardRole) {
   return useQuery({
     queryKey: neotmsKeys.dashboard(role),

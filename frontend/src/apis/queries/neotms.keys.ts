@@ -62,6 +62,13 @@ export const neotmsKeys = {
   translatorList: (query: unknown) => ['translators', 'list', query] as const,
   translator: (id: string) => ['translators', 'detail', id] as const,
 
+  /**
+   * The assignee pickers' lists, one key per attribute.
+   *
+   * Not under `staff`, which is the administration screen's key: these two are read by people who
+   * cannot open that screen, and a write there must not invalidate a cache they can still use.
+   */
+  assignableStaff: (attribute: string) => ['assignable-staff', attribute] as const,
   projects: ['projects'] as const,
   projectList: (query: unknown) => ['projects', 'list', query] as const,
   project: (id: string) => ['projects', 'detail', id] as const,

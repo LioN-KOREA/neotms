@@ -11,17 +11,30 @@ import {
   paginate,
   pgExecute,
   pgQuery,
+  pgTransaction,
   type SqlRow,
 } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { CustomerNameOps } from "../customers/NeotmsCustomer.dbops.js";
+import {
+  NEOTMS_USER_ATTRIBUTE_PM,
+  NEOTMS_USER_ATTRIBUTE_SALES_MANAGER,
+} from "../../auth/NeotmsAuthorities.js";
+import { ProjectAssigneeCheckOps } from "../staff/NeotmsAssignable.dbops.js";
 import { readListQuery, sortAlias } from "../NeotmsQuery.js";
 import { created, notFound, ok, runDb, type ListPage } from "../NeotmsResult.js";
 import type { WriteContext } from "../NeotmsWrite.js";
-import type { ProjectCreate, ProjectUpdate } from "../neotms.schemas.js";
+import type { ProjectAcceptance, ProjectCreate, ProjectUpdate } from "../neotms.schemas.js";
 import {
+  PROJECT_ACCEPTANCE_ACCEPTED,
+  PROJECT_ACCEPTANCE_ASSIGNED,
+  PROJECT_ACCEPTANCE_REJECTED,
   PROJECT_SORTS,
+  ProjectAcceptanceHistoryOps,
+  ProjectAcceptanceOps,
+  ProjectAcceptanceRecordOps,
+  ProjectAcceptanceResetOps,
   ProjectCreateOps,
   ProjectGetOps,
   ProjectListOps,
@@ -30,6 +43,7 @@ import {
   ProjectTotalsOps,
   ProjectUpdateOps,
   toProjectRow,
+  type ProjectAcceptanceRow,
   type ProjectFilters,
   type ProjectRow,
 } from "./NeotmsProject.dbops.js";
@@ -53,7 +67,83 @@ function readFilters(request: RequestData): ProjectFilters {
     dueTo: read("dueTo"),
     startFrom: read("startFrom"),
     startTo: read("startTo"),
+    acceptanceStatus: readAcceptanceStatus(request),
   };
+}
+
+/**
+ * The acceptance filter, validated here rather than at the column.
+ *
+ * It is the one `int` filter in the application: the value is interpolated into a bound parameter of
+ * kind `int`, which runs `Number()` over it, so `?acceptanceStatus=abc` would reach PostgreSQL as
+ * NaN and come back as a 500 about invalid integer syntax. A malformed query string is not a server
+ * error, so anything outside the three legal values is treated as no filter at all - the same answer
+ * an empty value gets everywhere else in `readFilters`.
+ */
+function readAcceptanceStatus(request: RequestData): string | undefined {
+  const raw = (request.queryParams["acceptanceStatus"] ?? "").trim();
+  const legal = [
+    PROJECT_ACCEPTANCE_ASSIGNED,
+    PROJECT_ACCEPTANCE_ACCEPTED,
+    PROJECT_ACCEPTANCE_REJECTED,
+  ].map(String);
+  return legal.includes(raw) ? raw : undefined;
+}
+
+/**
+ * Refuse a PM or a sales manager who may not be named.
+ *
+ * Returns the sentence to answer with, or null to proceed. The attributes are the whole point of
+ * the pickers on the form: without this check the picker is decoration and any staff id - or any
+ * id at all, from an old tab or a script - still saves, which is what the comment on
+ * `NEOTMS_USER_ATTRIBUTE_SALES_MANAGER` has said since the attributes were introduced.
+ *
+ * ## Two refusals, not one
+ *
+ * "No such staff member" and "that person is not marked as a PM" need different things done about
+ * them - a reload, versus an administrator on the staff administration screen - so they are different
+ * sentences. Collapsing them into "invalid PM" would leave the second case looking like a bug in
+ * the form.
+ *
+ * ## It is skipped for an id that is not changing
+ *
+ * The caller passes `unchanged` on an edit. A project assigned years ago to somebody who has since
+ * left, or whose PM attribute was later revoked, must stay editable: validating a value the request
+ * is not altering would refuse a correction to the project's NAME and blame a person the editor
+ * never mentioned. What is enforced is therefore "every assignee this request SETS is eligible",
+ * which is the rule that can be stated without an exception.
+ */
+async function assigneeRefusal(
+  input: { prjPmId?: string | null; prjMgrId?: string | null },
+  unchanged: { prjPmId?: string | null; prjMgrId?: string | null } = {},
+): Promise<string | null> {
+  const pmId = input.prjPmId !== undefined && input.prjPmId !== unchanged.prjPmId
+    ? input.prjPmId
+    : null;
+  const mgrId = input.prjMgrId !== undefined && input.prjMgrId !== unchanged.prjMgrId
+    ? input.prjMgrId
+    : null;
+  // Clearing an assignee is `null`, which is a legitimate edit and nothing to check. Both null
+  // means there is nothing to ask the database about at all.
+  if (pmId === null && mgrId === null) return null;
+
+  const check = (await pgQuery(ProjectAssigneeCheckOps(pmId, mgrId))).data;
+  const problem = (
+    field: string,
+    attribute: string,
+    verdict: "missing" | "ineligible" | null,
+  ): string | null => {
+    if (verdict === null) return null;
+    return verdict === "missing"
+      ? `The ${field} you selected is not a staff member of this system. Reload the form and pick again.`
+      : `The ${field} you selected is not marked with ${attribute}, so they cannot be named on a ` +
+        `project. An administrator grants that on the 사용자 관리 screen.`;
+  };
+
+  return (
+    problem("PM", NEOTMS_USER_ATTRIBUTE_PM, check.pm) ??
+    problem("담당영업", NEOTMS_USER_ATTRIBUTE_SALES_MANAGER, check.mgr)
+  );
 }
 
 export async function listProjects(
@@ -90,12 +180,119 @@ export async function listProjects(
 export async function getProject(
   caller: NeotmsCaller,
   id: string,
-): Promise<ResponseData<(ProjectRow & { totals: { revenue: string; cost: string; margin: string } }) | string>> {
+): Promise<
+  ResponseData<
+    | (ProjectRow & {
+        totals: { revenue: string; cost: string; margin: string };
+        acceptance: ProjectAcceptanceRow[];
+      })
+    | string
+  >
+> {
   return runDb("get project", async () => {
     const row = (await pgQuery(ProjectGetOps(caller, id))).data;
     if (!row) return notFound("project");
     const totals = (await pgQuery(ProjectTotalsOps(id))).data;
-    return ok({ ...row, totals });
+    /*
+     * The acceptance history, on the same screen as the status it explains.
+     *
+     * A third round trip on a detail read, and it is the right price for the same reason the totals
+     * are: `acceptance_status` says the project was REJECTED and nothing else on any screen can say
+     * by whom or why. Almost always zero or one row - it grows only when a project is reassigned -
+     * and the index is `(project_id, created_at DESC)`, so it is a single index scan.
+     *
+     * NOT on the list query. Fifty projects would mean fifty of these for a column the list does not
+     * show; the list shows the status alone, which is already on the project row.
+     */
+    const acceptance = (await pgQuery(ProjectAcceptanceHistoryOps(id))).data;
+    return ok({ ...row, totals, acceptance });
+  });
+}
+
+/**
+ * Accept or reject a project, as the PM it is assigned to.
+ *
+ * ## The authority is not a permission, and that is why this reads before it writes
+ *
+ * Only the assigned PM may answer. No permission expresses that - it is a fact about one row - so
+ * the route is gated on `PROJECT_READ` (you must be able to see projects at all) and the real test
+ * lives in `ProjectAcceptanceOps`' WHERE clause. That statement is also the only thing that assigns
+ * the column; `acceptance_status` has no `PROJECT_FIELDS` spec, so no project edit can write it.
+ *
+ * The read that precedes the write buys only the MESSAGE. The three ways the statement can match
+ * nothing - the project is not visible, the caller is not its PM, somebody has already answered -
+ * are one 404 to the writer and three different things to do for the person reading the screen. If
+ * the statement then matches nothing anyway, that is a genuine race with another request and it is
+ * reported as one rather than mistranslated into one of the three.
+ *
+ * ## Why the two writes share a transaction
+ *
+ * The column and the record are one fact stored twice, on purpose - the column is the current
+ * answer, the table is how it was reached. A failure between them leaves a project whose status says
+ * rejected with no record of who rejected it, or a record of an answer the project does not carry.
+ * Neither is visible on any screen, and both make the history a thing nobody can trust afterwards.
+ *
+ * ## There is no un-accept, and no superuser override
+ *
+ * Both deliberate. A PM who accepted and cannot deliver is handled by REASSIGNING the project,
+ * which resets the status to 0 and asks the new PM - an act by somebody else, with a record of its
+ * own. A superuser who needs to undo an answer does the same thing: this endpoint refuses them too,
+ * because "the assigned PM answered" has to mean that or it means nothing.
+ */
+export async function setProjectAcceptance(
+  caller: NeotmsCaller,
+  id: string,
+  input: ProjectAcceptance,
+  ctx: WriteContext,
+): Promise<ResponseData<ProjectRow | string>> {
+  const status = input.accepted ? PROJECT_ACCEPTANCE_ACCEPTED : PROJECT_ACCEPTANCE_REJECTED;
+
+  return runDb("set project acceptance", async () => {
+    const existing = (await pgQuery(ProjectGetOps(caller, id))).data;
+    if (!existing) return notFound("project");
+
+    if (existing.prjPmId !== caller.staffId) {
+      return {
+        status: 403,
+        body:
+          "Only the project manager this project is assigned to can accept or reject it. " +
+          "If it needs to move to somebody else, change the PM on the project instead - that " +
+          "resets the acceptance and asks the new PM.",
+      };
+    }
+
+    if (existing.acceptanceStatus !== PROJECT_ACCEPTANCE_ASSIGNED) {
+      return {
+        status: 409,
+        body:
+          existing.acceptanceStatus === PROJECT_ACCEPTANCE_ACCEPTED
+            ? "You have already accepted this project. An acceptance cannot be withdrawn here; " +
+              "ask for the project to be reassigned if you can no longer take it."
+            : "You have already rejected this project. Reassigning it is what gives somebody " +
+              "else the chance to accept it.",
+      };
+    }
+
+    const row = await pgTransaction(async (client) => {
+      const updated = (await pgExecute(ProjectAcceptanceOps(caller, id, status, ctx), client)).data;
+      // The three predicates all held a moment ago, so a miss here means a concurrent request got
+      // there first. Returning null aborts before the record is written, which is the point of the
+      // transaction: a record of an answer the project does not carry is worse than no answer.
+      if (!updated) return null;
+      await pgExecute(
+        ProjectAcceptanceRecordOps(id, caller, status, input.note ?? null, ctx),
+        client,
+      );
+      return updated;
+    });
+
+    if (!row) {
+      return {
+        status: 409,
+        body: "This project was answered by another request a moment ago. Reload and look again.",
+      };
+    }
+    return ok(row);
   });
 }
 
@@ -122,16 +319,51 @@ export async function createProject(
   input: ProjectCreate,
   ctx: WriteContext,
 ): Promise<ResponseData<ProjectRow | string>> {
-  const assigned: ProjectCreate =
-    input.prjPmId || input.prjMgrId ? input : { ...input, prjPmId: caller.staffId };
+  const assigned = withDefaultOwner(caller, input);
   return runDb("create project", async () => {
     const customerName = (await pgQuery(CustomerNameOps(assigned.customerId))).data;
     if (customerName === null) {
       return { status: 400, body: "That customer does not exist or has been deleted" };
     }
+    const refusal = await assigneeRefusal(assigned);
+    if (refusal) return { status: 400, body: refusal };
+
     const row = (await pgExecute(ProjectCreateOps(assigned, ctx))).data;
     return row ? created(row) : { status: 500, body: "The project was not created" };
   });
+}
+
+/**
+ * Which assignee this creator should default to, when the request names neither.
+ *
+ * ## Why there is a default at all
+ *
+ * A scoped PM who creates a project and leaves the assignee boxes empty would not be able to see
+ * the project they just saved - it matches neither ownership column - and the only visible symptom
+ * is "it disappeared". So the creator is written into one of the two seats.
+ *
+ * ## Why it is now conditional on the attribute
+ *
+ * It used to be `prjPmId = caller.staffId` unconditionally, which was correct until `prj_pm_id`
+ * started meaning "the person who has to accept this" and started being checked against the PM
+ * attribute. Defaulting an ineligible creator into that seat would now be refused by
+ * `assigneeRefusal` - so a project created by somebody who is neither PM nor sales manager would fail,
+ * with a message about a person they never named.
+ *
+ * So: the PM seat if they may hold it, else the sales manager seat if they may hold that, else neither.
+ * In the last case the creator is somebody who is not in either role - an administrator entering
+ * work on behalf of others - and whether they can then see the project is their view scope's
+ * business, which for such an account is in practice 'Y'.
+ */
+function withDefaultOwner(caller: NeotmsCaller, input: ProjectCreate): ProjectCreate {
+  if (input.prjPmId || input.prjMgrId) return input;
+  if (caller.attributes.has(NEOTMS_USER_ATTRIBUTE_PM)) {
+    return { ...input, prjPmId: caller.staffId };
+  }
+  if (caller.attributes.has(NEOTMS_USER_ATTRIBUTE_SALES_MANAGER)) {
+    return { ...input, prjMgrId: caller.staffId };
+  }
+  return input;
 }
 
 export async function updateProject(
@@ -152,8 +384,80 @@ export async function updateProject(
         return { status: 400, body: "That customer does not exist or has been deleted" };
       }
     }
+
+    /*
+     * Read first, so an assignee that is NOT changing is not validated.
+     *
+     * The project form submits every field on every save, so without this an edit to a project
+     * whose historical PM has left - or has had the attribute revoked since - would be refused for
+     * a value the editor did not touch. One indexed read on a save is the price, and it is the same
+     * read that turns an out-of-scope id into the 404 the write would have produced anyway.
+     */
+    const existing = (await pgQuery(ProjectGetOps(caller, id))).data;
+    if (!existing) return notFound("project");
+
+    const refusal = await assigneeRefusal(input, {
+      prjPmId: existing.prjPmId,
+      prjMgrId: existing.prjMgrId,
+    });
+    if (refusal) return { status: 400, body: refusal };
+
     const row = (await pgExecute(ProjectUpdateOps(caller, id, input, ctx))).data;
     return row ? ok(row) : notFound("project");
+  });
+}
+
+/**
+ * Put a rejected project back in front of its PM, as its sales manager.
+ *
+ * The counterpart of `setProjectAcceptance`, and it reads before it writes for the same reason: the
+ * three ways `ProjectAcceptanceResetOps` can match nothing are one miss to the statement and three
+ * different things to do for the person reading the screen.
+ *
+ * The refusal on an ACCEPTED project is the one worth noticing. Resetting one would be the
+ * withdrawal the acceptance endpoint refuses, reached from the other side - and it would be the
+ * sales manager withdrawing the PM's answer, which is not theirs to withdraw. Reassigning the PM is the
+ * supported way to take a project off somebody, and it leaves the acceptance reset as a visible
+ * consequence of a visible act.
+ */
+export async function requestProjectAcceptanceAgain(
+  caller: NeotmsCaller,
+  id: string,
+  ctx: WriteContext,
+): Promise<ResponseData<ProjectRow | string>> {
+  return runDb("request project acceptance again", async () => {
+    const existing = (await pgQuery(ProjectGetOps(caller, id))).data;
+    if (!existing) return notFound("project");
+
+    if (existing.prjMgrId !== caller.staffId) {
+      return {
+        status: 403,
+        body:
+          "Only the 담당영업 of this project can ask its PM to look at it again. " +
+          "If the project has no 담당영업, assign one first.",
+      };
+    }
+
+    if (existing.acceptanceStatus !== PROJECT_ACCEPTANCE_REJECTED) {
+      return {
+        status: 409,
+        body:
+          existing.acceptanceStatus === PROJECT_ACCEPTANCE_ACCEPTED
+            ? "This project has been accepted. Asking again would withdraw the PM's acceptance, " +
+              "which is not something this screen can do - assign a different PM instead, which " +
+              "resets the acceptance and asks the new one."
+            : "This project is already waiting for its PM to answer.",
+      };
+    }
+
+    const row = (await pgExecute(ProjectAcceptanceResetOps(caller, id, ctx))).data;
+    if (!row) {
+      return {
+        status: 409,
+        body: "This project changed a moment ago. Reload and look again.",
+      };
+    }
+    return ok(row);
   });
 }
 

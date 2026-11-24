@@ -449,6 +449,37 @@ export const PurchaseOrderUpdateSchema = v.partial(v.omit(PurchaseOrderCreateSch
 export const PoApprovalSchema = v.object({ approved: v.boolean() });
 
 /**
+ * A PM answering for a project they have been assigned.
+ *
+ * ## `accepted: boolean` rather than the three-valued column
+ *
+ * `project.acceptance_status` holds 0, 1 or -1, and this body can express only the last two. 0 means
+ * "has not answered", which is not something anybody can SAY - it is the state a project is put in
+ * by being assigned, and the state a reassignment returns it to. A body that could send 0 would be
+ * an un-accept, and that is deliberately not a feature: a PM who accepted and then cannot deliver
+ * is handled by reassigning the project, which is somebody else's act and leaves its own record.
+ *
+ * So the server translates - see `PROJECT_ACCEPTANCE_ACCEPTED` / `_REJECTED` - and the wire format
+ * stays a boolean, the same shape `PoApprovalSchema` uses for the same reason: a client that has to
+ * know which integer means which answer is a client that can get it backwards.
+ *
+ * ## Why there is no `staffId` and no timestamp
+ *
+ * Both are the server's. Who answered comes from the verified caller and when from `now()`; a
+ * client-supplied "accepted by X at T" is not a record of anything. The authority is not in this
+ * body either and cannot be: only the project's own PM may answer, which is a fact about one row
+ * rather than a permission, and `ProjectAcceptanceOps` carries that test in its WHERE clause.
+ *
+ * `note` is optional on both answers. It is the reason a rejection is actionable - without it the
+ * sales manager learns only that the project came back - but it is not REQUIRED on one, because a
+ * reason given under protest ("-") is worse than a blank.
+ */
+export const ProjectAcceptanceSchema = v.object({
+  accepted: v.boolean(),
+  note: settable(text(500)),
+});
+
+/**
  * Recording what happened to the money on a purchase order.
  *
  * Picked from `PurchaseOrderCreateSchema` rather than restated, so the two cannot drift: these are
@@ -1040,6 +1071,7 @@ export type JobUpdate = v.InferOutput<typeof JobUpdateSchema>;
 export type PurchaseOrderCreate = v.InferOutput<typeof PurchaseOrderCreateSchema>;
 export type PurchaseOrderUpdate = v.InferOutput<typeof PurchaseOrderUpdateSchema>;
 export type PoApproval = v.InferOutput<typeof PoApprovalSchema>;
+export type ProjectAcceptance = v.InferOutput<typeof ProjectAcceptanceSchema>;
 export type PoSettlement = v.InferOutput<typeof PoSettlementSchema>;
 export type InvoiceTranslatorCreate = v.InferOutput<typeof InvoiceTranslatorCreateSchema>;
 export type InvoiceTranslatorUpdate = v.InferOutput<typeof InvoiceTranslatorUpdateSchema>;

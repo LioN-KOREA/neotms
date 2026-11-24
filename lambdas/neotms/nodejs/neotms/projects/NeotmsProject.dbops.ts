@@ -26,6 +26,7 @@
 import {
   param,
   readId,
+  readInt,
   readMoney,
   readText,
   type SortTarget,
@@ -60,6 +61,38 @@ import {
 import type { ProjectCreate, ProjectUpdate } from "../neotms.schemas.js";
 
 /* -------------------------------------------------------------------------- */
+/* Acceptance                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The three values of `project.acceptance_status`, named once.
+ *
+ * Numbers rather than text codes because that is what the column is, and the column is three
+ * integers because that is what was specified. The cost of integers is that `acceptance_status = 1`
+ * says nothing to a reader, so these constants are the only place the numbers appear in TypeScript -
+ * every comparison and every write below goes through them, and so does the frontend's own copy.
+ *
+ * `ASSIGNED` is not "pending approval by somebody": it means the project has been put in front of
+ * its PM and the PM has not answered. That is why it is also what a REASSIGNMENT resets to - the
+ * new PM has not answered either, whatever the previous one said.
+ */
+export const PROJECT_ACCEPTANCE_ASSIGNED = 0;
+export const PROJECT_ACCEPTANCE_ACCEPTED = 1;
+export const PROJECT_ACCEPTANCE_REJECTED = -1;
+
+/** One answer a PM gave, for the detail screen's history. */
+export type ProjectAcceptanceRow = {
+  id: string;
+  /** The PM who answered. Their name comes from `staff`, joined - this table denormalises nothing. */
+  staffId: string | null;
+  staffName: string | null;
+  /** `PROJECT_ACCEPTANCE_ACCEPTED` or `PROJECT_ACCEPTANCE_REJECTED`. Never 0 - see the DDL. */
+  status: number;
+  note: string | null;
+  createdAt: string | null;
+};
+
+/* -------------------------------------------------------------------------- */
 /* Shape                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -75,6 +108,15 @@ export type ProjectRow = {
   /** The delivery PM's `staff.id`. */
   prjPmId: string | null;
   prjPmName: string | null;
+  /**
+   * Whether `prjPmId` has taken the project on. One of the three `PROJECT_ACCEPTANCE_*` values.
+   *
+   * Not writable through `ProjectUpdateOps` - it has no `PROJECT_FIELDS` spec, for the reason
+   * `po_approved` has none: the authority is different. Only the assigned PM may answer, which is
+   * not a thing a permission can express, so `ProjectAcceptanceOps` is the only statement that
+   * assigns it and it carries that test in its own WHERE clause.
+   */
+  acceptanceStatus: number;
   customerId: string | null;
   cusCodeName: string | null;
   customerContactId: string | null;
@@ -106,6 +148,7 @@ const projectColumns = (q: string): string => `
   ${q}.prj_mgr_name        AS prj_mgr_name,
   ${q}.prj_pm_id           AS prj_pm_id,
   ${q}.prj_pm_name         AS prj_pm_name,
+  ${q}.acceptance_status   AS acceptance_status,
   ${q}.customer_id         AS customer_id,
   ${q}.cus_code_name       AS cus_code_name,
   ${q}.customer_contact_id AS customer_contact_id,
@@ -136,6 +179,14 @@ export const toProjectRow = (row: SqlRow): ProjectRow => ({
   prjMgrName: readText(row, "prj_mgr_name"),
   prjPmId: readId(row, "prj_pm_id"),
   prjPmName: readText(row, "prj_pm_name"),
+  /*
+   * `?? PROJECT_ACCEPTANCE_ASSIGNED` and not `?? null`. The column is NOT NULL, so the fallback is
+   * unreachable through this application - but it is reachable through a stale deploy reading a
+   * database where db/005 has not been applied, and 0 ("nobody has answered") is the only honest
+   * answer to give a screen in that case. Reporting null would make the chip read as accepted or
+   * rejected depending on how the frontend coerced it.
+   */
+  acceptanceStatus: readInt(row, "acceptance_status") ?? PROJECT_ACCEPTANCE_ASSIGNED,
   customerId: readId(row, "customer_id"),
   cusCodeName: readText(row, "cus_code_name"),
   customerContactId: readId(row, "customer_contact_id"),
@@ -198,6 +249,16 @@ const PROJECT_FILTERS = {
   field: { column: "p.prj_field", kind: "text" },
   pmId: { column: "p.prj_pm_id", kind: "id" },
   salesManagerId: { column: "p.prj_mgr_id", kind: "id" },
+  /*
+   * The only `int` filter in the application, and the reason the kind exists on this one column is
+   * that the vocabulary is integers rather than codes.
+   *
+   * The value arrives from the query string, so the manager validates it against the three legal
+   * values before it reaches here. Without that, `?acceptanceStatus=abc` becomes `Number("abc")` ->
+   * NaN -> a 500 from PostgreSQL about invalid integer syntax, which is a server error for what is
+   * really a malformed request.
+   */
+  acceptanceStatus: { column: "p.acceptance_status", kind: "int" },
 } as const satisfies Record<string, FilterSpec>;
 
 export type ProjectFilters = Partial<Record<keyof typeof PROJECT_FILTERS, string>> & {
@@ -494,10 +555,48 @@ export const ProjectUpdateOps: (
   const fields = updateFragments(PROJECT_FIELDS, input);
   const derived = derivedUpdate(PROJECT_DERIVED, input);
   const scope = scopeClauseForOne(caller, PROJECT_SCOPE_COLUMNS);
+
+  /*
+   * Reassigning the PM resets the acceptance.
+   *
+   * ## Why it is a CASE and not an assignment
+   *
+   * The form on the project screen PATCHes every field, including `prjPmId`, every time anybody
+   * edits anything. `acceptance_status = 0` whenever the body mentions a PM would therefore wipe an
+   * acceptance each time somebody fixed a typo in the project name - and the symptom is a PM asked
+   * to accept the same project over and over, with nothing on any screen to say why.
+   *
+   * So the reset is conditional on the id ACTUALLY CHANGING, and the comparison is made inside the
+   * statement. `p.prj_pm_id` on the right-hand side of a SET reads the row's OLD value - the same
+   * pre-statement snapshot rule that makes a data-modifying CTE unable to see its own INSERT - which
+   * is exactly what is needed here and is the one place in this codebase that rule is useful rather
+   * than a hazard.
+   *
+   * `IS DISTINCT FROM` and not `<>`, because either side may be NULL: unassigning the PM is a
+   * change (NULL is distinct from an id), and a project that had no PM and still has none is not.
+   *
+   * ## Why only when the body mentions the PM
+   *
+   * `updateFragments` binds `:prj_pm_id` only for the fields the body actually sent. Emitting this
+   * CASE unconditionally would reference an unbound parameter on every PATCH that does not mention
+   * the PM, which is a failed statement rather than a wrong answer - but a failed statement on the
+   * commonest write in the application.
+   */
+  const resetsAcceptance = input.prjPmId !== undefined;
+  const acceptanceReset = resetsAcceptance
+    ? `acceptance_status = CASE
+                             WHEN p.prj_pm_id IS DISTINCT FROM :prj_pm_id
+                             THEN ${String(PROJECT_ACCEPTANCE_ASSIGNED)}
+                             ELSE p.acceptance_status
+                           END`
+    : "";
+
   return {
     sql: `
       UPDATE project p
-         SET ${[fields.fragment, ...derived].filter((f) => f.length > 0).join(",\n             ")},
+         SET ${[fields.fragment, ...derived, acceptanceReset]
+           .filter((f) => f.length > 0)
+           .join(",\n             ")},
              updated_at = now(),
              created_by = :created_by
        WHERE p.id = :id
@@ -514,6 +613,183 @@ export const ProjectUpdateOps: (
     mapper: (rows) => (rows.length > 0 ? toProjectRow(rows[0]!) : null),
   };
 };
+
+/**
+ * Record the answer a PM just gave. Append-only; nothing in this codebase updates or deletes a row.
+ *
+ * `staff_id` is the CALLER, not a re-read of `project.prj_pm_id`. By the time anybody reads this row
+ * the project may have been reassigned, and "who answered" must survive that - it is the whole
+ * reason the table exists beside the column.
+ *
+ * Unscoped, deliberately: it only ever runs in the same transaction as `ProjectAcceptanceOps`, whose
+ * WHERE clause has already proved that this caller is this project's PM. A second copy of that test
+ * here would be a second place for it to be right.
+ */
+export const ProjectAcceptanceRecordOps: (
+  projectId: string,
+  caller: NeotmsCaller,
+  status: number,
+  note: string | null,
+  ctx: WriteContext,
+) => SqlOps<string | null> = (projectId, caller, status, note, ctx) => ({
+  sql: `
+    INSERT INTO project_acceptance
+      (project_id, staff_id, acceptance_status, note, created_by, created_ip)
+    VALUES
+      (:project_id, :staff_id, :status, :note, :created_by, :created_ip)
+    RETURNING id AS acceptance_id
+  `,
+  parameters: [
+    param("project_id", projectId, "id"),
+    param("staff_id", caller.staffId, "id"),
+    param("status", status, "int"),
+    // NULL and not '' when the PM left the box empty: `note IS NULL` is how a screen asks whether a
+    // reason was given, and '' would answer that question wrongly for every blank one.
+    param("note", note && note.trim().length > 0 ? note.trim() : null, "text"),
+    param("created_by", ctx.actor, "text"),
+    param("created_ip", ctx.ip, "text"),
+  ],
+  mapper: (rows) => (rows.length > 0 ? readId(rows[0]!, "acceptance_id") : null),
+});
+
+/**
+ * Accept or reject one project, as its assigned PM.
+ *
+ * The ONLY statement that assigns `project.acceptance_status` other than the reset in
+ * `ProjectUpdateOps`. `acceptance_status` has no `PROJECT_FIELDS` spec, so no project edit can
+ * write it - the same separation `po_approved` has, for the same reason: the authority differs.
+ *
+ * ## Three predicates, and each one is a different refusal
+ *
+ *   * `p.prj_pm_id = :pm_id` - only the ASSIGNED PM may answer. This is the authority, and no
+ *     permission can express it: it is not "may accept projects", it is "may accept THIS project",
+ *     which is a fact about one row. Note it is strictly narrower than `PROJECT_SCOPE_COLUMNS`
+ *     (which also admits the sales manager), so the usual scope clause is absent here rather than
+ *     redundant - adding it could only ever widen nothing and would suggest it was load-bearing.
+ *   * `p.acceptance_status = :assigned` - only an UNANSWERED project. There is no un-accept, by
+ *     decision: a PM who accepted and then cannot deliver is handled by reassigning the project,
+ *     which is somebody else's act and leaves a record of its own. Without this predicate the
+ *     endpoint would quietly be that un-accept, reachable by pressing the other button.
+ *   * `p.deleted = false` - as everywhere.
+ *
+ * All three are in the statement rather than checked beforehand, so there is no window between the
+ * check and the write. The manager reads the project first anyway, but only to say WHICH of the
+ * three refused; if the statement then matches nothing the answer is a race and it is reported as
+ * one.
+ */
+export const ProjectAcceptanceOps: (
+  caller: NeotmsCaller,
+  id: string,
+  status: number,
+  ctx: WriteContext,
+) => SqlOps<ProjectRow | null> = (caller, id, status, ctx) => ({
+  sql: `
+    UPDATE project p
+       SET acceptance_status = :status,
+           updated_at        = now(),
+           created_by        = :actor
+     WHERE p.id = :id
+       AND p.deleted = false
+       AND p.prj_pm_id = :pm_id
+       AND p.acceptance_status = :assigned
+    RETURNING ${projectColumns("p")}
+  `,
+  parameters: [
+    param("id", id, "id"),
+    param("status", status, "int"),
+    param("pm_id", caller.staffId, "id"),
+    param("assigned", PROJECT_ACCEPTANCE_ASSIGNED, "int"),
+    param("actor", ctx.actor, "text"),
+  ],
+  mapper: (rows) => (rows.length > 0 ? toProjectRow(rows[0]!) : null),
+});
+
+/**
+ * Put a REJECTED project back in front of its PM, as its sales manager.
+ *
+ * The one statement that moves `acceptance_status` back to 0 without the PM changing, and the three
+ * predicates are all refusals:
+ *
+ *   * `p.prj_mgr_id = :mgr_id` - only the project's own sales manager may ask again. Not the PM, who
+ *     would be re-asking themselves, and not a superuser: this is the counterpart of the PM's answer
+ *     and it has the same shape of authority, a fact about one row.
+ *   * `p.acceptance_status = :rejected` - ONLY from rejected. This is the predicate that keeps "no
+ *     un-accept" true: without it this endpoint would reset an ACCEPTED project to unanswered,
+ *     which is exactly the withdrawal the acceptance endpoint refuses, reached from the other side.
+ *   * `p.deleted = false` - as everywhere.
+ *
+ * It writes NO row in `project_acceptance`, and that is a decision rather than an omission. That
+ * table records ANSWERS PMs GAVE, and all three of its columns are about the answer; a re-request
+ * is not an answer, and the CHECK refuses the 0 it would have to store. The rejection it follows
+ * stays in the history with its reason, which is the part somebody actually goes looking for. The
+ * cost is that "asked again on the 3rd" is not recorded anywhere - see the README.
+ */
+export const ProjectAcceptanceResetOps: (
+  caller: NeotmsCaller,
+  id: string,
+  ctx: WriteContext,
+) => SqlOps<ProjectRow | null> = (caller, id, ctx) => ({
+  sql: `
+    UPDATE project p
+       SET acceptance_status = :assigned,
+           updated_at        = now(),
+           created_by        = :actor
+     WHERE p.id = :id
+       AND p.deleted = false
+       AND p.prj_mgr_id = :mgr_id
+       AND p.acceptance_status = :rejected
+    RETURNING ${projectColumns("p")}
+  `,
+  parameters: [
+    param("id", id, "id"),
+    param("assigned", PROJECT_ACCEPTANCE_ASSIGNED, "int"),
+    param("rejected", PROJECT_ACCEPTANCE_REJECTED, "int"),
+    param("mgr_id", caller.staffId, "id"),
+    param("actor", ctx.actor, "text"),
+  ],
+  mapper: (rows) => (rows.length > 0 ? toProjectRow(rows[0]!) : null),
+});
+
+/**
+ * Every answer given on one project, newest first.
+ *
+ * Unscoped for the reason `ProjectTotalsOps` is: the visibility decision has already been made by
+ * the scoped read that preceded it, and a caller who cannot see the project never reaches this.
+ *
+ * The PM's name is JOINed rather than denormalised into the row. The four denormalised names on
+ * `project` exist because the list screen draws fifty rows at a time; this is one project's history
+ * on a detail screen, where a join costs nothing and a maintained copy would be a fifth name to
+ * rewrite when somebody is renamed.
+ *
+ * `created_at DESC, id DESC` - the index is `(project_id, created_at DESC)`, and the id breaks ties
+ * so two answers recorded in the same transaction cannot swap places between two reads.
+ */
+export const ProjectAcceptanceHistoryOps: (
+  projectId: string,
+) => SqlOps<ProjectAcceptanceRow[]> = (projectId) => ({
+  sql: `
+    SELECT a.id                AS acceptance_id,
+           a.staff_id          AS staff_id,
+           s.mgr_name          AS staff_name,
+           a.acceptance_status AS acceptance_status,
+           a.note              AS note,
+           a.created_at        AS created_at
+      FROM project_acceptance a
+      LEFT JOIN staff s ON s.id = a.staff_id
+     WHERE a.project_id = :project_id
+     ORDER BY a.created_at DESC, a.id DESC
+  `,
+  parameters: [param("project_id", projectId, "id")],
+  mapper: (rows) =>
+    rows.map((row) => ({
+      id: readId(row, "acceptance_id") ?? "",
+      staffId: readId(row, "staff_id"),
+      staffName: readText(row, "staff_name"),
+      status: readInt(row, "acceptance_status") ?? PROJECT_ACCEPTANCE_ASSIGNED,
+      note: readText(row, "note"),
+      createdAt: readText(row, "created_at"),
+    })),
+});
 
 export const ProjectSoftDeleteOps: (
   caller: NeotmsCaller,

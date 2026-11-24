@@ -35,7 +35,9 @@ import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { ResponseData } from "../../reqres/RequestResponse.js";
 import { ok, runDb } from "../NeotmsResult.js";
 import {
+  DashboardAcceptanceOps,
   DashboardSummaryOps,
+  type DashboardAcceptanceRow,
   type DashboardRole,
   type DashboardSummary,
 } from "./NeotmsDashboard.dbops.js";
@@ -48,12 +50,35 @@ import {
  * same heading: a person who is a sales manager on some projects and PM on others would read
  * whichever set a default happened to pick and have no way to tell which it was.
  */
+export type DashboardView = DashboardSummary & {
+  /**
+   * The projects waiting on somebody - whose meaning differs by role. See `DashboardAcceptanceOps`.
+   *
+   * Part of this response rather than a second endpoint because it is part of this screen, and
+   * because the alternative is worse in a specific way: the project list endpoint can answer "my
+   * projects with acceptance status X" already, but not WHY one was rejected, and bolting the
+   * latest answer onto `ProjectRow` would put it in the write paths too, where there is nothing to
+   * join to.
+   */
+  pendingAcceptance: DashboardAcceptanceRow[];
+};
+
 export async function getDashboard(
   caller: NeotmsCaller,
   role: DashboardRole,
-): Promise<ResponseData<DashboardSummary | string>> {
+): Promise<ResponseData<DashboardView | string>> {
   return runDb("dashboard summary", async () => {
     const summary = (await pgQuery(DashboardSummaryOps(caller, role))).data;
-    return ok(summary);
+    /*
+     * A second round trip, on a screen that is read once per sign-in and then occasionally.
+     *
+     * Not folded into the summary query: that one is a single-row aggregate over the caller's
+     * projects, and this one returns rows. Joining them would multiply the aggregate by the number
+     * of pending projects - the fan-out that `ProjectTotalsOps` and the dashboard's own LATERALs
+     * are all written to avoid - or require a second pass over the same table in the same
+     * statement, which is what a second statement is.
+     */
+    const pendingAcceptance = (await pgQuery(DashboardAcceptanceOps(caller, role))).data;
+    return ok({ ...summary, pendingAcceptance });
   });
 }

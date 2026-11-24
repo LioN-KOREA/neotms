@@ -94,6 +94,7 @@ import {
   InvoiceTranslatorUpdateSchema,
   PoApprovalSchema,
   PoSettlementSchema,
+  ProjectAcceptanceSchema,
   ProjectUpdateSchema,
   PurchaseOrderCreateSchema,
   PurchaseOrderUpdateSchema,
@@ -129,6 +130,8 @@ import {
   deleteProject,
   getProject,
   listProjects,
+  requestProjectAcceptanceAgain,
+  setProjectAcceptance,
   updateProject,
 } from "./projects/NeotmsProjectManager.js";
 import { createJob, deleteJob, getJob, listJobs, updateJob } from "./jobs/NeotmsJobManager.js";
@@ -162,6 +165,7 @@ import {
 } from "./codes/NeotmsCodeManager.js";
 import { listFxRates } from "./fx/NeotmsFxRateManager.js";
 import { listRoles, listStaff, updateStaff } from "./staff/NeotmsStaffAdminManager.js";
+import { listAssignableStaff } from "./staff/NeotmsAssignableManager.js";
 import { createUpload, resolveDownload } from "./attachments/NeotmsAttachmentManager.js";
 import { sendPoRequestMail } from "./purchase-orders/NeotmsPoRequestMailManager.js";
 import {
@@ -391,6 +395,46 @@ const handleDeleteProject: RRHandler = async (request) => {
 };
 
 /*
+ * Accept or reject a project, as its assigned PM.
+ *
+ * Gated on `PROJECT_READ` and not on `PROJECT_UPDATE`, which looks too weak and is the correct
+ * answer. The authority here is not "may edit projects" - it is "is the PM this project is assigned
+ * to", a fact about one row that no permission can express, and `ProjectAcceptanceOps` carries that
+ * test in its own WHERE clause. Requiring `PROJECT_UPDATE` on top would mean a PM who may not edit
+ * projects cannot answer for their own, which is a second gate on one decision where the second one
+ * is invisible from the screen.
+ *
+ * POST on a static trailing segment, like `/purchase-orders/:id/approval`: the id in the path says
+ * which project is being answered for, and the act is not an edit of the project's fields.
+ */
+/*
+ * The sales manager asks a rejected project's PM to look again.
+ *
+ * `PROJECT:update` and not `PROJECT:read`, unlike the acceptance route beside it, and the
+ * difference is real: accepting is an answer only one person can give and the row proves who they
+ * are, whereas this is an edit to a project's workflow state made by the person who owns the
+ * relationship. Somebody with read-only access to projects should not be able to re-open one.
+ *
+ * The row test - `prj_mgr_id = <caller>` - is still in the statement, so the permission widens
+ * nothing: it decides whether the request may run at all, not which project it may touch.
+ */
+const handleRequestProjectAcceptanceAgain: RRHandler = async (request) => {
+  const id = recordId(request);
+  return id
+    ? requestProjectAcceptanceAgain(callerOf(request), id, writeContext(request))
+    : NOT_A_RECORD_ID;
+};
+
+const handleSetProjectAcceptance: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(ProjectAcceptanceSchema, request.body);
+  return parsed.ok
+    ? setProjectAcceptance(callerOf(request), id, parsed.value, writeContext(request))
+    : parsed.response;
+};
+
+/*
  * Handover mail - hand a project over to its operating PM by mail.
  *
  * No `writeContext`. Nothing in this database changes: the handler reads a project and its jobs,
@@ -604,6 +648,9 @@ const handleDeleteCode: RRHandler = async (request) => {
  * or deactivating themselves - the one edit on this screen that cannot be undone from this screen.
  */
 const handleListStaff: RRHandler = async () => listStaff();
+
+/** The assignee pickers' list. The attribute is validated in the manager against a closed list. */
+const handleListAssignableStaff: RRHandler = async (request) => listAssignableStaff(request);
 const handleListRoles: RRHandler = async () => listRoles();
 
 const handleUpdateStaff: RRHandler = async (request) => {
@@ -963,6 +1010,10 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // over. POST rather than PATCH because it changes nothing here; it performs an act whose result
   // is a mail, not a row.
   { path: `${PROJECTS}/:id/handover-mail`, method: "POST", handler: handleSendHandoverMail, permission: NEOTMS_PERMISSION_PROJECT_EMAIL },
+  // Acceptance. `PROJECT_READ` deliberately - see the handler for why the gate is the row and not
+  // the permission.
+  { path: `${PROJECTS}/:id/acceptance`, method: "POST", handler: handleSetProjectAcceptance, permission: NEOTMS_PERMISSION_PROJECT_READ },
+  { path: `${PROJECTS}/:id/acceptance/again`, method: "POST", handler: handleRequestProjectAcceptanceAgain, permission: NEOTMS_PERMISSION_PROJECT_UPDATE },
 
   // -- Jobs (revenue) -------------------------------------------------------
   { path: JOBS, method: "GET", handler: handleListJobs, permission: NEOTMS_PERMISSION_JOB_READ },
@@ -1040,6 +1091,9 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // `created_by`. Deactivating (`active: false`) is the supported way to end somebody's access and
   // is reachable through the PATCH. Soft-deleting a staff row is a database statement on purpose,
   // so that "remove an employee" is not a button next to "change their role".
+  // The two assignee pickers on the project form. `anyStaff`, like the code and FX lists - see the
+  // header of NeotmsAssignableManager for why a permission would have to be a union of three.
+  { path: "/api/v0/staff/assignable", method: "GET", handler: handleListAssignableStaff, anyStaff: true },
   { path: ADMIN_STAFF, method: "GET", handler: handleListStaff, permission: NEOTMS_PERMISSION_STAFF_READ },
   { path: `${ADMIN_STAFF}/:id`, method: "PATCH", handler: handleUpdateStaff, permission: NEOTMS_PERMISSION_STAFF_UPDATE },
   { path: ADMIN_ROLES, method: "GET", handler: handleListRoles, permission: NEOTMS_PERMISSION_STAFF_READ },

@@ -136,6 +136,37 @@ export function StatusChip({ value }: Props) {
  * 거래가 끝난 고객사도, 중지된 코드도 담당자가 **의도한** 상태다. 경고색을 쓰면 목록을 훑을 때
  * 눈이 거기로 먼저 가고, 정작 봐야 하는 '미정산' 이 묻힌다.
  */
+/**
+ * Whether the assigned PM has taken a project on.
+ *
+ * ## Separate from `StatusChip` for the same reason `ActiveChip` is
+ *
+ * The `TONES` table above is keyed on STRINGS THAT CAME FROM THE SERVER. The value here is -1, 0 or
+ * 1, and the words on screen are LABELS this file chooses for those numbers. Putting those labels
+ * into `TONES` as keys would mean that the day somebody rewords one, its colour silently falls back
+ * to neutral - a lookup miss, with no error anywhere.
+ *
+ * ## Rejected is a warning colour, and that is a departure
+ *
+ * `ActiveChip` deliberately does not warn on its off state: a customer nobody trades with any more
+ * is a state somebody chose. Rejection is not like that. A rejected project is WORK WITH NOBODY ON
+ * IT, and it only moves when a person reassigns the PM; forgotten, it becomes a missed deadline. It
+ * has to catch the eye in a list.
+ *
+ * Waiting is `wait`, not a warning. Every project starts there, so warning on it would turn half
+ * the list orange and orange would stop meaning anything.
+ */
+export function AcceptanceChip({ status }: { status: number }) {
+  const tone = status > 0 ? OK : status < 0 ? WARN : WAIT
+  const label = status > 0 ? '수락' : status < 0 ? '거절' : '수락 대기'
+  return (
+    <span className={`${styles.chip} ${tone.cls}`}>
+      <span className={`${styles.dot} ${tone.open ? styles.dotOpen : ''}`} aria-hidden="true" />
+      {label}
+    </span>
+  )
+}
+
 export function ActiveChip({ active, on, off }: { active: boolean; on: string; off: string }) {
   return active ? (
     <span className={`${styles.chip} ${styles.ok}`}>

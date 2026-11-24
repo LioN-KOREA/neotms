@@ -634,6 +634,70 @@ export interface TranslatorInput {
 /* 프로젝트                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The three values of `project.acceptance_status`, mirroring the server's own constants in
+ * NeotmsProject.dbops.ts.
+ *
+ * Retyped rather than imported, like every other value in this file - the two sides of the wire are
+ * built separately. What keeps them honest is that both compare against the same three integers,
+ * and the database refuses anything else at a CHECK constraint.
+ *
+ * ASSIGNED is not "waiting for an administrator": it means the project has been put in front of its
+ * PM and the PM has not answered yet. It is also what a reassignment resets to.
+ */
+export const PROJECT_ACCEPTANCE_ASSIGNED = 0
+export const PROJECT_ACCEPTANCE_ACCEPTED = 1
+export const PROJECT_ACCEPTANCE_REJECTED = -1
+
+/**
+ * The two attributes a project assigns, as the picker and the server name them.
+ *
+ * Retyped from `NEOTMS_ASSIGNABLE_ATTRIBUTES` on the server. The superuser attribute is not here on
+ * purpose: it is not assignable to a project, and `GET /api/v0/staff/assignable` refuses it rather
+ * than becoming "who are the administrators" for every staff member.
+ */
+export const ASSIGNABLE_ATTRIBUTES = [
+  'NEOTMS_USER_ATTRIBUTE_SALES_MANAGER',
+  'NEOTMS_USER_ATTRIBUTE_PM',
+] as const
+
+export type AssignableAttribute = (typeof ASSIGNABLE_ATTRIBUTES)[number]
+
+/**
+ * One person who may be named in a project's PM or sales manager seat.
+ *
+ * The whole shape the server sends - no email, no phone, no role. This is the only endpoint about
+ * OTHER people that any staff member may read, and it answers exactly the question the pickers ask.
+ */
+export interface AssignableStaff {
+  id: string
+  name: string | null
+  /** The legacy readable key, shown as the picker's subtitle so two two namesakes can be told apart. */
+  mgrId: string
+}
+
+export interface AssignableStaffView {
+  attribute: AssignableAttribute
+  items: AssignableStaff[]
+}
+
+/** One answer a PM gave, newest first in `ProjectDetail.acceptance`. */
+export interface ProjectAcceptanceRow {
+  id: string
+  staffId: string | null
+  staffName: string | null
+  /** `PROJECT_ACCEPTANCE_ACCEPTED` or `_REJECTED`. Never 0 - an unanswered project has no row. */
+  status: number
+  note: string | null
+  createdAt: string | null
+}
+
+/** `POST /api/v0/projects/{id}/acceptance`. The server decides which integer `accepted` means. */
+export interface ProjectAcceptanceInput {
+  accepted: boolean
+  note?: string | null
+}
+
 export interface ProjectRow {
   id: string
   prjCode: string
@@ -662,8 +726,29 @@ export interface ProjectRow {
   prjEday: string | null
   prjEdayTime: string | null
   prjContent: string | null
+  /**
+   * Whether `prjPmId` has taken the project on - one of the three `PROJECT_ACCEPTANCE_*` values.
+   *
+   * Read-only here, and absent from `ProjectInput` because no project edit can write it: the server
+   * has no writable-field spec for the column, and the only endpoint that assigns it requires the
+   * caller to BE the assigned PM. Changing the PM resets it to ASSIGNED, which is a server-side
+   * consequence of that edit rather than a field this screen sends.
+   */
+  acceptanceStatus: number
   createdAt: string | null
   updatedAt: string | null
+}
+
+/**
+ * What `GET /api/v0/projects/{id}` answers - the row plus the acceptance history.
+ *
+ * A separate interface rather than optional fields on `ProjectRow`, because the LIST endpoint does
+ * not return the history and never will: fifty projects would mean fifty extra queries for
+ * something the list does not show. A field that is present on one read and absent on the other is
+ * what leaves a `?? []` in a screen forever.
+ */
+export interface ProjectDetail extends ProjectRow {
+  acceptance: ProjectAcceptanceRow[]
 }
 
 export interface ProjectInput {
@@ -1327,4 +1412,31 @@ export interface DashboardSummary {
   revenue: string
   cost: string
   margin: string
+  /**
+   * The projects waiting on somebody, and what the two roles mean by that.
+   *
+   *   * `pm` - projects assigned to me that I have NOT answered. Accept or reject them from here.
+   *   * `sales` - my projects that are not accepted, whether nobody has answered yet or the PM
+   *     rejected them. For a rejected one, `note` carries the reason.
+   *
+   * Part of the dashboard response rather than a second call: the reason a project came back is not
+   * on the project row - see `DashboardAcceptanceOps` on the server for why it is not.
+   */
+  pendingAcceptance: DashboardAcceptanceRow[]
+}
+
+/** One row of the dashboard's acceptance panel. Smaller than `ProjectRow` on purpose. */
+export interface DashboardAcceptanceRow {
+  id: string
+  prjCode: string
+  prjName: string | null
+  cusCodeName: string | null
+  prjPmName: string | null
+  prjMgrName: string | null
+  prjEday: string | null
+  acceptanceStatus: number
+  /** The LATEST answer on this project. All three are null on one nobody has answered. */
+  note: string | null
+  answeredBy: string | null
+  answeredAt: string | null
 }

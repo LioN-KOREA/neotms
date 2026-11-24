@@ -6,6 +6,8 @@ import type {
   CodeUpdateInput,
   CustomerInput,
   CustomerRow,
+  AssignableAttribute,
+  AssignableStaffView,
   DashboardRole,
   DashboardSummary,
   FxRateListView,
@@ -22,6 +24,8 @@ import type {
   PoApprovalInput,
   PoSettlementInput,
   ProfileView,
+  ProjectAcceptanceInput,
+  ProjectDetail,
   ProjectInput,
   ProjectRow,
   PurchaseOrderInput,
@@ -426,6 +430,14 @@ export interface ProjectListQuery extends ListQuery {
   pmId?: string | null
   salesManagerId?: string | null
   /**
+   * The PM acceptance, as the integer the column holds, stringified: '0', '1' or '-1'.
+   *
+   * A string because it travels in a query string and comes out of a `<select>`. The server
+   * validates it against those three values and treats anything else as no filter at all - the one
+   * `int` filter in the API, so a NaN would otherwise reach PostgreSQL and come back a 500.
+   */
+  acceptanceStatus?: string | null
+  /**
    * 기간 검색. `YYYY-MM-DD`, 양끝 포함.
    *
    * 두 쌍이 **서로 독립**이다. `startFrom`/`startTo` 는 "2월에 **시작한** 프로젝트",
@@ -444,7 +456,7 @@ export const fetchProjects = (query: ProjectListQuery, signal?: AbortSignal) =>
   neotmsApi<ListPage<ProjectRow>>('/api/v0/projects', { query: { ...query }, signal })
 
 export const fetchProject = (id: string, signal?: AbortSignal) =>
-  neotmsApi<ProjectRow>(`/api/v0/projects/${encodeURIComponent(id)}`, { signal })
+  neotmsApi<ProjectDetail>(`/api/v0/projects/${encodeURIComponent(id)}`, { signal })
 
 export const createProject = (input: ProjectInput) =>
   neotmsApi<ProjectRow>('/api/v0/projects', { method: 'POST', body: input })
@@ -457,6 +469,23 @@ export const updateProject = (id: string, input: Partial<ProjectInput>) =>
 
 export const deleteProject = (id: string) =>
   neotmsApi<void>(`/api/v0/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/**
+ * The assigned PM accepts or rejects a project.
+ *
+ * What goes over the wire is ONE BOOLEAN, which the server translates into 1 or -1. The third value,
+ * 0 ("has not answered"), cannot be sent, and that is the design: there is no un-accept. A PM who
+ * accepted and can no longer take the work is handled by reassigning the project, and the server
+ * resets the status as part of that edit.
+ *
+ * Refusals arrive as 403 and 409 - not the assigned PM, and already answered - and both carry a
+ * sentence meant to be read, which `ErrorNotice` shows verbatim.
+ */
+export const setProjectAcceptance = (id: string, input: ProjectAcceptanceInput) =>
+  neotmsApi<ProjectRow>(`/api/v0/projects/${encodeURIComponent(id)}/acceptance`, {
+    method: 'POST',
+    body: input,
+  })
 
 /**
  * Sends the handover mail.
@@ -720,3 +749,28 @@ export const fetchWorkload = (
  */
 export const fetchDashboard = (role: DashboardRole, signal?: AbortSignal) =>
   neotmsApi<DashboardSummary>(`/api/v0/dashboard/${role}`, { signal })
+
+/**
+ * The people who may be named in one of a project's two assignee seats.
+ *
+ * `anyStaff` on the server - any usable staff row may read it - because the project form cannot be
+ * filled in without it. The answer is short and changes rarely, so the query hook caches it for
+ * longer than a list screen would.
+ */
+export const fetchAssignableStaff = (attribute: AssignableAttribute, signal?: AbortSignal) =>
+  neotmsApi<AssignableStaffView>('/api/v0/staff/assignable', {
+    query: { attribute },
+    signal,
+  })
+
+/**
+ * The sales manager asks a rejected project's PM to look at it again.
+ *
+ * Only from REJECTED, and only by that project's own sales manager: the server refuses an accepted one,
+ * because resetting it would withdraw the PM's acceptance from the other side. Reassigning the PM
+ * is the supported way to take a project off somebody.
+ */
+export const requestProjectAcceptanceAgain = (id: string) =>
+  neotmsApi<ProjectRow>(`/api/v0/projects/${encodeURIComponent(id)}/acceptance/again`, {
+    method: 'POST',
+  })

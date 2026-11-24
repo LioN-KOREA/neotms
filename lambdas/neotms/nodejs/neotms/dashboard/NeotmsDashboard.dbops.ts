@@ -42,7 +42,14 @@
 // duplicate or drop a project. It is the same shape `ProjectTotalsOps` uses for a single
 // project, widened from one id to a set.
 
-import { param, readMoney, type SqlOps, type SqlParameter } from "../../utils/PostgresUtils.js";
+import {
+  param,
+  readId,
+  readMoney,
+  readText,
+  type SqlOps,
+  type SqlParameter,
+} from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import { JOB_KRW, JOB_KRW_JOIN, PO_KRW, PO_KRW_JOIN } from "../NeotmsMoney.js";
 import { scopeClause } from "../NeotmsQuery.js";
@@ -87,6 +94,31 @@ const OWNER_COLUMN: Record<DashboardRole, string> = {
 /* Shape                                                                      */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * One project waiting on somebody, for the acceptance panel.
+ *
+ * A shape of its own rather than `ProjectRow`, and deliberately smaller: this panel shows a code, a
+ * name, who it is with, and - when it has come back - why. Reusing the project row would mean
+ * thirty columns and the four denormalised names to answer a question about two of them.
+ *
+ * `note`, `answeredBy` and `answeredAt` describe the LATEST answer on the project, which for a
+ * rejected one is the rejection and its reason. They are null on a project nobody has answered yet,
+ * which is every row of the PM's panel.
+ */
+export type DashboardAcceptanceRow = {
+  id: string;
+  prjCode: string;
+  prjName: string | null;
+  cusCodeName: string | null;
+  prjPmName: string | null;
+  prjMgrName: string | null;
+  prjEday: string | null;
+  acceptanceStatus: number;
+  note: string | null;
+  answeredBy: string | null;
+  answeredAt: string | null;
+};
+
 export type DashboardSummary = {
   /** Echoed back, so a client holding two cached responses can tell them apart. */
   role: DashboardRole;
@@ -118,6 +150,97 @@ export type DashboardSummary = {
   revenue: string;
   cost: string;
   margin: string;
+};
+
+/**
+ * The acceptance panel, for one caller and one role.
+ *
+ * ## Two different questions under one statement
+ *
+ * The PM's panel is "what am I being asked to take on" - `acceptance_status = 0`, and nothing else:
+ * a project they have already answered is off their list, which is what the request asked for.
+ *
+ * The sales manager's panel is "what of mine is not settled" - anything that is NOT accepted, so both
+ * unanswered and rejected. Those two need different actions from them (wait, versus fix and ask
+ * again) but they are one list: a project sitting unanswered for a week and one that came back are
+ * the same problem to the person who sold it, which is that nobody is working on it.
+ *
+ * Hence `ACCEPTANCE_FILTER` rather than one predicate with a parameter. `<> 1` and `= 0` are not two
+ * values of one filter, they are two questions, and a role that picked the wrong one would show a
+ * PM projects they had already rejected - with an accept button the server refuses.
+ *
+ * ## The latest answer comes from a LATERAL, not a join
+ *
+ * A plain join to `project_acceptance` multiplies the project by its number of answers: a project
+ * rejected, reassigned and rejected again would appear three times, each row showing a different
+ * reason, and the panel would read as three separate projects in trouble. `LIMIT 1` inside the
+ * LATERAL is what makes it one row per project, and `(project_id, created_at DESC)` is the index it
+ * walks.
+ *
+ * ## Why it is not `GET /projects?acceptanceStatus=...`
+ *
+ * It nearly is, and the one thing the list endpoint cannot give is the REASON. Adding the latest
+ * answer to `ProjectRow` would put it in the INSERT and UPDATE paths too, where there is no row to
+ * join to yet - `projectColumns` is shared with `RETURNING` - so it would have to be optional
+ * everywhere and absent exactly after a write. This panel asks for what it needs instead.
+ */
+const ACCEPTANCE_FILTER: Record<DashboardRole, string> = {
+  // Not yet accepted, whether unanswered or rejected.
+  sales: "p.acceptance_status <> 1",
+  // Awaiting this PM's answer, and nothing else.
+  pm: "p.acceptance_status = 0",
+};
+
+export const DashboardAcceptanceOps: (
+  caller: NeotmsCaller,
+  role: DashboardRole,
+) => SqlOps<DashboardAcceptanceRow[]> = (caller, role) => {
+  const owner = OWNER_COLUMN[role];
+  const scope = scopeClause(caller, ["p.prj_mgr_id", "p.prj_pm_id"]);
+  return {
+    sql: `
+      SELECT p.id            AS project_id,
+             p.prj_code      AS prj_code,
+             p.prj_name      AS prj_name,
+             p.cus_code_name AS cus_code_name,
+             p.prj_pm_name   AS prj_pm_name,
+             p.prj_mgr_name  AS prj_mgr_name,
+             p.prj_eday      AS prj_eday,
+             p.acceptance_status AS acceptance_status,
+             a.note          AS note,
+             a.staff_name    AS answered_by,
+             a.created_at    AS answered_at
+        FROM project p
+        LEFT JOIN LATERAL (
+               SELECT pa.note, pa.created_at, s.mgr_name AS staff_name
+                 FROM project_acceptance pa
+                 LEFT JOIN staff s ON s.id = pa.staff_id
+                WHERE pa.project_id = p.id
+                ORDER BY pa.created_at DESC, pa.id DESC
+                LIMIT 1
+             ) a ON true
+       WHERE p.deleted = false
+         AND ${owner} = :owner_staff_id
+         AND ${ACCEPTANCE_FILTER[role]}
+      ${scope.fragment}
+       ORDER BY p.prj_eday NULLS LAST, p.id
+    `,
+    parameters: [param("owner_staff_id", caller.staffId, "id"), ...scope.parameters],
+    mapper: (rows) =>
+      rows.map((row) => ({
+        id: readId(row, "project_id") ?? "",
+        prjCode: readText(row, "prj_code") ?? "",
+        prjName: readText(row, "prj_name"),
+        cusCodeName: readText(row, "cus_code_name"),
+        prjPmName: readText(row, "prj_pm_name"),
+        prjMgrName: readText(row, "prj_mgr_name"),
+        prjEday: readText(row, "prj_eday"),
+        acceptanceStatus: Number(row["acceptance_status"] ?? 0),
+        note: readText(row, "note"),
+        answeredBy: readText(row, "answered_by"),
+        answeredAt: readText(row, "answered_at"),
+      })),
+  };
 };
 
 /* -------------------------------------------------------------------------- */

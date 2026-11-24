@@ -17,7 +17,11 @@ import {
   useUpdatePurchaseOrder,
 } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN, codeOptions, JOB_STATES, PO_STATES } from '@/apis/neotms.codes'
-import type { JobRow, PurchaseOrderRow } from '@/apis/neotms.types'
+import {
+  PROJECT_ACCEPTANCE_ASSIGNED,
+  type JobRow,
+  type PurchaseOrderRow,
+} from '@/apis/neotms.types'
 import { DETAIL_PAGE_SIZE } from '@/shared/config'
 import { useRowSelection } from '@/shared/hooks/useRowSelection'
 import { may } from '@/shared/permissions'
@@ -43,7 +47,7 @@ import {
   InlineTextCell,
 } from '@/shared/ui/InlineEditCell'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
-import { ApprovalChip, StatusChip } from '@/shared/ui/StatusChip'
+import { AcceptanceChip, ApprovalChip, StatusChip } from '@/shared/ui/StatusChip'
 import { describeBulk, runSequential } from '@/shared/utils/bulk'
 import { formatDate, formatDateTime, isOverdue } from '@/shared/utils/format'
 import { decimalPercent, decimalSubtract, decimalSum, krwToShow } from '@/shared/utils/money'
@@ -55,6 +59,7 @@ import {
 } from '@/features/payment/poBulkApprove'
 import { duplicateJobInput } from '@/features/jobs/jobDuplicate'
 import { JobFormModal } from '@/features/jobs/JobFormModal'
+import { ProjectAcceptanceModal } from './ProjectAcceptanceModal'
 import { JobTypeSwapModal, jobTypeSummary } from '@/features/jobs/JobTypeSwapModal'
 import { PoDocButtons, type PoPrintRequest } from '@/features/payment/print/PoDocButtons'
 import { PoPrintModal } from '@/features/payment/print/PoPrintModal'
@@ -139,6 +144,14 @@ export function ProjectDetailView() {
   const subFieldName = useCodeNames(CODE_DOMAIN.FIELD)
 
   const [editingProject, setEditingProject] = useState(false)
+  /*
+   * Which answer the dialog is open for: true accepting, false rejecting, null closed.
+   *
+   * One state rather than two booleans, because the two are mutually exclusive by nature - nobody
+   * is accepting and rejecting at once - and two flags would make that an invariant somebody has to
+   * maintain instead of one the type states.
+   */
+  const [answering, setAnswering] = useState<boolean | null>(null)
   const [editingJob, setEditingJob] = useState<JobRow | null | undefined>(undefined)
   const [editingPo, setEditingPo] = useState<PurchaseOrderRow | null | undefined>(undefined)
   /** 'PO 추가' 를 누른 작업. PO는 작업에 달리므로 어느 작업인지가 먼저 정해져야 한다. */
@@ -215,6 +228,16 @@ export function ProjectDetailView() {
   }, [pos])
 
   const mayUpdateProject = may(profile, NEOTMS_PERMISSION_PROJECT_UPDATE)
+  /*
+   * Is the person reading this the PM the project is assigned to?
+   *
+   * Compared on `staffId`, not on the name: two people can share a name, the names on `project` are
+   * denormalised copies that can lag a rename, and `prjPmId` is the column the server's own test
+   * uses. A name comparison would sooner or later offer somebody a button that answers 403, or hide
+   * it from the one person it belongs to.
+   */
+  const isAssignedPm = !!project && !!profile?.staffId && project.prjPmId === profile.staffId
+  const acceptance = project?.acceptance ?? []
   const mayReadJob = may(profile, NEOTMS_PERMISSION_JOB_READ)
   const mayCreateJob = may(profile, NEOTMS_PERMISSION_JOB_CREATE)
   const mayUpdateJob = may(profile, NEOTMS_PERMISSION_JOB_UPDATE)
@@ -452,16 +475,86 @@ export function ProjectDetailView() {
               것은 이 줄을 다시 넣는 일이다(`ProjectsView` 머리말 참고). */}
           <StatusChip value={project.prjState} />
           <StatusChip value={project.prjMoneyState} />
+          <AcceptanceChip status={project.acceptanceStatus} />
         </div>
-        {mayUpdateProject ? (
-          <button type="button" className={ui.btn} onClick={() => setEditingProject(true)}>
-            <Icon name="pencil" size={13} />
-            프로젝트 수정
-          </button>
-        ) : null}
+        <div className={ui.rowActions}>
+          {/*
+           * The PM's two buttons, and the condition is the whole access rule on this screen.
+           *
+           * Shown only to the person the project is ASSIGNED TO, and only while nobody has answered.
+           * There is no permission involved - the server's test is `prj_pm_id = <caller>`, which no
+           * permission can express - so the condition here has to be the same shape, or the screen
+           * offers a button that answers 403.
+           *
+           * The sales manager sees the chip and no buttons, which is correct: they can see what the
+           * PM said and, if it was no, reassign the project.
+           */}
+          {isAssignedPm && project.acceptanceStatus === PROJECT_ACCEPTANCE_ASSIGNED ? (
+            <>
+              <button
+                type="button"
+                className={`${ui.btn} ${ui.btnPrimary}`}
+                onClick={() => setAnswering(true)}
+              >
+                수락
+              </button>
+              <button
+                type="button"
+                className={ui.btn}
+                onClick={() => setAnswering(false)}
+              >
+                거절
+              </button>
+            </>
+          ) : null}
+          {mayUpdateProject ? (
+            <button type="button" className={ui.btn} onClick={() => setEditingProject(true)}>
+              <Icon name="pencil" size={13} />
+              프로젝트 수정
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {notice ? <SuccessNotice>{notice}</SuccessNotice> : null}
+
+      {/*
+       * The answers given on this project, and the reasons.
+       *
+       * Above the money, because on a rejected project this is the only thing on the screen that
+       * says what has to happen next - and the figures below it are revenue nobody is working on.
+       *
+       * Rendered only when there is something to show. An unanswered project draws nothing here;
+       * the chip in the title row already says so, and an empty card headed 'acceptance history' would read
+       * as a feature that is broken rather than as a project nobody has answered for yet.
+       */}
+      {acceptance.length > 0 ? (
+        <div className={ui.card}>
+          <div className={ui.cardHeader}>
+            <span>수락 이력</span>
+          </div>
+          <div className={ui.cardBody}>
+            {acceptance.map((answer) => (
+              <div key={answer.id} className={ui.detailItem}>
+                <span className={ui.detailLabel}>
+                  <AcceptanceChip status={answer.status} />
+                </span>
+                <span className={ui.detailValue}>
+                  {answer.staffName || '(이름 없음)'}
+                  <span className={ui.hint}> · {formatDateTime(answer.createdAt) || '-'}</span>
+                  {/*
+                   * The reason, on its own line. A rejection without one is normal - the box is
+                   * optional - and saying so beats a blank space that reads as a loading state.
+                   */}
+                  <div className={answer.note ? undefined : ui.cellMuted}>
+                    {answer.note || '남긴 메모가 없습니다.'}
+                  </div>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {/* 삭제 거절을 읽을 수 있는 자리. 두 표가 멀리 떨어져 있어 각 표 안에 두면 스크롤
           밖에서 사라지므로, 알림은 화면 머리에 모아 둔다. */}
       <ErrorNotice error={deleteJob.error} />
@@ -1123,6 +1216,15 @@ export function ProjectDetailView() {
           project={project}
           onClose={() => setEditingProject(false)}
           onSaved={setNotice}
+        />
+      ) : null}
+
+      {answering !== null ? (
+        <ProjectAcceptanceModal
+          project={project}
+          accepted={answering}
+          onClose={() => setAnswering(null)}
+          onDone={setNotice}
         />
       ) : null}
 

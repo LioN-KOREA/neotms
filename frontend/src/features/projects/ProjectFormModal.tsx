@@ -10,7 +10,8 @@ import {
   PROJECT_STATES,
   unsetPlaceholder,
 } from '@/apis/neotms.codes'
-import type { ProjectInput, ProjectRow } from '@/apis/neotms.types'
+import { ASSIGNABLE_ATTRIBUTES, type ProjectInput, type ProjectRow } from '@/apis/neotms.types'
+import { useProfile } from '@/apis/queries/neotms.query'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { ErrorNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
@@ -19,6 +20,10 @@ import { alignPeriod, nowTimeKst, toDateInputValue, todayKst } from '@/shared/ut
 import { DateField } from '@/shared/ui/DateField'
 import ui from '@/shared/ui/ui.module.css'
 import { CustomerPicker } from '@/features/customers/CustomerPicker'
+import { StaffPicker } from '@/features/staff/StaffPicker'
+
+/** Index 0 is sales manager and 1 is PM - see `ASSIGNABLE_ATTRIBUTES`, which the server shares. */
+const [SALES_MANAGER_ATTRIBUTE, PM_ATTRIBUTE] = ASSIGNABLE_ATTRIBUTES
 
 interface Props {
   /** null 이면 신규. */
@@ -39,11 +44,29 @@ interface Props {
  * 수정 화면에서는 이미 고른 고객사를 검색 없이 되살려야 한다. 서버가 목록에 조인해 주는
  * `cusCodeName` 이 그 역할을 한다 — 고객사를 한 건 더 조회하지 않아도 이름을 보여 줄 수 있다.
  *
- * ## 담당자(영업·PM)는 입력란이 없다
+ * ## The two assignees are pickers, and the server checks them
  *
- * `prjMgrId`·`prjPmId` 는 `staff` 를 참조하는 UUID 이고, 직원 목록 엔드포인트가 아직 없다.
- * UUID 를 손으로 치게 만드는 입력란은 틀린 값을 받는 장치일 뿐이므로 MVP 에서는 빼 두고,
- * 수정 시 기존 값이 지워지지 않도록 **아예 전송하지 않는다**(아래 `input` 구성 참고).
+ * `prjMgrId` (sales manager) and `prjPmId` (PM) are `staff` ids, and each picker lists only the people
+ * carrying the matching attribute - `GET /api/v0/staff/assignable`. The server refuses an id that
+ * does not carry it, so the picker is a convenience over the rule rather than the rule itself.
+ *
+ * The three parent fields sit on ONE ROW: a customer name, a PM's name and a sales manager's name are all
+ * short, and the three together are "who this project belongs to". Before this they were a full-
+ * width picker and two sentences of apology.
+ *
+ * ## The PM is who has to accept the project
+ *
+ * Naming a PM here puts the project in front of them: `acceptance_status` starts at 0 and the
+ * project appears in that person's handover panel until they answer. CHANGING the PM on an
+ * existing project resets the acceptance, because the previous PM's answer was theirs - so this
+ * form is also how a rejected project is handed to somebody else.
+ *
+ * ## sales manager defaults to the person filling the form in
+ *
+ * If they hold the attribute. Whoever enters a project is almost always the salesperson who sold
+ * it, and getting it wrong is cheap to fix here while leaving it blank is not: a project with no
+ * sales manager has nobody who can ask its PM to look again after a rejection (that endpoint's authority
+ * is `prj_mgr_id = <caller>`), so it quietly loses its only route out of that state.
  */
 export function ProjectFormModal({ project, onClose, onSaved }: Props) {
   const isEdit = !!project
@@ -62,6 +85,35 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
       ? { id: project.customerId, title: project.cusCodeName ?? project.customerId }
       : null,
   )
+
+  /*
+   * The two assignees, as picker selections.
+   *
+   * On an edit they start from the ids already on the project, titled with the denormalised names
+   * the server keeps for the list screen - so the dialog opens showing who is assigned without a
+   * second read. On a NEW project the sales manager starts as the current user when they are eligible;
+   * see the file header for why that default and not a blank.
+   *
+   * `profile.attributes` is the same list the server would check, so an ineligible user is not
+   * offered themselves and then refused on save. A user whose profile has not loaded yet gets no
+   * default, which is the honest answer at that moment rather than a guess that may need undoing.
+   */
+  const { data: profile } = useProfile()
+  const [pm, setPm] = useState<PickerOption | null>(
+    project?.prjPmId
+      ? { id: project.prjPmId, title: project.prjPmName ?? project.prjPmId }
+      : null,
+  )
+  const [salesManager, setSalesManager] = useState<PickerOption | null>(() => {
+    if (project) {
+      return project.prjMgrId
+        ? { id: project.prjMgrId, title: project.prjMgrName ?? project.prjMgrId }
+        : null
+    }
+    const mine = profile?.staffId
+    const eligible = profile?.attributes.includes(SALES_MANAGER_ATTRIBUTE) ?? false
+    return mine && eligible ? { id: mine, title: profile?.name ?? mine } : null
+  })
 
   const [form, setForm] = useState({
     prjName: project?.prjName ?? '',
@@ -153,6 +205,20 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
       prjEday: form.prjEday || null,
       prjEdayTime: form.prjEdayTime || null,
       prjContent: form.prjContent.trim() || null,
+      /*
+       * The two assignees, always sent - including as `null` when the box is empty.
+       *
+       * `null` is how a field is CLEARED, and clearing an assignee is a real edit: a project
+       * between PMs has none. Omitting them instead would mean this form could never take an
+       * assignee off a project, which is the state a rejected project has to be able to reach
+       * before it is handed to somebody else.
+       *
+       * Sending the PM unchanged is harmless and is what makes the acceptance reset behave: the
+       * server compares the id against the stored one and resets `acceptance_status` only when it
+       * actually differs (see `ProjectUpdateOps`), so saving a typo fix does not re-ask the PM.
+       */
+      prjPmId: pm?.id ?? null,
+      prjMgrId: salesManager?.id ?? null,
     }
 
     if (project) {
@@ -209,7 +275,12 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
           />
         </div>
 
-        <div className={ui.fieldWide}>
+        {/*
+          고객사 · PM · 영업담당 한 줄. 세 칸 모두 `.field` 이므로 `.formGrid` 의 자동 열 수가
+          모달 폭(720px)에서 셋을 한 줄에 놓는다. 좁은 화면에서는 둘 + 하나로 접히고, 그때도
+          순서는 그대로다 — 고객사가 먼저인 것은 셋 중 유일한 필수 항목이기 때문이다.
+        */}
+        <div className={ui.field}>
           <CustomerPicker
             value={customer}
             onChange={(option) => {
@@ -217,6 +288,34 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
               setCustomer(option)
             }}
             required
+            disabled={pending}
+          />
+        </div>
+
+        <div className={ui.field}>
+          <StaffPicker
+            attribute={PM_ATTRIBUTE}
+            id="prj-pm"
+            label="PM"
+            value={pm}
+            onChange={(option) => {
+              setDirty(true)
+              setPm(option)
+            }}
+            disabled={pending}
+          />
+        </div>
+
+        <div className={ui.field}>
+          <StaffPicker
+            attribute={SALES_MANAGER_ATTRIBUTE}
+            id="prj-sales-manager"
+            label="영업담당"
+            value={salesManager}
+            onChange={(option) => {
+              setDirty(true)
+              setSalesManager(option)
+            }}
             disabled={pending}
           />
         </div>

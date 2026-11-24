@@ -1,8 +1,20 @@
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { PROJECT_STATE_ACTIVE } from '@/apis/neotms.codes'
 import type { DashboardRole } from '@/apis/neotms.types'
 import { useDashboard, useProfile, useProjects } from '@/apis/queries/neotms.query'
-import { ErrorNotice, InfoNotice, TableState } from '@/shared/ui/Feedback'
+import {
+  useDeleteProject,
+  useRequestAcceptanceAgain,
+} from '@/apis/queries/neotms.mutation'
+import {
+  PROJECT_ACCEPTANCE_REJECTED,
+  type DashboardAcceptanceRow,
+} from '@/apis/neotms.types'
+import { AcceptanceChip } from '@/shared/ui/StatusChip'
+import { ProjectAcceptanceModal } from '@/features/projects/ProjectAcceptanceModal'
+import { ProjectPmModal } from '@/features/projects/ProjectPmModal'
+import { ErrorNotice, InfoNotice, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { ShareBar } from '@/shared/ui/ShareBar'
 import { StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
@@ -111,6 +123,27 @@ export function DashboardView({ role }: DashboardViewProps) {
   )
   const rows = projectsQuery.data?.pages.flatMap((p) => p.items) ?? []
 
+  /*
+   * The acceptance panel's state. Three dialogs, each opened from one row.
+   *
+   * `answering` carries the row AND which answer - the button that opened it decided, and the
+   * dialog cannot change it (see `ProjectAcceptanceModal`). `reassigning` and the delete share the
+   * sales manager's panel. One state per dialog rather than one union, because a row can legitimately be
+   * the subject of two of them in sequence and collapsing them would make "which dialog is open"
+   * depend on the order the fields were cleared.
+   */
+  const [answering, setAnswering] = useState<{
+    row: DashboardAcceptanceRow
+    accepted: boolean
+  } | null>(null)
+  const [reassigning, setReassigning] = useState<DashboardAcceptanceRow | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const askAgain = useRequestAcceptanceAgain()
+  const removeProject = useDeleteProject()
+
+  const pending = summary?.pendingAcceptance ?? []
+
   /** 건수 한 칸. 값이 아직 없으면 `…` 다 — 0 으로 두면 '없음' 이라는 **틀린 사실**이 된다. */
   const count = (value: number | undefined): string =>
     value === undefined ? '…' : `${value}건`
@@ -184,6 +217,209 @@ export function DashboardView({ role }: DashboardViewProps) {
           </div>
         ) : null}
       </div>
+
+      {/*
+       * The acceptance panel, above the in-progress list.
+       *
+       * Above it because these rows are the ones where NOTHING IS HAPPENING - a project waiting for
+       * an answer, or one that came back - and the list below is work already under way. A panel of
+       * blocked work under a list of running work is a panel nobody scrolls to.
+       *
+       * Always rendered, with an empty state, like the card below it. A dashboard is a fixed set of
+       * panels and its sections are landmarks: a card that appears only when it has rows is one
+       * somebody has to remember exists, and "nothing is waiting on me" is worth reading as a
+       * sentence rather than inferring from an absence.
+       */}
+      <div className={ui.card}>
+        <div className={ui.cardHeader}>
+          <span>{role === 'pm' ? '인계받은 프로젝트 목록' : '수락되지 않은 내 프로젝트'}</span>
+          <span className={ui.hint}>
+            {role === 'pm'
+              ? '수락 또는 거절을 선택해 주십시오.'
+              : '수락 대기 중이거나 PM 이 거절한 프로젝트입니다.'}
+          </span>
+        </div>
+
+        {notice ? (
+          <div className={ui.cardBody}>
+            <SuccessNotice>{notice}</SuccessNotice>
+          </div>
+        ) : null}
+        <div className={ui.cardBody}>
+          <ErrorNotice error={askAgain.error} />
+          <ErrorNotice error={removeProject.error} />
+        </div>
+
+        <div className={`${ui.cardBodyFlush} ${ui.tableWrap}`}>
+          <table className={ui.table}>
+            <thead>
+              <tr>
+                <th>코드</th>
+                <th>프로젝트명</th>
+                <th>고객사</th>
+                {/* The PM's panel is all his own rows, so the useful name is the other seat's. */}
+                <th>{role === 'pm' ? '영업담당' : 'PM'}</th>
+                <th>마감일</th>
+                <th>수락</th>
+                <th>조치</th>
+              </tr>
+            </thead>
+            <tbody>
+              <TableState
+                isLoading={summaryQuery.isLoading}
+                error={summaryQuery.error}
+                isEmpty={pending.length === 0}
+                emptyText={
+                  role === 'pm'
+                    ? '수락을 기다리는 프로젝트가 없습니다.'
+                    : '수락되지 않은 프로젝트가 없습니다.'
+                }
+                colSpan={7}
+              />
+              {pending.map((row) => (
+                <tr key={row.id}>
+                  <td className={ui.cellMono}>{row.prjCode}</td>
+                  <td>
+                    <Link className={ui.btnLink} to={`/projects/${row.id}`}>
+                      {row.prjName || '(이름 없음)'}
+                    </Link>
+                    {/*
+                     * The rejection reason, under the name.
+                     *
+                     * This is the whole reason the panel does not just filter the project list:
+                     * for the sales manager the next action depends on WHY it came back, and reading
+                     * that should not need a click into the project.
+                     */}
+                    {row.acceptanceStatus === PROJECT_ACCEPTANCE_REJECTED ? (
+                      <div className={ui.cellMuted}>
+                        {row.answeredBy ? `${row.answeredBy}: ` : ''}
+                        {row.note || '사유를 남기지 않았습니다.'}
+                      </div>
+                    ) : null}
+                  </td>
+                  <td>{row.cusCodeName || '-'}</td>
+                  <td className={ui.cellMuted}>
+                    {(role === 'pm' ? row.prjMgrName : row.prjPmName) || '-'}
+                  </td>
+                  <td className={ui.cellMuted}>{formatDate(row.prjEday)}</td>
+                  <td>
+                    <AcceptanceChip status={row.acceptanceStatus} />
+                  </td>
+                  <td>
+                    <div className={ui.rowActions}>
+                      {role === 'pm' ? (
+                        <>
+                          <button
+                            type="button"
+                            className={`${ui.btn} ${ui.btnSm} ${ui.btnPrimary}`}
+                            onClick={() => setAnswering({ row, accepted: true })}
+                          >
+                            수락
+                          </button>
+                          <button
+                            type="button"
+                            className={`${ui.btn} ${ui.btnSm}`}
+                            onClick={() => setAnswering({ row, accepted: false })}
+                          >
+                            거절
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {/*
+                           * Three actions, and only on a REJECTED row.
+                           *
+                           * A project still waiting for its PM has nothing for the sales manager to do
+                           * but wait - offering 'ask again' there would send the same project to
+                           * the same person again, and the server refuses it (409: it is already
+                           * waiting). So the buttons appear when the project has actually come
+                           * back.
+                           */}
+                          {row.acceptanceStatus === PROJECT_ACCEPTANCE_REJECTED ? (
+                            <>
+                              <button
+                                type="button"
+                                className={`${ui.btn} ${ui.btnSm}`}
+                                onClick={() => setReassigning(row)}
+                              >
+                                PM 변경
+                              </button>
+                              <button
+                                type="button"
+                                className={`${ui.btn} ${ui.btnSm}`}
+                                disabled={askAgain.isPending}
+                                onClick={() => {
+                                  setNotice(null)
+                                  askAgain.mutate(row.id, {
+                                    onSuccess: () =>
+                                      setNotice(
+                                        `'${row.prjName || row.prjCode}' 프로젝트의 수락을 다시 요청했습니다.`,
+                                      ),
+                                  })
+                                }}
+                              >
+                                다시 요청
+                              </button>
+                              <button
+                                type="button"
+                                className={`${ui.btn} ${ui.btnSm} ${ui.btnDanger}`}
+                                disabled={removeProject.isPending}
+                                onClick={() => {
+                                  /*
+                                   * The one destructive action on this screen, so it asks. The
+                                   * server refuses while the project still has live jobs, and
+                                   * that refusal arrives in the notice above - it is not
+                                   * something this dialog can predict.
+                                   */
+                                  if (
+                                    !window.confirm(
+                                      `'${row.prjName || row.prjCode}' 프로젝트를 삭제하시겠습니까? 하위 작업이 있으면 삭제되지 않습니다.`,
+                                    )
+                                  ) {
+                                    return
+                                  }
+                                  setNotice(null)
+                                  removeProject.mutate(row.id, {
+                                    onSuccess: () =>
+                                      setNotice(
+                                        `'${row.prjName || row.prjCode}' 프로젝트를 삭제했습니다.`,
+                                      ),
+                                  })
+                                }}
+                              >
+                                삭제
+                              </button>
+                            </>
+                          ) : (
+                            <span className={ui.hint}>PM 의 답변을 기다리는 중</span>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {answering ? (
+        <ProjectAcceptanceModal
+          project={answering.row}
+          accepted={answering.accepted}
+          onClose={() => setAnswering(null)}
+          onDone={setNotice}
+        />
+      ) : null}
+
+      {reassigning ? (
+        <ProjectPmModal
+          project={reassigning}
+          onClose={() => setReassigning(null)}
+          onDone={setNotice}
+        />
+      ) : null}
 
       <div className={ui.card}>
         <div className={ui.cardHeader}>

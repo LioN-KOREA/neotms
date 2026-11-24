@@ -3,7 +3,12 @@ import { Link } from 'react-router'
 import { useProfile, useProjects } from '@/apis/queries/neotms.query'
 import { useDeleteProject } from '@/apis/queries/neotms.mutation'
 import { codeOptions, MONEY_STATES, PROJECT_STATES } from '@/apis/neotms.codes'
-import type { ProjectRow } from '@/apis/neotms.types'
+import {
+  PROJECT_ACCEPTANCE_ACCEPTED,
+  PROJECT_ACCEPTANCE_ASSIGNED,
+  PROJECT_ACCEPTANCE_REJECTED,
+  type ProjectRow,
+} from '@/apis/neotms.types'
 import { LIST_PAGE_SIZE } from '@/shared/config'
 import { useUrlFilters } from '@/shared/hooks/useUrlFilters'
 import { may } from '@/shared/permissions'
@@ -14,7 +19,7 @@ import {
 } from '@/apis/neotms.authorities'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
-import { StatusChip } from '@/shared/ui/StatusChip'
+import { AcceptanceChip, StatusChip } from '@/shared/ui/StatusChip'
 import { formatDate, isOverdue } from '@/shared/utils/format'
 import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
 import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
@@ -58,7 +63,22 @@ import { ProjectFormModal } from './ProjectFormModal'
  * 화면을 어지럽히지 않는다는 쪽을 골랐다.
  */
 
-const FILTER_KEYS = ['q', 'state', 'moneyState', 'basis', 'from', 'to'] as const
+const FILTER_KEYS = ['q', 'state', 'moneyState', 'acceptance', 'basis', 'from', 'to'] as const
+
+/**
+ * The acceptance filter's three answers, plus "all".
+ *
+ * The values are the integers the column holds, as strings, because they travel in the URL and in a
+ * `<select>`. They are written out rather than built from `PROJECT_ACCEPTANCE_*` so that the ORDER
+ * is the one a reader wants - waiting first, because "what am I being asked to take on" is the
+ * question this filter exists for.
+ */
+const ACCEPTANCE_FILTERS = [
+  { value: '', label: '전체' },
+  { value: String(PROJECT_ACCEPTANCE_ASSIGNED), label: '수락 대기' },
+  { value: String(PROJECT_ACCEPTANCE_ACCEPTED), label: '수락' },
+  { value: String(PROJECT_ACCEPTANCE_REJECTED), label: '거절' },
+] as const
 
 /**
  * 기간 검색의 기준. 주소에 적히는 값이므로 **짧고 안 바뀌어야** 한다.
@@ -82,6 +102,7 @@ export function ProjectsView() {
     q: filters.q,
     state: filters.state,
     moneyState: filters.moneyState,
+    acceptance: filters.acceptance,
     basis: filters.basis || 'start',
     from: filters.from,
     to: filters.to,
@@ -116,6 +137,7 @@ export function ProjectsView() {
     q: filters.q || undefined,
     state: filters.state || undefined,
     moneyState: filters.moneyState || undefined,
+    acceptanceStatus: filters.acceptance || undefined,
     startFrom: useDueBasis ? undefined : periodFrom,
     startTo: useDueBasis ? undefined : periodTo,
     dueFrom: useDueBasis ? periodFrom : undefined,
@@ -165,6 +187,7 @@ export function ProjectsView() {
       q: '',
       state: '',
       moneyState: '',
+      acceptance: '',
       // 기준은 비우지 않고 기본값으로 되돌린다 — 드롭다운에 빈 항목이 없으므로 빈 문자열을
       // 넣으면 `<select>` 의 value 가 어느 option 과도 안 맞아 브라우저가 첫 항목을 고른 척
       // 보여 준다. 즉 화면에는 '시작일' 이 적혀 있는데 상태는 '' 인, 눈과 코드가 어긋난 상태.
@@ -297,6 +320,24 @@ export function ProjectsView() {
             끼면 '기준' 이 무엇의 기준인지 읽히지 않는다.
           */}
           <div className={ui.filterField}>
+            <label className={ui.label} htmlFor="pf-acceptance">
+              수락
+            </label>
+            <select
+              id="pf-acceptance"
+              className={ui.select}
+              value={draft.acceptance}
+              onChange={(e) => setDraft((p) => ({ ...p, acceptance: e.target.value }))}
+            >
+              {ACCEPTANCE_FILTERS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className={ui.filterField}>
             <label className={ui.label} htmlFor="pf-basis">
               기간 기준
             </label>
@@ -368,6 +409,9 @@ export function ProjectsView() {
                 <th>담당</th>
                 <th>기간</th>
                 <th>진행</th>
+                {/* Between state and payment on purpose: it belongs with the other two "where is this
+                    now" columns rather than next to the buttons, and it is read in the same sweep. */}
+                <th>수락</th>
                 <th>입금</th>
                 {/* This column header named the edit button alone. With the handover-mail button added
                     to the cell it became narrower than its contents - a heading naming one of
@@ -385,7 +429,7 @@ export function ProjectsView() {
                     ? '조건에 맞는 프로젝트가 없습니다.'
                     : '등록된 프로젝트가 없습니다. 먼저 고객사를 등록한 뒤 프로젝트를 만듭니다.'
                 }
-                colSpan={8}
+                colSpan={9}
               />
               {rows.map((row) => (
                 <tr key={row.id}>
@@ -432,6 +476,9 @@ export function ProjectsView() {
                    */}
                   <td>
                     <StatusChip value={row.prjState} />
+                  </td>
+                  <td>
+                    <AcceptanceChip status={row.acceptanceStatus} />
                   </td>
                   {/* 계산서 열이 있던 자리. 파일 머리말의 마지막 문단 참고. */}
                   <td>

@@ -337,6 +337,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `003_access_control.sql` | **only for a database that already has data.** Moves it from the legacy menu × action matrix (`sys_role_auth`) to named permissions (`sys_role_permission`), and derives who may be named as a 담당영업 or 담당PM (`staff_attribute`). A database built from `001` has the new shape already and must **not** be given this file. See §6.3 |
 | *(no SQL for the PO request mail)* | the PO request mail stores nothing in Postgres — its attachment tokens live in DynamoDB, created by CDK. See §6.4 |
 | `004_recent_searches.sql` | **only for a database that already has data.** Adds `staff_recent_search`, the five most recent search terms per person per list screen. Additive and re-runnable; apply it **before** the deploy, because the screens read it as soon as they load. A database built from `001` has the table already |
+| `005_project_acceptance.sql` | **only for a database that already has data.** Adds `project.acceptance_status` and the `project_acceptance` record — the PM's accept / reject on a project. Additive and re-runnable; apply it **before** the deploy, because every project list and detail selects the column. A database built from `001` has both already. See §6.5 |
 | `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
 
 These two replace the sixteen numbered migrations that used to build the schema a step
@@ -544,6 +545,7 @@ of the symptom points away from the cause.
 
 | `004_recent_searches.sql` | **on an existing database only** — `staff_recent_search` | every list screen logs a failed request for recent searches, and the search box offers no suggestions. Nothing else breaks: searching, filtering and every list still work, because the suggestion list is the only thing that reads this table |
 | `003_access_control.sql` | **on an existing database only** — the permission rows and the PM / 담당영업 attributes | every screen answers 403, for everybody. The deployed application asks `sys_role_permission` what a role may do; until this runs that table does not exist, so the answer is "nothing" and the message blames the role. The reverse mistake is louder and better: running it against a *new* database fails on apply, because `sys_role_auth` is not there to read |
+| `005_project_acceptance.sql` | **on an existing database only** — `project.acceptance_status` and `project_acceptance` | **the project screens stop working entirely**, which is worse than it sounds for a feature nobody has used yet: the column is in the SELECT list of every project read, so the list and the detail answer `42703` and render as an error. This is the one in this table whose symptom is bigger than its feature |
 
 Both install files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
 applying `002` to a database that already has some of these rows adds only what is missing.
@@ -1023,7 +1025,7 @@ offline against a throwaway database:
 docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
-for f in 001_schemas 002_initial_seeding; do
+for f in 001_schemas 002_initial_seeding 005_project_acceptance; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
@@ -1279,6 +1281,127 @@ is what commits the company to the amount, and this mail tells a translator to s
 The button is disabled with that explanation until the PO is approved.
 
 ---
+
+### 6.5 Project acceptance — the PM answers
+
+A project is assigned to a PM, and the PM says yes or no. Three values on
+`project.acceptance_status`, as specified: **0** assigned and unanswered, **1** accepted, **-1**
+rejected. The column holds the current answer; `project_acceptance` holds every answer ever given,
+with who gave it, when, and the note they left.
+
+The whole feature is four rules, and three of them are predicates in one UPDATE
+(`ProjectAcceptanceOps`):
+
+1. **Only the assigned PM may answer** — `prj_pm_id = <caller>`. This is deliberately *not* a
+   permission. "May accept projects" is not the question; "may accept THIS project" is, and that is
+   a fact about one row that no permission can express. The route is therefore gated on
+   `PROJECT:read` — you must be able to see projects at all — and the real test is in the statement.
+   The screen's condition is the same comparison on `staffId`, so it cannot offer a button the
+   server will refuse.
+2. **Only an unanswered project may be answered** — `acceptance_status = 0`. Without this predicate
+   the endpoint quietly *is* the un-accept that was deliberately left out: an accepted project could
+   be rejected by pressing the other button.
+3. **Reassigning the PM resets it to 0.** The previous PM's answer belonged to them, and the new one
+   has not been asked. It is a `CASE` inside `ProjectUpdateOps` that fires only when the id actually
+   **differs** — and that condition is load-bearing, because the project form PATCHes every field on
+   every save. An unconditional reset would ask a PM to accept the same project again each time
+   somebody corrected a typo, with nothing on any screen to explain why.
+4. **There is no un-accept.** A PM who accepted and then cannot deliver is handled by reassigning
+   the project, which is somebody else's act and leaves a record of its own. A superuser gets no
+   override here either: "the assigned PM answered" has to mean that or it means nothing.
+5. **The 담당영업 can ask again, but only after a rejection** —
+   `POST /projects/{id}/acceptance/again`, with `prj_mgr_id = <caller>` and
+   `acceptance_status = -1` as predicates. The second one is what keeps rule 4 true from the other
+   side: without it this endpoint resets an *accepted* project to unanswered, which is the
+   withdrawal rule 4 refuses, performed by somebody other than the person who gave the answer.
+   Unlike the acceptance route this one is gated on `PROJECT:update`, because it re-opens a
+   project's workflow state rather than answering for it.
+
+   It writes **no** `project_acceptance` row. That table records answers PMs gave, and its CHECK
+   refuses the 0 a re-request would store; the rejection it follows stays in the history with its
+   reason, which is the part anybody goes looking for. The cost, stated so it is a decision rather
+   than a surprise: *"the 담당영업 asked again on the 3rd"* is recorded nowhere. A full log of the
+   column's transitions would be a different table.
+
+#### The two dashboards are where this is worked
+
+Both panels come from the dashboard endpoint (`pendingAcceptance`), and the two roles mean different
+things by "pending" — one `ACCEPTANCE_FILTER` per role, not one filter with a parameter:
+
+| Screen | Rows | What can be done from there |
+|---|---|---|
+| PM — **인계받은 프로젝트 목록** | assigned to me, `acceptance_status = 0` | accept, or reject with a reason |
+| 담당영업 — **수락되지 않은 내 프로젝트** | mine, `acceptance_status <> 1` — unanswered *and* rejected | on a rejected one: reassign the PM, ask again, or delete it |
+
+A PM's panel deliberately drops a project the moment they answer it. The 담당영업's keeps both
+states, because a project sitting unanswered for a week and one that came back are the same problem
+to the person who sold it: nobody is working on it.
+
+The rejection reason is printed under the project name in the 담당영업's panel, and that is the
+reason the panel is not just `GET /projects?acceptanceStatus=-1`. The list endpoint can filter on the
+column but cannot say *why* — and putting the latest answer on `ProjectRow` would put it in the
+INSERT and UPDATE paths too, where there is no answer row to join to yet (`projectColumns` is shared
+with `RETURNING`). So the panel asks for its own shape, with the latest answer from a
+`LEFT JOIN LATERAL ... LIMIT 1`. Without the `LIMIT` a project rejected twice appears twice, each row
+carrying a different reason, and the panel reads as two projects in trouble.
+
+#### Why the record table exists beside the column
+
+Because rule 3 destroys the column's history on purpose. A project rejected by A, reassigned, and
+accepted by B reads as `1` afterwards, and the question somebody asks a week later — *who turned
+this down, and why* — is unanswerable from the column alone. `project_acceptance` is append-only,
+has **no UNIQUE constraint** (a project reassigned after a rejection collects a second row, and that
+sequence is the thing being recorded), and allows only 1 and -1: a `0` row would be a record of
+nothing having happened. The project detail screen shows it above the money, because on a rejected
+project it is the only thing on the page that says what has to happen next.
+
+#### Existing projects read as unanswered, and are not backfilled
+
+Every project in the database shows **수락 대기** the moment `005` applies, including ones delivered
+and invoiced years ago. That is deliberate. `UPDATE project SET acceptance_status = 1` would assert
+that somebody accepted them, with no `project_acceptance` row to say who or when — a claim that can
+never be checked and is false. A test asserts the migration contains no such statement, so it cannot
+be added later as a tidy-up. If the noise is unwanted, the honest fix is the **수락** filter on the
+project list, not a fact in the table.
+
+Two things the acceptance deliberately does **not** do: it gates nothing (a rejected project can
+still have jobs and POs created under it, because nobody said the work stops), and nothing notifies
+the PM that they have been assigned something. Both are decisions to revisit, not oversights.
+
+#### Who may be named — the attributes are now enforced
+
+The project form has pickers for **PM** and **영업담당**, and each lists only the people carrying the
+matching `staff_attribute` (`GET /api/v0/staff/assignable?attribute=...`). The two are independent:
+one person can hold both, and most sales managers do not hold the PM one.
+
+The picker is a convenience over the rule, not the rule. `createProject` and `updateProject` refuse
+an id that does not carry the attribute — otherwise the picker is decoration and any staff id, from
+an old tab or a script, still saves. Three details worth knowing, because each is a judgement that
+could reasonably have gone the other way:
+
+- **The list and the check are not the same question.** The picker offers `active` holders only; the
+  check accepts any undeleted one. A project assigned years ago to somebody who has since left has
+  to stay editable — if the check required `active`, correcting such a project's *name* would be
+  refused, and the message would name a person the editor never mentioned.
+- **An assignee that is not changing is not validated.** The form submits every field on every save,
+  so `updateProject` reads the project first and checks only the ids the request actually alters.
+  Same reason as above, one step further: an attribute revoked after an assignment must not freeze
+  the project.
+- **The creator is defaulted into a seat only if they may hold it** — the PM seat if they carry that
+  attribute, else the 영업담당 seat, else neither. The default exists so somebody who creates a
+  project and leaves both boxes empty can still see it (it would otherwise match neither ownership
+  column); making it unconditional would now fail the check it feeds.
+
+`영업담당` defaults to the person filling the form in, when they are eligible. Leaving it blank is
+not neutral: the re-request endpoint's authority is `prj_mgr_id = <caller>`, so a project with no
+영업담당 has nobody who can ask its PM to look again after a rejection — it loses its only route out
+of that state, and the loss is invisible until somebody needs it.
+
+`GET /api/v0/staff/assignable` is the widest-read endpoint about other people in this API: `anyStaff`
+rather than a permission, like `/api/v0/codes`, because the project form cannot be filled in without
+it. It answers an id, a name and the legacy `mgr_id` — less than the project list already shows about
+the same people — and it refuses `NEOTMS_USER_ATTRIBUTE_SUPERUSER`, which would otherwise make it
+"who are the administrators" for every staff member in the company.
 
 ### 6.3 `003_access_control.sql` — moving a live database to named permissions
 

@@ -22,6 +22,8 @@ import {
   updateCustomer,
   updateInvoice,
   updateJob,
+  requestProjectAcceptanceAgain,
+  setProjectAcceptance,
   updateProject,
   updatePurchaseOrder,
   createAttachmentUpload,
@@ -48,6 +50,7 @@ import type {
   JobUpdate,
   PoApprovalInput,
   PoSettlementInput,
+  ProjectAcceptanceInput,
   ProjectInput,
   PurchaseOrderInput,
   PurchaseOrderUpdate,
@@ -505,6 +508,43 @@ export function useUpdateProject() {
     mutationFn: ({ id, input }: { id: string; input: Partial<ProjectInput> }) =>
       updateProject(id, input),
     onSuccess: () => invalidateAll(qc, PROJECT_AFFECTS),
+  })
+}
+
+/**
+ * Accept or reject. One of the NARROWEST write invalidations in this file - a single key.
+ *
+ * Not `PROJECT_AFFECTS`, because this call moves no money. The jobs and the purchase orders are
+ * untouched, and no figure on any report or dashboard reads whether a PM accepted. Invalidating all
+ * five out of habit would re-read the list, the jobs, the POs, the reports and both dashboards on
+ * every button press, and this system's cost is essentially its call count.
+ *
+ * `neotmsKeys.projects` covers the list AND the detail, because those two keys share that prefix
+ * (neotms.keys.ts). The detail must be included: it carries the history this call appends to.
+ */
+export function useSetProjectAcceptance() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: ProjectAcceptanceInput }) =>
+      setProjectAcceptance(id, input),
+    onSuccess: () => invalidateAll(qc, [neotmsKeys.projects, neotmsKeys.dashboards]),
+  })
+}
+
+/**
+ * Ask a rejected project's PM again. Invalidates the same single key as the answer itself.
+ *
+ * `neotmsKeys.projects` covers the list and the detail; `neotmsKeys.dashboards` is ALSO needed here
+ * and is the reason this is not identical to `useSetProjectAcceptance` - this call is made FROM the
+ * dashboard, whose panel is what has to change when it succeeds. (The answer hook gets away without
+ * it only because the dashboard's own panel re-reads on the same invalidation of its own key; both
+ * now name it, so neither depends on the other's net.)
+ */
+export function useRequestAcceptanceAgain() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => requestProjectAcceptanceAgain(id),
+    onSuccess: () => invalidateAll(qc, [neotmsKeys.projects, neotmsKeys.dashboards]),
   })
 }
 
