@@ -11,7 +11,7 @@
  * 우선순위: 사용자 규칙(목록 위쪽이 먼저) > 기본 규칙 > 칸 꾸밈 > 행 꾸밈 > 열 꾸밈.
  * 구글 시트처럼 조건부 서식이 손으로 칠한 서식을 이긴다 — 조건이 풀리면 원래 서식이 돌아온다.
  */
-import type { PmCondClause, PmCondRule, PmStyle } from '@/apis/pmsheet.api'
+import type { PmCondClause, PmCondRule, PmStyle } from '../../apis/pmsheet.types'
 import { dayState, isYmd, todayYmd } from './sheetFormat'
 
 export const TODAY_STYLE: PmStyle = { bg: '#FF9900', fg: '#FFFFFF', bold: true }

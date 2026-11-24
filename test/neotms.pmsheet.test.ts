@@ -55,7 +55,7 @@ describe("PM states", () => {
 
   it("drive the project state through bound parameters, not literals", () => {
     const ops = PmProjectStateSyncOps("1", "t");
-    const names = ops.parameters.map((p) => p.name);
+    const names = (ops.parameters ?? []).map((p) => p.name);
     expect(names).toEqual(expect.arrayContaining(["st_active", "st_done", "st_hold"]));
     expect(ops.sql).toContain("'납품 완료' THEN :st_done");
     expect(ops.sql).toContain("'홀딩/캔슬' THEN :st_hold");

@@ -7,28 +7,14 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { neotmsApi } from './neotms.client'
+import type { PmCondRule, PmStyle } from './pmsheet.types'
+
+export type { PmCondClause, PmCondOp, PmCondRule, PmStyle } from './pmsheet.types'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
 /* -------------------------------------------------------------------------- */
 
-/** 칸·행·열의 꾸밈. 없는 속성은 '물려받음'. */
-export interface PmStyle {
-  bg?: string | null
-  fg?: string | null
-  size?: number | null
-  bold?: boolean | null
-  italic?: boolean | null
-  underline?: boolean | null
-  strike?: boolean | null
-  align?: 'left' | 'center' | 'right' | null
-  valign?: 'top' | 'middle' | 'bottom' | null
-  border?: 'none' | 'thin' | 'thick' | null
-  /** 테두리를 그릴 변: t·b·l·r 조합. */
-  borderSides?: string | null
-  borderColor?: string | null
-  decimals?: number | null
-}
 
 export interface PmPoBrief {
   poId: string
@@ -96,38 +82,6 @@ export interface PmColumnsPref {
   styles?: Record<string, PmStyle>
   custom?: PmCustomColumn[]
   hidden?: string[]
-}
-
-/** 조건부 서식 규칙 하나. */
-export type PmCondOp =
-  | 'contains'
-  | 'notContains'
-  | 'empty'
-  | 'notEmpty'
-  | 'equals'
-  | 'dateBefore'
-  | 'dateOn'
-  | 'dateAfter'
-
-export interface PmCondClause {
-  /** 조건을 볼 열. 비우면 서식을 칠할 그 칸 자신. */
-  column?: string | null
-  op: PmCondOp
-  /** 글자 조건의 값, 또는 날짜 조건의 기준일(`today` 또는 `YYYY-MM-DD`). */
-  value?: string
-}
-
-export interface PmCondRule {
-  id: string
-  name?: string
-  /** 서식을 칠할 열들. */
-  columns: string[]
-  join: 'and' | 'or'
-  clauses: PmCondClause[]
-  style: PmStyle
-  /** 행 전체를 칠할지. */
-  wholeRow?: boolean
-  enabled?: boolean
 }
 
 export interface PmFilterFavorite {
