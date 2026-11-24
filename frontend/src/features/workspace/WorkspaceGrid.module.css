@@ -73,3 +73,99 @@
   color: var(--nt-ink);
   border-color: var(--nt-ink3);
 }
+
+/*
+ * 굵기와 크기. **클래스로 거는 이유**는 ReactGrid 의 `CellStyle` 이 색과 테두리만 받기
+ * 때문이다 — `fontWeight` 와 `fontSize` 는 그 타입에 없고, 넣어도 조용히 버려진다.
+ *
+ * ## 선택자가 네 겹인 이유
+ *
+ * ReactGrid 자신이 `.reactgrid-content .rg-pane .rg-cell { font-size: 1em }` 을 건다. 클래스
+ * 셋짜리 선택자이므로 `.sz14` 한 겹으로는 **이기지 못하고, 조용히 진다** — 글자 크기를 골라도
+ * 아무 일도 일어나지 않는다. 브라우저에서 확인하기 전까지는 보이지 않는 종류의 결함이다.
+ * 그래서 네 겹으로 적는다. 굵기는 ReactGrid 가 건드리지 않지만 같은 모양으로 둔다.
+ *
+ * 크기를 17개 미리 만들어 둔다. 숫자를 CSS 로 흘려 넣는 방법도 있지만, 만들어 둔 클래스는
+ * 주입할 것이 없고 빌드 결과에 전부 보인다. 범위 밖의 값은 맞는 클래스가 없어 무시되므로,
+ * 저장된 값이 어떻든 시트는 읽을 수 있는 크기로 남는다.
+ */
+.wrap :global(.reactgrid-content) :global(.rg-cell).bold { font-weight: 700; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).notBold { font-weight: 400; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz8 { font-size: 8px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz9 { font-size: 9px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz10 { font-size: 10px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz11 { font-size: 11px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz12 { font-size: 12px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz13 { font-size: 13px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz14 { font-size: 14px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz15 { font-size: 15px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz16 { font-size: 16px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz17 { font-size: 17px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz18 { font-size: 18px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz19 { font-size: 19px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz20 { font-size: 20px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz21 { font-size: 21px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz22 { font-size: 22px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz23 { font-size: 23px; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).sz24 { font-size: 24px; }
+
+/*
+ * 기울임·밑줄·취소선·정렬. 위의 굵기·크기와 같은 네 겹 선택자다.
+ *
+ * **정렬은 `text-align` 이 아니라 `justify-content` 다.** ReactGrid 의 칸은
+ * `display: flex; flex-direction: row` 이므로 `text-align` 은 아무 일도 하지 않는다 —
+ * 소스만 봐서는 맞아 보이고 브라우저에서만 보이는 종류의 차이다. 기본값(`flex-start`)을
+ * 왼쪽 정렬에도 적어 두는 이유는, 열에 가운데 정렬이 걸린 상태에서 칸 하나만 왼쪽으로
+ * 되돌릴 수 있어야 하기 때문이다.
+ *
+ * 밑줄과 취소선은 `text-decoration` 하나를 두고 다투므로 '둘 다' 를 위한 규칙이 따로 있다.
+ */
+.wrap :global(.reactgrid-content) :global(.rg-cell).italic { font-style: italic; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).underline { text-decoration: underline; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).strike { text-decoration: line-through; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).underStrike { text-decoration: underline line-through; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).alignLeft { justify-content: flex-start; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).alignCenter { justify-content: center; }
+.wrap :global(.reactgrid-content) :global(.rg-cell).alignRight { justify-content: flex-end; }
+
+/* 머리글 칸 — 이름과 정렬 화살표. */
+.headerCell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  width: 100%;
+  overflow: hidden;
+}
+
+.headerText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 정렬 화살표. 평소에는 흐리게 — 누를 수 있다는 것만 알리고, 어느 열로 정렬 중인지를 가리지
+ * 않는다. 정렬 중인 열에서만 진해진다(`.sortOn`).
+ */
+.sortBtn {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: var(--nt-ink3);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.sortBtn:hover {
+  opacity: 1;
+}
+
+.sortOn {
+  color: var(--nt-ink);
+  opacity: 1;
+  font-size: 11px;
+}

@@ -1096,6 +1096,101 @@ export const WorkspaceCellSchema = v.object({
   value: v.pipe(v.string(), v.maxLength(2000)),
 });
 
+/**
+ * A colour, as six hex digits with a hash.
+ *
+ * The same pattern the three tables CHECK, and checked here too rather than only there. A value
+ * that fails at the database answers 23514 and a message naming a constraint; a value that fails
+ * here answers 400 and says what a colour looks like.
+ *
+ * The narrowness is the point. These strings end up in a browser's style attribute, so anything
+ * that is not literally a colour - `red; background-image: url(...)` - has no business getting
+ * past the API, whatever the browser would make of it.
+ */
+const ColorSchema = v.pipe(v.string(), v.trim(), v.regex(/^#[0-9a-fA-F]{6}$/, "must be #rrggbb"));
+
+/**
+ * The four style properties, each optional and each nullable.
+ *
+ * Optional carries "leave this alone" and null carries "clear it" - the distinction the whole
+ * toolbar rests on. Setting a background must not clear a bold, and "clear formatting" is all four
+ * sent as null.
+ */
+export const WorkspaceStyleSchema = v.object({
+  bgColor: settable(ColorSchema),
+  textColor: settable(ColorSchema),
+  /** Bounded to what a grid row can hold without the sheet becoming a column of ragged heights. */
+  textSize: settable(v.pipe(v.number(), v.integer(), v.minValue(8), v.maxValue(24))),
+  bold: settable(v.boolean()),
+  italic: settable(v.boolean()),
+  underline: settable(v.boolean()),
+  strike: settable(v.boolean()),
+  /** The same three words the CHECK accepts. Validated here so the refusal can say them. */
+  textAlign: settable(v.picklist(["left", "center", "right"])),
+});
+
+/**
+ * Which column: one of the fourteen the application ships, by key, or one of this person's own,
+ * by id.
+ *
+ * Both are optional here and the manager refuses a reference that names neither or both. A valibot
+ * variant would say it in the type, at the cost of two nearly identical object schemas and an
+ * error message that names a discriminator the client never sent.
+ */
+const ColumnRefSchema = v.object({
+  key: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(40))),
+  id: v.optional(IdSchema),
+});
+
+/**
+ * Where every column now sits and how wide it is - the complete layout, after a drag.
+ *
+ * Complete because a partial one is not "leave the rest alone": the columns left out keep stale
+ * positions and land in the middle of the ones that moved. 60 is the ceiling - fourteen fixed
+ * columns and the thirty custom ones a person may have, with room to spare.
+ */
+export const WorkspaceLayoutSchema = v.object({
+  columns: v.pipe(
+    v.array(
+      v.object({
+        key: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(40))),
+        id: v.optional(IdSchema),
+        ordNo: v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(200)),
+        /** The same bounds the CHECK uses: narrower than 40px is unreadable, wider is a mistake. */
+        width: v.pipe(v.number(), v.integer(), v.minValue(40), v.maxValue(800)),
+      }),
+    ),
+    v.minLength(1),
+    v.maxLength(60),
+  ),
+});
+
+/**
+ * One style, applied to a selection.
+ *
+ * The three target lists are bounded because a selection is whatever somebody dragged over, and
+ * the statement that writes it binds one array per list. A thousand cells is a block of fifty rows
+ * across twenty columns - far past any real selection, and small enough to be one statement.
+ */
+export const WorkspaceStyleApplySchema = v.object({
+  style: WorkspaceStyleSchema,
+  cells: v.optional(
+    v.pipe(
+      v.array(
+        v.object({
+          key: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(40))),
+          id: v.optional(IdSchema),
+          poId: IdSchema,
+        }),
+      ),
+      v.maxLength(1000),
+    ),
+    [],
+  ),
+  columns: v.optional(v.pipe(v.array(ColumnRefSchema), v.maxLength(60)), []),
+  rows: v.optional(v.pipe(v.array(IdSchema), v.maxLength(500)), []),
+});
+
 /* -------------------------------------------------------------------------- */
 /* Inferred types                                                             */
 /* -------------------------------------------------------------------------- */
@@ -1132,3 +1227,5 @@ export type SelfProfile = v.InferOutput<typeof SelfProfileSchema>;
 export type WorkspaceColumnInput = v.InferOutput<typeof WorkspaceColumnSchema>;
 export type WorkspaceColumnOrder = v.InferOutput<typeof WorkspaceColumnOrderSchema>;
 export type WorkspaceCellWrite = v.InferOutput<typeof WorkspaceCellSchema>;
+export type WorkspaceLayoutInput = v.InferOutput<typeof WorkspaceLayoutSchema>;
+export type WorkspaceStyleInput = v.InferOutput<typeof WorkspaceStyleApplySchema>;

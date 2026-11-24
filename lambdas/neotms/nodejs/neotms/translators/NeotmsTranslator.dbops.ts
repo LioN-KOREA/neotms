@@ -33,6 +33,7 @@ import {
 } from "../NeotmsQuery.js";
 import {
   insertFragments,
+  setAssignments,
   updateFragments,
   type FieldSpec,
   type WriteContext,
@@ -311,9 +312,7 @@ export const TranslatorUpdateOps: (
   return {
     sql: `
       UPDATE translator
-         SET ${fields.fragment},
-             updated_at = now(),
-             created_by = :created_by
+         SET ${setAssignments([fields.fragment], "updated_at = now()", "created_by = :created_by")}
        WHERE id = :id
          AND deleted = false
       RETURNING ${translatorColumns("translator")}

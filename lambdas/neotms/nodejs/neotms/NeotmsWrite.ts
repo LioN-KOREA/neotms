@@ -93,9 +93,10 @@ export function insertFragments<T>(
 /**
  * The `SET` assignments and parameters for an UPDATE.
  *
- * `fragment` is empty when the body mentioned no writable field. Callers must check: an UPDATE with
- * an empty SET is a syntax error, and - more to the point - a request that changes nothing is a
- * request the client got wrong, so it deserves a 400 rather than a cheerful 200.
+ * `fragment` is empty when the body mentioned no writable field, which is NOT the same as a body
+ * that changes nothing: a PATCH naming only `jobSlang` writes the detail table and nothing on
+ * `job`. Build the SET with `setAssignments` rather than interpolating this directly, so that an
+ * empty fragment cannot produce `SET ,`.
  */
 export function updateFragments<T>(
   specs: readonly FieldSpec<T>[],
@@ -106,6 +107,32 @@ export function updateFragments<T>(
     fragment: present.map((spec) => `${spec.column} = :${spec.column}`).join(",\n           "),
     parameters: parametersFor(present, input),
   };
+}
+
+/**
+ * The body of a `SET`, from the assignments that exist plus the ones that always do.
+ *
+ * ## The bug this exists to make unrepresentable
+ *
+ * `SET ${fields.fragment}, updated_at = now()` reads fine and is wrong, because `fragment` is empty
+ * whenever the request names no column ON THIS TABLE. That is not an exotic case: `job_slang`,
+ * `job_volume`, `po_slang` and `po_volume` moved to the detail tables, so a PATCH of only the source
+ * language contributes nothing to `job` - and the statement becomes `SET , updated_at = now()`,
+ * which PostgreSQL rejects with 42601 and the API reports as a 500 "Failed to execute statement".
+ *
+ * It stayed hidden because every FORM sends every field. The first client to send one field at a
+ * time was the 나의 업무 sheet, where it broke three of the fourteen columns and nothing else.
+ *
+ * So the audit stamps go INSIDE the list rather than after it, and an empty `parts` simply yields
+ * the stamps. A body naming only detail columns then updates `updated_at` on the parent and returns
+ * it, which is the honest answer: that row's job did change.
+ *
+ * `parts` entries are dropped when blank, so callers can pass conditional fragments without
+ * guarding each one. The two ops whose table has no audit column (`sys_code`) pass no `always` and
+ * therefore still rely on their manager refusing an empty body - which every update manager does.
+ */
+export function setAssignments(parts: readonly string[], ...always: readonly string[]): string {
+  return [...parts.filter((part) => part.trim().length > 0), ...always].join(",\n             ");
 }
 
 /**

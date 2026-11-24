@@ -83,6 +83,7 @@ import {
   derivedInsert,
   derivedUpdate,
   insertFragments,
+  setAssignments,
   updateFragments,
   upsertFragments,
   type DerivedSpec,
@@ -788,10 +789,11 @@ export const PoUpdateOps: (
   return {
     sql: `
       UPDATE purchase_order po
-         SET ${[fields.fragment, ...derived].filter((f) => f.length > 0).join(",\n             ")},
-             ${stateTouched ? "po_state_dt = now()," : ""}
-             updated_at = now(),
-             created_by = :created_by
+         SET ${setAssignments(
+           [fields.fragment, ...derived, stateTouched ? "po_state_dt = now()" : ""],
+           "updated_at = now()",
+           "created_by = :created_by",
+         )}
         FROM job j, project p
        WHERE po.id = :id
          AND po.deleted = false

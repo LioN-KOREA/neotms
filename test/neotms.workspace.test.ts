@@ -29,12 +29,25 @@
 // WHERE EXISTS` writes zero rows when the predicate fails rather than raising - are PostgreSQL
 // behaviour this file assumes and does not prove.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { JobUpdateOps } from "../lambdas/neotms/nodejs/neotms/jobs/NeotmsJob.dbops.js";
+import { PoUpdateOps } from "../lambdas/neotms/nodejs/neotms/purchase-orders/NeotmsPurchaseOrder.dbops.js";
+import { ProjectUpdateOps } from "../lambdas/neotms/nodejs/neotms/projects/NeotmsProject.dbops.js";
+import { CustomerUpdateOps } from "../lambdas/neotms/nodejs/neotms/customers/NeotmsCustomer.dbops.js";
+import { TranslatorUpdateOps } from "../lambdas/neotms/nodejs/neotms/translators/NeotmsTranslator.dbops.js";
+import { StaffAdminUpdateOps } from "../lambdas/neotms/nodejs/neotms/staff/NeotmsStaffAdmin.dbops.js";
+import { RoleUpdateOps } from "../lambdas/neotms/nodejs/neotms/staff/NeotmsRoleAdmin.dbops.js";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   WORKSPACE_SORTS,
   WorkspaceCellClearOps,
+  WorkspaceCellPruneOps,
+  WorkspaceCellStyleOps,
+  WorkspaceColumnPruneOps,
+  WorkspaceLayoutCustomOps,
+  WorkspaceLayoutFixedOps,
+  WorkspaceRowStyleOps,
   WorkspaceCellWriteOps,
   WorkspaceColumnCreateOps,
   WorkspaceColumnDeleteOps,
@@ -82,6 +95,18 @@ const defaultColumns = (): { key: string; label: string; source: string; kind: s
   return entries.map((m) => ({ key: m[1]!, label: m[2]!, source: m[3]!, kind: m[4]! }));
 };
 
+/** Every `.dbops.ts` under a directory. */
+const walkTsFiles = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return walkTsFiles(full);
+    return entry.name.endsWith(".dbops.ts") ? [full] : [];
+  });
+
+/** A caller who sees every row, so the scope clause contributes nothing to the assertions. */
+const CALLER = { staffId: "1", mgrId: "kim3", seesEveryRow: true } as never;
+const CTX = { actor: "kim3", ip: null };
+
 const SHEET = WorkspaceSheetOps("7", {
   limit: 200,
   cursor: null,
@@ -108,7 +133,16 @@ describe("나의 업무 — whose sheet it is", () => {
      * may see", silently and with no visible change to the screen except more rows.
      */
     expect(code(dbops())).not.toContain("scopeClause");
-    expect(SHEET).not.toContain(" OR ");
+
+    /*
+     * And the sheet's own WHERE does not OR anything, which is the shape a scope clause would
+     * arrive in. Asserted on that clause alone rather than on the whole statement: the cell-style
+     * aggregate legitimately ORs the four style columns together to find the styled rows, and a
+     * test that could not tell the two apart would have to be deleted the first time styling grew.
+     */
+    const where = SHEET.slice(SHEET.indexOf("WHERE po.deleted"), SHEET.lastIndexOf("ORDER BY"));
+    expect(where).toContain("p.prj_pm_id = :pm_id");
+    expect(where).not.toContain(" OR ");
   });
 
   test("a sheet row only ever reaches live rows of live parents", () => {
@@ -378,8 +412,19 @@ describe("나의 업무 — what the sheet must not become", () => {
     const gridSource = code(
       repoFile("frontend", "src", "features", "workspace", "WorkspaceGrid.tsx"),
     );
-    // Columns, headers and cells: three uses of the one array, and no fourth list anywhere.
-    expect((gridSource.match(/DEFAULT_COLUMNS\.map/g) ?? []).length).toBe(3);
+    /*
+     * The grid builds its ReactGrid columns, its header row and its cells from ONE list, which is
+     * what stops a value being drawn one column to the left of its heading. That list used to be
+     * `DEFAULT_COLUMNS` directly; since the fixed columns gained stored positions and widths it is
+     * `sheetColumns`, which `mergeColumns` produces by laying this person's settings over the
+     * table above. Three uses, and the grid no longer reaches past the merge to the raw table.
+     */
+    expect(gridSource).toContain("mergeColumns(columns)");
+    expect(gridSource).not.toContain("DEFAULT_COLUMNS");
+    // The three things built from it, named rather than counted.
+    expect(gridSource).toContain("const gridColumns: Column[] = useMemo(");
+    expect(gridSource).toContain("cells: sheetColumns.map((column): SortHeaderCell => {");
+    expect(gridSource).toContain("const cells: GridCell[] = sheetColumns.map((column): GridCell =>");
   });
 
   test("project-level columns are read-only, and the editable ones say what they write", () => {
@@ -461,5 +506,383 @@ describe("나의 업무 — what the sheet must not become", () => {
     expect(grid).toContain("parseDateField(value)");
     expect(grid).toContain("formatDateField(text)");
     expect(grid).not.toMatch(/type: 'date'/);
+  });
+});
+
+describe("a PATCH that names no column on the parent table", () => {
+  /*
+   * The bug that reached production, and the class it belongs to.
+   *
+   * `SET ${fields.fragment}, updated_at = now()` is wrong whenever the request names no column on
+   * the table being updated - and that is ordinary, not exotic: `job_slang`, `job_volume`,
+   * `po_slang` and `po_volume` live in the detail tables, so a PATCH of only the source language
+   * contributes nothing to `job`. The statement becomes `SET , updated_at = now()`, PostgreSQL
+   * answers 42601, and the API reports a 500 "Failed to execute statement".
+   *
+   * It survived every test and every screen because FORMS SEND EVERY FIELD. The 나의 업무 sheet is
+   * the first client that sends one field at a time, and it broke on exactly three of its fourteen
+   * columns - 출발어, 도착어 and 분량 - while the other eleven worked, which is why the report was
+   * "I cannot update anything from the sheet" rather than anything more specific.
+   *
+   * So this is asserted for EVERY update op rather than for the two that were reported: each is
+   * handed a body naming only fields it does not own, and the SET it produces must still be valid.
+   */
+  const EMPTY_BODY_OPS: { name: string; sql: string }[] = [
+    {
+      name: "job (body: jobSlang, a detail column)",
+      sql: JobUpdateOps(CALLER, "1", { jobSlang: "영어" }, CTX).sql,
+    },
+    {
+      name: "purchase order (body: poVolume, a detail column)",
+      sql: PoUpdateOps(CALLER, "1", { poVolume: "1200" }, CTX).sql,
+    },
+    {
+      name: "project (body: {})",
+      sql: ProjectUpdateOps(CALLER, "1", {}, CTX).sql,
+    },
+    {
+      name: "customer (body: {})",
+      sql: CustomerUpdateOps("1", {}, CTX).sql,
+    },
+    {
+      name: "translator (body: {})",
+      sql: TranslatorUpdateOps("1", {}, CTX).sql,
+    },
+    {
+      name: "staff (body: {})",
+      sql: StaffAdminUpdateOps("1", {}).sql,
+    },
+    {
+      name: "role (body: {})",
+      sql: RoleUpdateOps("1", {}).sql,
+    },
+  ];
+
+  for (const { name, sql } of EMPTY_BODY_OPS) {
+    test(`${name} still emits a valid SET`, () => {
+      // The exact shape of the defect: a comma with nothing before it.
+      expect(sql).not.toMatch(/SET\s*,/);
+      // And its sibling: a SET with nothing at all after it.
+      expect(sql).not.toMatch(/SET\s*(FROM|WHERE|RETURNING)\b/);
+      // What a body of only detail columns should leave behind: the audit stamp, so the parent row
+      // records that it changed. Returning the row is what lets the caller re-read it.
+      expect(sql).toMatch(/SET\s+updated_at = now\(\)/);
+    });
+  }
+
+  test("every update op builds its SET through the one helper", () => {
+    /*
+     * The fix is only a fix while it is the only way the clause is built. Asserted as "no module
+     * interpolates `fields.fragment` into a SET by hand", because that is the shape that was
+     * wrong in eight places at once and read correctly in all of them.
+     */
+    const dbopsDir = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "lambdas",
+      "neotms",
+      "nodejs",
+      "neotms",
+    );
+    const offenders: string[] = [];
+    for (const file of walkTsFiles(dbopsDir)) {
+      const source = readFileSync(file, "utf8");
+      if (!source.includes("updateFragments(")) continue;
+      if (/SET \$\{fields\.fragment\}/.test(source) || /SET \$\{\[fields\.fragment/.test(source)) {
+        offenders.push(path.basename(file));
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("나의 업무 — layout and styling", () => {
+  const schema = () => repoFile("db", "001_schemas.sql");
+  const migration = () => repoFile("db", "007_workspace_styles.sql");
+
+  test("a colour is checked as a colour, in the schema and in both migrations", () => {
+    /*
+     * These strings end up in a browser's style attribute. The API refuses anything that is not
+     * `#rrggbb`, and so does the database - in both places, because they fail differently and both
+     * failures matter: the schema's CHECK is what holds if a future endpoint forgets to validate,
+     * and the request schema is what produces a 400 that says what a colour looks like rather than
+     * a 23514 naming a constraint.
+     */
+    for (const sql of [schema(), migration()]) {
+      expect(sql).toContain("^#[0-9a-fA-F]{6}$");
+      expect(sql).toContain("text_size IS NULL OR text_size BETWEEN 8 AND 24");
+    }
+    const schemas = repoFile("lambdas", "neotms", "nodejs", "neotms", "neotms.schemas.ts");
+    expect(schemas).toContain("/^#[0-9a-fA-F]{6}$/");
+  });
+
+  test("a fixed column and a custom one cannot be confused, and cannot collide", () => {
+    /*
+     * The identity CHECK is what makes `col_key` safe to add to a table that already held custom
+     * columns: exactly one of the two identities, so a custom column cannot lose its label and a
+     * fixed one cannot acquire a competing copy of the UI's word.
+     */
+    for (const sql of [schema(), migration()]) {
+      expect(sql).toContain("CHECK ((col_key IS NULL) <> (col_label IS NULL))");
+      expect(sql).toContain("UNIQUE (staff_id, col_key)");
+    }
+  });
+
+  test("the layout upserts fixed columns and only updates custom ones", () => {
+    /*
+     * Asymmetric on purpose. A fixed column may have no row yet - this is where the fourteen
+     * acquire one - while a custom column's row IS the column, and creating one from a layout
+     * request would mean inventing a column with no label, which the identity CHECK refuses and
+     * which would appear in the sheet as a blank heading.
+     */
+    const fixed = WorkspaceLayoutFixedOps("7", ["poEday"], ["0"], ["120"]).sql;
+    expect(fixed).toContain("INSERT INTO workspace_column");
+    expect(fixed).toContain("ON CONFLICT (staff_id, col_key) DO UPDATE");
+    // No label is written for a fixed column: the UI owns that word.
+    expect(fixed).not.toContain("col_label");
+
+    const custom = WorkspaceLayoutCustomOps("7", ["101"], ["0"], ["150"]).sql;
+    expect(custom).toContain("UPDATE workspace_column");
+    expect(custom).not.toContain("INSERT");
+    expect(custom).toContain("c.staff_id = :staff_id");
+  });
+
+  test("styling a cell is guarded by the same two predicates as writing one", () => {
+    /*
+     * A style is as much a write as a value is. One selection can span columns and rows, so the
+     * predicates are per-pair: a single bad id drops that pair rather than refusing the request or
+     * - far worse - writing the whole selection.
+     */
+    const sql = WorkspaceCellStyleOps("7", ["101"], ["11"], { bgColor: "#FFF2CC" }).sql;
+    expect(sql).toContain("wc.staff_id = :staff_id");
+    expect(sql).toContain("pr.prj_pm_id = :staff_id");
+    expect(sql).toContain("pr.acceptance_status = 1");
+    expect(sql).toContain("ON CONFLICT (column_id, po_id) DO UPDATE");
+
+    const rowSql = WorkspaceRowStyleOps("7", ["11"], { bgColor: "#FFF2CC" }).sql;
+    expect(rowSql).toContain("pr.prj_pm_id = :staff_id");
+    expect(rowSql).toContain("ON CONFLICT (staff_id, po_id) DO UPDATE");
+  });
+
+  test("a patch writes only the properties it names", () => {
+    /*
+     * The whole user interface of a toolbar rests on this. "Make this yellow" must not clear the
+     * bold somebody set last week, so an absent property contributes no column; "clear formatting"
+     * has to be sayable, so a null one does.
+     */
+    const one = WorkspaceCellStyleOps("7", ["101"], ["11"], { bgColor: "#FFF2CC" }).sql;
+    expect(one).toContain("bg_color");
+    expect(one).not.toContain("text_color");
+    expect(one).not.toContain("bold");
+
+    const all = WorkspaceCellStyleOps("7", ["101"], ["11"], {
+      bgColor: null,
+      textColor: null,
+      textSize: null,
+      bold: null,
+    }).sql;
+    for (const column of ["bg_color", "text_color", "text_size", "bold"]) {
+      expect(all).toContain(column);
+    }
+  });
+
+  test("a row that says nothing is deleted, and only then", () => {
+    /*
+     * Before styling, clearing a cell deleted its row and that was the rule. A row can now survive
+     * a cleared value because it carries a colour, and survive cleared colours because it carries
+     * a value - so the condition is "all five are null", which is the only state in which the row
+     * means nothing to anybody.
+     */
+    const prune = WorkspaceCellPruneOps("7").sql;
+    for (const column of ["cell_text", "bg_color", "text_color", "text_size", "bold"]) {
+      expect(prune).toContain(`wc.${column} IS NULL`);
+    }
+    expect(prune).toContain("c.staff_id = :staff_id");
+
+    /*
+     * The column prune is narrower: only FIXED columns. A custom column's row is the column
+     * itself, so an unstyled, unplaced one must survive - deleting it would delete somebody's
+     * column because they dragged it back where it started.
+     */
+    const columnPrune = WorkspaceColumnPruneOps("7").sql;
+    expect(columnPrune).toContain("c.col_key IS NOT NULL");
+    expect(columnPrune).toContain("NOT EXISTS (SELECT 1 FROM workspace_cell");
+  });
+
+  test("the read no longer requires a value to see a style", () => {
+    /*
+     * The filter that used to be right and is now wrong. A row may exist for style alone, on a
+     * fixed column whose value lives in the job or the PO; requiring text would hide exactly
+     * those - which is every styled cell in thirteen of the fourteen fixed columns.
+     */
+    const styles = SHEET.slice(SHEET.indexOf("jsonb_build_object"));
+    expect(styles).toContain("wc.bg_color IS NOT NULL");
+    expect(styles).not.toContain("wc.cell_text IS NOT NULL");
+  });
+
+  test("the size classes outrank ReactGrid's own font-size rule", () => {
+    /*
+     * The defect a browser found, and the only kind of CSS bug that is completely invisible from
+     * the source: ReactGrid ships `.reactgrid-content .rg-pane .rg-cell { font-size: 1em }`, three
+     * classes. A `.sz14 { font-size: 14px }` of one class loses, silently - the toolbar sets a
+     * size, the database stores it, the class is on the element, and nothing changes on screen.
+     *
+     * So every size rule is written four deep. Asserted as "no size rule is a bare class", because
+     * that is the shape that was wrong.
+     */
+    const css = repoFile("frontend", "src", "features", "workspace", "WorkspaceGrid.module.css");
+    const sizeRules = [...css.matchAll(/^(.*)\.sz(\d+) \{/gm)];
+    expect(sizeRules.length).toBe(17);
+    for (const [, prefix] of sizeRules) {
+      expect(prefix).toContain(":global(.rg-cell)");
+    }
+    // And bold, which ReactGrid does not set but which is written the same way on purpose.
+    expect(css).toContain(":global(.rg-cell).bold");
+  });
+});
+
+describe("the modules load at all", () => {
+  test("every style column is spelled the same in the SQL and in the writable fields", () => {
+    /*
+     * Two lists that must agree, kept apart on purpose: the SQL list is read when the module
+     * LOADS (it builds the sheet's aggregates), and the field list belongs beside the writes.
+     * Deriving one from the other is what put a `const` below its own first use and made this
+     * module throw `Cannot access 'STYLE_COLUMNS' before initialization` on import - which takes
+     * down every endpoint in the API, and which TypeScript accepts without complaint because the
+     * use sits inside an arrow function.
+     *
+     * So they are two literals, and this is what stops them drifting. The import at the top of
+     * this file is itself the other half of the guard: a module that cannot load fails here
+     * rather than in production.
+     */
+    const source = dbops();
+    const sqlList = /const STYLE_COLUMNS = \[([\s\S]*?)\] as const;/.exec(source);
+    expect(sqlList).not.toBeNull();
+    const fieldList = /const STYLE_FIELDS[\s\S]*?\n\];/.exec(source);
+    expect(fieldList).not.toBeNull();
+
+    const inSql = [...sqlList![1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    const inFields = [...fieldList![0].matchAll(/column: "([a-z_]+)"/g)].map((m) => m[1]);
+    expect(inSql).toEqual(inFields);
+    expect(inSql).toHaveLength(8);
+  });
+
+  test("the sheet statement is built without touching anything undeclared", () => {
+    // Building it here is the assertion: the module-level template literals run on import, and
+    // the statement below forces the rest.
+    expect(SHEET).toContain("cell_styles");
+    expect(SHEET).toContain("'a', wc.text_align");
+    expect(SHEET).toContain("rs.text_align AS row_text_align");
+  });
+});
+
+describe("나의 업무 — text styles and the header sort", () => {
+  const gridSource = () =>
+    repoFile("frontend", "src", "features", "workspace", "WorkspaceGrid.tsx");
+  /*
+   * Comments stripped, for the reason `sqlCode` and `tsCode` strip them: this file's CSS explains
+   * at length that alignment is NOT text-align, so a negative assertion against the raw text fails
+   * on the explanation - and the next person deletes the explanation to get a green run.
+   */
+  const gridCss = () =>
+    repoFile("frontend", "src", "features", "workspace", "WorkspaceGrid.module.css").replace(
+      /\/\*[\s\S]*?\*\//g,
+      " ",
+    );
+
+  test("alignment is justify-content, because a ReactGrid cell is a flex row", () => {
+    /*
+     * `.rg-cell` is `display: flex; flex-direction: row`, so `text-align` does nothing to it. The
+     * source would look right either way; only a browser says which one moves the text. Pinned
+     * here so the next person does not "fix" it back to the property they expected.
+     */
+    const css = gridCss();
+    expect(css).toContain(".alignLeft { justify-content: flex-start; }");
+    expect(css).toContain(".alignCenter { justify-content: center; }");
+    expect(css).toContain(".alignRight { justify-content: flex-end; }");
+    expect(css).not.toContain("text-align");
+  });
+
+  test("underline and strikethrough can be worn together", () => {
+    /*
+     * They are one CSS property. Two classes means the later rule wins and one of the two vanishes
+     * silently, so there is a third class for the pair - and the grid has to choose it rather than
+     * adding both.
+     */
+    expect(gridCss()).toContain(".underStrike { text-decoration: underline line-through; }");
+    const grid = code(gridSource());
+    expect(grid).toContain("style.underline === true && style.strike === true");
+  });
+
+  test("every style rule outranks ReactGrid's own, not just the sizes", () => {
+    /*
+     * The same specificity trap the font sizes fell into: `.reactgrid-content .rg-pane .rg-cell`
+     * is three classes. Checked for ALL of them now rather than only the sizes, because the next
+     * property added is the one that will be written as a bare class.
+     */
+    const css = gridCss();
+    const rules = [...css.matchAll(/^(.*?)\.(italic|underline|strike|underStrike|alignLeft|alignCenter|alignRight|bold|notBold|sz\d+) \{/gm)];
+    expect(rules.length).toBeGreaterThan(20);
+    for (const [, prefix] of rules) {
+      expect(prefix).toContain(":global(.rg-cell)");
+    }
+  });
+
+  test("the headers can only offer sorts the server actually has", () => {
+    /*
+     * A silent failure if they drift: a key the server does not know falls back to the default
+     * sort, so the arrow moves to the column that was clicked and the rows do not. Both lists are
+     * read as text - one is TypeScript in the browser bundle, the other in the Lambda - so this is
+     * the only place the two can be compared.
+     */
+    const grid = code(gridSource());
+    const map = /const SORTABLE: Record<string, string> = \{([\s\S]*?)\}/.exec(grid);
+    expect(map).not.toBeNull();
+    const offered = [...map![1]!.matchAll(/'([a-z]+)'/g)].map((m) => m[1]!);
+    expect(offered.length).toBeGreaterThan(0);
+
+    const serverKeys = Object.keys(WORKSPACE_SORTS);
+    for (const key of offered) {
+      expect(serverKeys).toContain(key);
+    }
+  });
+
+  test("a style shows up without re-reading the sheet", () => {
+    /*
+     * The bug: a colour only appeared after F5, because nothing refreshed the sheet and nothing
+     * applied it locally either.
+     *
+     * The fix must NOT be invalidation. `useInfiniteQuery` refetches every page it has loaded, so
+     * invalidating would re-read 200 rows per loaded page on every click of a colour swatch. The
+     * cache is patched in place instead, which is only possible because the response carries the
+     * columns back - a cell style in a fixed column needs that column's row id, and the row may
+     * have been created by the very request being answered.
+     */
+    const mutations = code(
+      repoFile("frontend", "src", "apis", "queries", "neotms.mutation.ts"),
+    );
+    const hook = /export function useSetWorkspaceStyles\(\)[\s\S]*?\n\}/.exec(mutations);
+    expect(hook).not.toBeNull();
+    expect(hook![0]).toContain("qc.setQueriesData");
+    expect(hook![0]).not.toContain("invalidateAll");
+    expect(hook![0]).toContain("result.columns");
+
+    // And the server sends them.
+    const manager = code(
+      repoFile("lambdas", "neotms", "nodejs", "neotms", "workspace", "NeotmsWorkspaceManager.ts"),
+    );
+    expect(manager).toContain("ok({ styled, columns:");
+  });
+
+  test("the merge in the browser follows the same rule as the server", () => {
+    /*
+     * The patch semantics exist in two places now - the SQL that stores it and the TypeScript that
+     * predicts what the SQL did. If they disagree the screen shows one thing and the database
+     * holds another, and nobody finds out until the next refresh.
+     */
+    const mutations = code(
+      repoFile("frontend", "src", "apis", "queries", "neotms.mutation.ts"),
+    );
+    expect(mutations).toContain("return { ...base, ...patch }");
   });
 });

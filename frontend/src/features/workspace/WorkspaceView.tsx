@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router'
 import { useProfile, useWorkspace } from '@/apis/queries/neotms.query'
 import type { WorkspaceRow } from '@/apis/neotms.types'
 import {
@@ -7,7 +6,7 @@ import {
   NEOTMS_PERMISSION_PO_UPDATE,
 } from '@/apis/neotms.authorities'
 import { may } from '@/shared/permissions'
-import { ErrorNotice, InfoNotice, LoadMore, SuccessNotice } from '@/shared/ui/Feedback'
+import { ErrorNotice, LoadMore, SuccessNotice } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
 import ui from '@/shared/ui/ui.module.css'
 import {
@@ -15,15 +14,20 @@ import {
   type SwappableTranslatorPo,
 } from '@/features/purchaseorders/TranslatorSwapModal'
 import { WorkspaceColumnsModal } from './WorkspaceColumnsModal'
-import { WorkspaceGrid } from './WorkspaceGrid'
+import { WorkspaceGrid, type WorkspaceSelection } from './WorkspaceGrid'
+import { WorkspaceToolbar } from './WorkspaceToolbar'
 
-/** 정렬 선택지. 서버의 `WORKSPACE_SORTS` 와 같아야 한다 — 없는 키를 보내면 기본값으로 조용히 떨어진다. */
-const SORTS = [
-  { value: 'due', label: '납품일' },
-  { value: 'code', label: 'PO코드' },
-  { value: 'project', label: '프로젝트코드' },
-  { value: 'created', label: '등록순' },
-] as const
+/**
+ * 정렬을 **열 머리글에서** 한다.
+ *
+ * 시트 위에 있던 드롭다운과 오름/내림 단추를 걷어냈다. 스프레드시트에서 정렬은 열에 속한
+ * 동작이고, 머리글에 화살표 하나를 두면 '무엇으로 정렬 중인가' 와 '바꾸는 방법' 을 같은 자리가
+ * 답한다 — 드롭다운은 그 둘을 표에서 떼어 놓고 자리만 넓게 차지했다.
+ *
+ * 정렬할 수 있는 열은 넷이다(`SORTABLE`). 서버가 실제 컬럼으로만 정렬할 수 있기 때문이고,
+ * 그래서 '등록순' 은 화면에서 사라졌다 — 머리글이 없는 정렬이라 걸 자리가 없다. API 에는
+ * 그대로 있으므로 필요해지면 열을 하나 더 열면 된다.
+ */
 
 /**
  * 나의 업무 — 내가 수락한 프로젝트의 PO 를 한 장의 시트로.
@@ -55,6 +59,18 @@ export function WorkspaceView() {
   const [cellError, setCellError] = useState<string | null>(null)
   const [managing, setManaging] = useState(false)
   const [swapping, setSwapping] = useState<SwappableTranslatorPo | null>(null)
+  /*
+   * 지금 고른 범위. 시트가 알려 주고 도구막대가 읽는다.
+   *
+   * 화면이 들고 있는 이유는 **둘 다 필요하기 때문**이다 — 고르는 쪽은 시트이고 칠하는 쪽은
+   * 도구막대이며, 둘은 형제다. 도구막대를 시트 안에 두었다면 상태를 올릴 필요가 없었겠지만,
+   * 그러면 도구막대가 시트의 스크롤 상자 안에서 함께 흘러가 버린다.
+   */
+  const [selection, setSelection] = useState<WorkspaceSelection>({
+    cells: [],
+    columns: [],
+    rows: [],
+  })
 
   const sheet = useWorkspace(sort, dir)
 
@@ -67,7 +83,6 @@ export function WorkspaceView() {
     [sheet.data],
   )
   const columns = sheet.data?.pages[0]?.columns ?? []
-  const unplacedJobs = sheet.data?.pages[0]?.unplacedJobs ?? 0
 
   const mayEditJob = may(profile, NEOTMS_PERMISSION_JOB_UPDATE)
   const mayEditPo = may(profile, NEOTMS_PERMISSION_PO_UPDATE)
@@ -75,9 +90,6 @@ export function WorkspaceView() {
   return (
     <div className={ui.page}>
       <div className={ui.pageBar}>
-        <p className={ui.pageNote}>
-          내가 수락한 프로젝트의 PO 목록입니다. 칸을 두 번 누르면 바로 고쳐집니다.
-        </p>
         <button type="button" className={ui.btn} onClick={() => setManaging(true)}>
           <Icon name="plus" size={13} />
           열 관리
@@ -92,77 +104,60 @@ export function WorkspaceView() {
       <div className={ui.card}>
         <div className={ui.cardHeader}>
           <span>{rows.length}건 표시</span>
-          <span className={ui.spacer} />
-          <label className={ui.hint} htmlFor="ws-sort">
-            정렬
-          </label>
-          <select
-            id="ws-sort"
-            className={ui.select}
-            value={sort}
-            onChange={(e) => setSort(e.target.value)}
-          >
-            {SORTS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
-            onClick={() => setDir(dir === 'asc' ? 'desc' : 'asc')}
-          >
-            {dir === 'asc' ? '오름차순' : '내림차순'}
-          </button>
         </div>
-
-        {/*
-         * PO 가 없는 작업 건수. 위 머리말의 '보이지 않는 것을 말한다' 가 이것이다.
-         *
-         * 작업 목록으로 보내는 링크를 함께 둔다 — 건수만 적으면 "그래서 어느 작업인가" 에 답이
-         * 없고, 그 답을 들고 있는 화면은 작업 목록이다.
-         */}
-        {unplacedJobs > 0 ? (
-          <div className={ui.cardBody}>
-            <InfoNotice>
-              이 시트는 PO 한 건을 한 행으로 보여 줍니다. 수락한 프로젝트의 작업 중{' '}
-              <strong>{unplacedJobs}건</strong>은 아직 PO 가 없어 여기 나오지 않습니다 —{' '}
-              <Link className={ui.btnLink} to="/jobs">
-                작업 목록
-              </Link>
-              에서 확인하세요.
-            </InfoNotice>
-          </div>
-        ) : null}
-
         <div className={ui.cardBodyFlush}>
           {sheet.isLoading ? (
             <p className={ui.cardBody}>불러오는 중…</p>
           ) : rows.length === 0 ? (
             <p className={ui.cardBody}>
-              수락한 프로젝트에 PO 가 없습니다. 프로젝트를 인계받아 수락하면 그 프로젝트의 PO 가
-              여기 모입니다.
+              표시할 항목이 없습니다.
             </p>
           ) : (
-            <WorkspaceGrid
-              rows={rows}
-              columns={columns}
-              mayEditJob={mayEditJob}
-              mayEditPo={mayEditPo}
-              onChangeTranslator={(row: WorkspaceRow) =>
-                setSwapping({
-                  id: row.poId,
-                  poCode: row.poCode,
-                  poTranName: row.poTranName,
-                  translatorId: row.translatorId,
-                  poCoinCode: row.poCoinCode,
-                  poApproved: row.poApproved,
-                  poMoneyState: row.poMoneyState,
-                })
-              }
-              onError={setCellError}
-            />
+            <>
+              {/*
+               * 도구막대는 시트 **바깥**에 있다. 시트는 자기 스크롤 상자를 가지고 있으므로,
+               * 안에 두면 아래로 내려간 순간 색 단추가 화면에서 사라진다 — 칠하려면 매번 맨
+               * 위로 올라와야 한다.
+               */}
+              <WorkspaceToolbar
+                selection={selection}
+                onDone={setNotice}
+                onError={setCellError}
+              />
+              <WorkspaceGrid
+                rows={rows}
+                columns={columns}
+                mayEditJob={mayEditJob}
+                mayEditPo={mayEditPo}
+                onChangeTranslator={(row: WorkspaceRow) =>
+                  setSwapping({
+                    id: row.poId,
+                    poCode: row.poCode,
+                    poTranName: row.poTranName,
+                    translatorId: row.translatorId,
+                    poCoinCode: row.poCoinCode,
+                    poApproved: row.poApproved,
+                    poMoneyState: row.poMoneyState,
+                  })
+                }
+                onError={setCellError}
+                sort={sort}
+                dir={dir}
+                /*
+                 * 같은 열을 다시 누르면 방향이 뒤집히고, 다른 열을 누르면 그 열로 바꾸되
+                 * **오름차순부터** 시작한다. 내림차순이 따라오면 날짜 열에서 가장 먼 미래가
+                 * 먼저 나오는데, 이 시트를 여는 이유는 거의 언제나 그 반대다.
+                 */
+                onSort={(key) => {
+                  if (key === sort) setDir(dir === 'asc' ? 'desc' : 'asc')
+                  else {
+                    setSort(key)
+                    setDir('asc')
+                  }
+                }}
+                onSelectionChange={setSelection}
+              />
+            </>
           )}
         </div>
 

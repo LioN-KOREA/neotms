@@ -1,4 +1,9 @@
-import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from '@tanstack/react-query'
 import {
   approvePurchaseOrder,
   createCode,
@@ -42,6 +47,8 @@ import {
   deleteWorkspaceColumn,
   renameWorkspaceColumn,
   reorderWorkspaceColumns,
+  setWorkspaceLayout,
+  setWorkspaceStyles,
   writeWorkspaceCell,
 } from '../neotms.api'
 import type {
@@ -70,6 +77,9 @@ import type {
   StaffAttributesInput,
   StaffUpdateInput,
   TranslatorInput,
+  WorkspaceColumnRef,
+  WorkspaceSheet,
+  WorkspaceStyle,
 } from '../neotms.types'
 import { neotmsKeys } from './neotms.keys'
 
@@ -684,6 +694,121 @@ export function useReorderWorkspaceColumns() {
  * **실패했을 때는** 화면이 그 칸을 서버 값으로 되돌린다(`WorkspaceGrid`). 저장되지 않은 값이
  * 저장된 것처럼 남아 있는 것이 이 화면에서 가장 비싼 거짓말이다.
  */
+/**
+ * 배치와 꾸밈. 성공해도 **다시 읽지 않는다.**
+ *
+ * 둘 다 사용자가 방금 화면에서 한 일이고 화면은 그 결과를 이미 그리고 있다 — 열을 끌어 놓은
+ * 직후에 시트를 다시 읽으면 200건이 갈아끼워지면서 방금 잡은 스크롤 위치와 선택이 사라진다.
+ * 서버가 거절하면 그때 화면이 되돌린다(`WorkspaceGrid`).
+ */
+export function useSetWorkspaceLayout() {
+  return useMutation({
+    mutationFn: (columns: { key?: string; id?: string; ordNo: number; width: number }[]) =>
+      setWorkspaceLayout(columns),
+  })
+}
+
+/**
+ * 꾸밈을 칠한 **즉시** 화면에 반영한다.
+ *
+ * ## 왜 무효화가 아닌가
+ *
+ * 처음에는 아무것도 하지 않았고, 그래서 칠한 색이 F5 를 누르거나 메뉴를 다시 들어와야 보였다 —
+ * 시트는 서버가 준 `cellStyles`·`rowStyle`·`columns` 를 그리는데 그 데이터를 다시 읽지 않았기
+ * 때문이다.
+ *
+ * 고치는 방법이 둘인데 무효화는 나쁜 쪽이다. `useInfiniteQuery` 를 무효화하면 **이미 읽은
+ * 모든 페이지를 다시 읽는다** — 200건씩 세 페이지를 열어 둔 사람이 색 한 번 칠할 때마다 600건을
+ * 다시 받는다. 그래서 캐시를 **그 자리에서 고친다.** 요청이 성공했으므로 서버 상태는 이미 알고
+ * 있고, 다시 물어볼 것이 없다.
+ *
+ * ## 서버가 열 목록을 돌려주는 이유가 여기 있다
+ *
+ * 고정 열의 칸을 칠하면 그 열의 행이 **이 요청에서 처음 만들어질 수 있다.** 칸 꾸밈은 열 행의
+ * id 로 묶이므로, 브라우저는 그 id 를 알 방법이 없다 — 응답이 열 목록을 싣고 오지 않으면 결국
+ * 전체를 다시 읽어야 한다.
+ */
+export function useSetWorkspaceStyles() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: {
+      style: Partial<WorkspaceStyle>
+      cells?: { key?: string; id?: string; poId: string }[]
+      columns?: WorkspaceColumnRef[]
+      rows?: string[]
+    }) => setWorkspaceStyles(input),
+    onSuccess: (result, input) => {
+      /** 열 참조(고정 키 또는 추가 열 id)를 **열 행 id** 로. 서버가 방금 준 목록으로 푼다. */
+      const idOf = (ref: { key?: string; id?: string }): string | null => {
+        if (ref.id) return ref.id
+        const row = result.columns.find((column) => column.key === ref.key)
+        return row?.id ?? null
+      }
+      const cellTargets = new Map<string, Set<string>>()
+      for (const ref of input.cells ?? []) {
+        const id = idOf(ref)
+        if (!id) continue
+        const set = cellTargets.get(ref.poId) ?? new Set<string>()
+        set.add(id)
+        cellTargets.set(ref.poId, set)
+      }
+      const rowTargets = new Set(input.rows ?? [])
+
+      qc.setQueriesData<InfiniteData<WorkspaceSheet>>(
+        { queryKey: neotmsKeys.workspace },
+        (data) => {
+          if (!data) return data
+          return {
+            ...data,
+            pages: data.pages.map((page) => ({
+              ...page,
+              // 열 목록은 서버가 준 것으로 통째로 갈아끼운다 — 꾸밈과 새 행 id 가 함께 온다.
+              columns: result.columns,
+              items: page.items.map((row) => {
+                const columnIds = cellTargets.get(row.poId)
+                const touchesRow = rowTargets.has(row.poId)
+                if (!columnIds && !touchesRow) return row
+                const cellStyles = { ...row.cellStyles }
+                for (const columnId of columnIds ?? []) {
+                  cellStyles[columnId] = mergeStyle(cellStyles[columnId], input.style)
+                }
+                return {
+                  ...row,
+                  cellStyles,
+                  rowStyle: touchesRow ? mergeStyle(row.rowStyle, input.style) : row.rowStyle,
+                }
+              }),
+            })),
+          }
+        },
+      )
+    },
+  })
+}
+
+/**
+ * 보낸 속성만 덮어쓴 꾸밈. **서버의 규칙과 같아야 한다.**
+ *
+ * 보내지 않은 속성은 그대로, `null` 로 보낸 속성은 지움 — 서버의 `provided` 의미 그대로다. 두
+ * 쪽이 어긋나면 화면과 저장된 값이 달라지고, 그 차이는 새로 고치기 전까지 보이지 않는다.
+ */
+function mergeStyle(
+  current: WorkspaceStyle | null | undefined,
+  patch: Partial<WorkspaceStyle>,
+): WorkspaceStyle {
+  const base: WorkspaceStyle = current ?? {
+    bgColor: null,
+    textColor: null,
+    textSize: null,
+    bold: null,
+    italic: null,
+    underline: null,
+    strike: null,
+    textAlign: null,
+  }
+  return { ...base, ...patch }
+}
+
 export function useWriteWorkspaceCell() {
   return useMutation({
     mutationFn: (input: { columnId: string; poId: string; value: string }) =>

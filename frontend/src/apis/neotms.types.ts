@@ -836,11 +836,47 @@ export interface HandoverMailSent {
 /* 나의 업무                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/** 한 사람이 자기 시트에 추가한 열. */
+/**
+ * 네 가지 꾸밈. 각각 `null` 이면 **지정하지 않음**이고, 색이 없다는 뜻이 아니다.
+ *
+ * 시트는 칸 → 행 → 열 순서로 합친다. 어느 단계에서 비어 있으면 다음 단계의 값이 그대로 보이므로,
+ * 노랗게 칠한 행은 '굵게' 만 지정한 열 안에서도 노란색을 유지한다.
+ */
+export interface WorkspaceStyle {
+  bgColor: string | null
+  textColor: string | null
+  textSize: number | null
+  bold: boolean | null
+  italic: boolean | null
+  underline: boolean | null
+  strike: boolean | null
+  /** 'left' | 'center' | 'right', 또는 null(물려받음). 서버의 CHECK 가 이 세 낱말을 정한다. */
+  textAlign: string | null
+}
+
+/**
+ * 시트의 열 하나에 대한 **이 사람의 설정**.
+ *
+ * `key` 가 있으면 앱이 제공하는 14개 열 중 하나이고(그 열의 이름은 화면 코드에 있다), 없으면
+ * 사람이 만든 열이라 `label` 이 그 이름이다.
+ *
+ * 모든 칸이 `null` 일 수 있다. 행 자체가 **필요할 때만** 생기기 때문이다 — 납품일을 한 번도
+ * 건드리지 않은 사람에게는 그 열의 행이 없고, 없다는 것이 곧 "기본 위치, 기본 너비, 꾸밈 없음"
+ * 이라는 완전한 답이다.
+ */
 export interface WorkspaceColumnDef {
   id: string
-  label: string
-  ordNo: number
+  key: string | null
+  label: string | null
+  ordNo: number | null
+  width: number | null
+  style: WorkspaceStyle
+}
+
+/** 꾸밈을 보낼 대상 열. 고정 열은 `key`, 내가 만든 열은 `id` — 둘 중 하나만 보낸다. */
+export interface WorkspaceColumnRef {
+  key?: string
+  id?: string
 }
 
 /**
@@ -881,8 +917,24 @@ export interface WorkspaceRow {
   poMoneyState: string | null
   /** PO 의 통화. 열로 그리지 않는다 — 번역가 변경 대화상자가 이 값을 쓴다. */
   poCoinCode: string | null
+  /**
+   * PO 자신의 업무 구분. 작업의 것과 **다를 수 있다** — MICE 행사에 통역 PO 가 달린다.
+   *
+   * 분량 칸을 여는 기준이다. 분량은 `po_detail_linguistic` 의 컬럼이므로 비언어 PO 에는
+   * 쓸 자리가 없고, 작업의 구분으로 판단하면 그 칸이 숫자를 받고도 저장하지 않는다.
+   */
+  poType: string | null
   /** 추가 열의 값. 열 id 가 키이고, 없는 키는 빈 칸이다. */
   cells: Record<string, string>
+  /**
+   * 이 행에서 **칸 단위로** 지정된 꾸밈. 열 id 가 키다.
+   *
+   * 값(`cells`)과 따로 오는 이유는 둘이 답하는 질문이 다르기 때문이다 — 값은 추가 열에만 있고,
+   * 꾸밈은 고정 열에도 붙는다. 대부분의 행은 꾸밈이 없으므로 보통 빈 객체다.
+   */
+  cellStyles: Record<string, WorkspaceStyle>
+  /** 행 전체의 꾸밈. 칸보다 약하고 열보다 세다. */
+  rowStyle: WorkspaceStyle | null
 }
 
 /**

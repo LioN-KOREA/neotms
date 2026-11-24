@@ -1391,6 +1391,8 @@ describe("the empty-database bootstrap", () => {
       "004_recent_searches.sql",
       "005_project_acceptance.sql",
       "006_workspace.sql",
+      "007_workspace_styles.sql",
+      "008_workspace_text.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);

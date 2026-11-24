@@ -36,6 +36,7 @@ import {
 } from "../NeotmsQuery.js";
 import {
   insertFragments,
+  setAssignments,
   updateFragments,
   type FieldSpec,
   type WriteContext,
@@ -300,9 +301,7 @@ export const CustomerUpdateOps: (
   return {
     sql: `
       UPDATE customer
-         SET ${fields.fragment},
-             updated_at = now(),
-             created_by = :created_by
+         SET ${setAssignments([fields.fragment], "updated_at = now()", "created_by = :created_by")}
        WHERE id = :id
          AND deleted = false
       RETURNING ${customerColumns("customer")}

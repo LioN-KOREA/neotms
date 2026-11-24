@@ -53,6 +53,7 @@ import {
   derivedInsert,
   derivedUpdate,
   insertFragments,
+  setAssignments,
   updateFragments,
   type DerivedSpec,
   type FieldSpec,
@@ -594,11 +595,11 @@ export const ProjectUpdateOps: (
   return {
     sql: `
       UPDATE project p
-         SET ${[fields.fragment, ...derived, acceptanceReset]
-           .filter((f) => f.length > 0)
-           .join(",\n             ")},
-             updated_at = now(),
-             created_by = :created_by
+         SET ${setAssignments(
+           [fields.fragment, ...derived, acceptanceReset],
+           "updated_at = now()",
+           "created_by = :created_by",
+         )}
        WHERE p.id = :id
          AND p.deleted = false
       ${scope.fragment}

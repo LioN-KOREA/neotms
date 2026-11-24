@@ -43,7 +43,11 @@ import {
   type SqlRow,
 } from "../../utils/PostgresUtils.js";
 import type { FieldSpec } from "../NeotmsWrite.js";
-import { insertFragments, updateFragments } from "../NeotmsWrite.js";
+import {
+  insertFragments,
+  setAssignments,
+  updateFragments,
+} from "../NeotmsWrite.js";
 import type { CodeCreate, CodeUpdate } from "../neotms.schemas.js";
 
 /**
@@ -285,7 +289,7 @@ export const CodeUpdateOps: (id: string, input: CodeUpdate) => SqlOps<CodeRow | 
   return {
     sql: `
       UPDATE sys_code
-         SET ${fields.fragment}
+         SET ${setAssignments([fields.fragment])}
        WHERE id = :id
       RETURNING ${codeColumns("sys_code")}
     `,

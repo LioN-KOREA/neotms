@@ -103,6 +103,8 @@ import {
   WorkspaceCellSchema,
   WorkspaceColumnOrderSchema,
   WorkspaceColumnSchema,
+  WorkspaceLayoutSchema,
+  WorkspaceStyleApplySchema,
   AttachmentUploadSchema,
   PoRequestMailSchema,
   RecentSearchForgetSchema,
@@ -163,6 +165,8 @@ import {
   getWorkspace,
   renameWorkspaceColumn,
   reorderWorkspaceColumns,
+  setWorkspaceLayout,
+  setWorkspaceStyles,
   writeWorkspaceCell,
 } from "./workspace/NeotmsWorkspaceManager.js";
 import { getProfile } from "./profile/NeotmsProfileManager.js";
@@ -663,6 +667,25 @@ const handleWriteWorkspaceCell: RRHandler = async (request) => {
 };
 
 /*
+ * Layout and styling. Both are PUTs carrying a whole state rather than a delta, for the same
+ * reason: a drag moves several columns at once and a toolbar click paints a whole selection, so
+ * the unit the user acted on is the unit the request should carry. A PATCH per column would be
+ * several requests, several chances to fail halfway, and a sheet left in a state nobody chose.
+ *
+ * Still WORKSPACE_READ, like the rest: what these write is the caller's own view of their own
+ * sheet. Nothing here touches a project, a job or a purchase order.
+ */
+const handleSetWorkspaceLayout: RRHandler = async (request) => {
+  const parsed = parseBody(WorkspaceLayoutSchema, request.body);
+  return parsed.ok ? setWorkspaceLayout(callerOf(request), parsed.value) : parsed.response;
+};
+
+const handleSetWorkspaceStyles: RRHandler = async (request) => {
+  const parsed = parseBody(WorkspaceStyleApplySchema, request.body);
+  return parsed.ok ? setWorkspaceStyles(callerOf(request), parsed.value) : parsed.response;
+};
+
+/*
  * Codes - the code tables, in two halves.
  *
  * The read is `anyStaff` and the writes are MAINTENANCE, which is the whole reason there are two
@@ -1016,6 +1039,8 @@ const RECENT_SEARCHES = "/api/v0/me/recent-searches";
 const WORKSPACE = "/api/v0/workspace";
 const WORKSPACE_COLUMNS = "/api/v0/workspace/columns";
 const WORKSPACE_CELLS = "/api/v0/workspace/cells";
+const WORKSPACE_LAYOUT = "/api/v0/workspace/layout";
+const WORKSPACE_STYLES = "/api/v0/workspace/styles";
 const ADMIN_ROLES = "/api/v0/admin/roles";
 /**
  * The role administration listing: every role, its grants, and how many people hold it.
@@ -1142,6 +1167,8 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: `${WORKSPACE_COLUMNS}/:id`, method: "PATCH", handler: handleRenameWorkspaceColumn, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: `${WORKSPACE_COLUMNS}/:id`, method: "DELETE", handler: handleDeleteWorkspaceColumn, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: WORKSPACE_CELLS, method: "PUT", handler: handleWriteWorkspaceCell, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: WORKSPACE_LAYOUT, method: "PUT", handler: handleSetWorkspaceLayout, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: WORKSPACE_STYLES, method: "PUT", handler: handleSetWorkspaceStyles, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
 
   // -- Maintenance (the code tables) ----------------------------------------
   //

@@ -27,7 +27,7 @@
 // columns belong to one person by definition. `NeotmsWorkspace.dbops`'s header has the full
 // argument for why the sheet needs no `scopeClause`.
 
-import { paginate, pgExecute, pgQuery } from "../../utils/PostgresUtils.js";
+import { paginate, pgExecute, pgQuery, pgTransaction } from "../../utils/PostgresUtils.js";
 import type { NeotmsCaller } from "../../auth/NeotmsAuthGuard.js";
 import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js";
 import { readListQuery, sortAlias } from "../NeotmsQuery.js";
@@ -37,18 +37,30 @@ import type {
   WorkspaceCellWrite,
   WorkspaceColumnInput,
   WorkspaceColumnOrder,
+  WorkspaceLayoutInput,
+  WorkspaceStyleInput,
 } from "../neotms.schemas.js";
 import {
   WORKSPACE_SORTS,
   WorkspaceCellClearOps,
+  WorkspaceCellPruneOps,
+  WorkspaceCellStyleOps,
   WorkspaceCellWriteOps,
   WorkspaceColumnCreateOps,
   WorkspaceColumnDeleteOps,
+  WorkspaceColumnEnsureOps,
   WorkspaceColumnOrderOps,
+  WorkspaceColumnPruneOps,
   WorkspaceColumnRenameOps,
+  WorkspaceColumnStyleOps,
   WorkspaceColumnsOps,
+  WorkspaceLayoutCustomOps,
+  WorkspaceLayoutFixedOps,
+  WorkspaceRowStyleOps,
+  WorkspaceRowStylePruneOps,
   WorkspaceSheetOps,
   WorkspaceUnplacedJobsOps,
+  isEmptyStylePatch,
   toWorkspaceRow,
   type WorkspaceColumn,
   type WorkspaceRow,
@@ -228,6 +240,201 @@ export async function writeWorkspaceCell(
      * somebody tabs through a column. Only a write that stored nothing means the ids were refused.
      */
     if (count === 0 && value.length > 0) return notFound("cell");
+    /*
+     * Clearing a value no longer deletes the row, because the row may be carrying a colour. So the
+     * prune runs afterwards and removes only what says nothing at all - no text and no style.
+     * Before styling existed this was the DELETE itself.
+     */
+    if (value.length === 0) await pgExecute(WorkspaceCellPruneOps(caller.staffId));
     return ok({ saved: true });
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Layout                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Record where the columns now sit and how wide they are.
+ *
+ * The request carries the COMPLETE layout - all fourteen fixed columns and every custom one - for
+ * the reason the reorder endpoint already did: a partial list leaves the columns it omits at stale
+ * positions, which is not "unchanged" but "somewhere in the middle of the ones that moved".
+ *
+ * Two statements rather than one, because the two halves are different operations. A fixed column
+ * may need its row CREATED (this is where the built-in columns acquire rows at all), while a custom
+ * column's row must already exist - creating one here would mean inventing a column with no label,
+ * which the identity CHECK refuses and which would appear in the sheet as a blank heading.
+ *
+ * Then a prune: a fixed column dragged back to where it started, at its original width and with no
+ * style, has a row that says nothing, and the absence of a row says exactly the same thing more
+ * cheaply.
+ */
+export async function setWorkspaceLayout(
+  caller: NeotmsCaller,
+  input: WorkspaceLayoutInput,
+): Promise<ResponseData<WorkspaceColumn[] | string>> {
+  const fixed = input.columns.filter((c) => c.key !== undefined && c.key !== null);
+  const custom = input.columns.filter((c) => c.id !== undefined && c.id !== null);
+  if (fixed.length + custom.length !== input.columns.length) {
+    return badRequest("Every column in a layout must carry exactly one of `key` or `id`.");
+  }
+
+  return runDb("set workspace layout", async () => {
+    await pgTransaction(async (client) => {
+      if (fixed.length > 0) {
+        await pgExecute(
+          WorkspaceLayoutFixedOps(
+            caller.staffId,
+            fixed.map((c) => String(c.key)),
+            fixed.map((c) => String(c.ordNo)),
+            fixed.map((c) => String(c.width)),
+          ),
+          client,
+        );
+      }
+      if (custom.length > 0) {
+        await pgExecute(
+          WorkspaceLayoutCustomOps(
+            caller.staffId,
+            custom.map((c) => String(c.id)),
+            custom.map((c) => String(c.ordNo)),
+            custom.map((c) => String(c.width)),
+          ),
+          client,
+        );
+      }
+      await pgExecute(WorkspaceColumnPruneOps(caller.staffId), client);
+    });
+    return ok((await pgQuery(WorkspaceColumnsOps(caller.staffId))).data);
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Styling                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Apply one style to a selection of cells, columns and rows.
+ *
+ * ## One request for the whole selection
+ *
+ * A toolbar acts on what is selected, and a selection in a spreadsheet is routinely a block -
+ * fifty cells, or three columns. One request per cell would be fifty requests, fifty chances to
+ * fail halfway, and a sheet that ends up half yellow with no way to tell which half.
+ *
+ * ## The patch is a patch
+ *
+ * A property the request omits is left alone and one sent as null is cleared. "Make this yellow"
+ * must not clear the bold somebody set last week, and "clear formatting" has to be sayable: it is
+ * all four, all null. An entirely empty patch is refused - it would be a request that means
+ * nothing, and answering 200 to it would hide a client bug.
+ *
+ * ## Fixed columns get their rows here too
+ *
+ * Styling a cell of 납품일 needs a `column_id` and that column may have no row yet, so the ensure
+ * runs first, in the same transaction. Its result is also how a fixed key becomes an id for the
+ * column-level writes.
+ */
+export async function setWorkspaceStyles(
+  caller: NeotmsCaller,
+  input: WorkspaceStyleInput,
+): Promise<ResponseData<{ styled: number; columns: WorkspaceColumn[] } | string>> {
+  if (isEmptyStylePatch(input.style)) {
+    return badRequest(
+      "`style` must name at least one of bgColor, textColor, textSize or bold. " +
+        "Send a property as null to clear it.",
+    );
+  }
+  const targets =
+    input.cells.length + input.columns.length + input.rows.length;
+  if (targets === 0) {
+    return badRequest("A style needs somewhere to go: name cells, columns or rows.");
+  }
+  for (const ref of [...input.cells, ...input.columns]) {
+    const named = (ref.key ? 1 : 0) + (ref.id ? 1 : 0);
+    if (named !== 1) {
+      return badRequest("Every column reference must carry exactly one of `key` or `id`.");
+    }
+  }
+
+  return runDb("set workspace styles", async () => {
+    const styled = await pgTransaction(async (client) => {
+      /*
+       * Every fixed column named anywhere in the request, cells included. Done once for the whole
+       * request rather than per target, so a selection spanning forty cells of 납품일 ensures one
+       * row rather than forty times over.
+       */
+      const keys = [
+        ...new Set(
+          [...input.cells, ...input.columns]
+            .map((ref) => ref.key)
+            .filter((key): key is string => typeof key === "string" && key.length > 0),
+        ),
+      ];
+      const idByKey = new Map<string, string>();
+      if (keys.length > 0) {
+        const ensured = (await pgExecute(WorkspaceColumnEnsureOps(caller.staffId, keys), client))
+          .data;
+        for (const row of ensured) idByKey.set(row.key, row.id);
+      }
+
+      /** A reference to a column id, or null when a fixed key could not be resolved. */
+      const idOf = (ref: { key?: string | null; id?: string | null }): string | null =>
+        ref.id ? ref.id : ref.key ? (idByKey.get(ref.key) ?? null) : null;
+
+      let count = 0;
+
+      const columnIds = input.columns.map(idOf).filter((id): id is string => id !== null);
+      if (columnIds.length > 0) {
+        count += (
+          await pgExecute(WorkspaceColumnStyleOps(caller.staffId, columnIds, input.style), client)
+        ).data;
+      }
+
+      const cellPairs = input.cells
+        .map((ref) => ({ columnId: idOf(ref), poId: ref.poId }))
+        .filter((pair): pair is { columnId: string; poId: string } => pair.columnId !== null);
+      if (cellPairs.length > 0) {
+        count += (
+          await pgExecute(
+            WorkspaceCellStyleOps(
+              caller.staffId,
+              cellPairs.map((p) => p.columnId),
+              cellPairs.map((p) => p.poId),
+              input.style,
+            ),
+            client,
+          )
+        ).data;
+      }
+
+      if (input.rows.length > 0) {
+        count += (
+          await pgExecute(WorkspaceRowStyleOps(caller.staffId, input.rows, input.style), client)
+        ).data;
+      }
+
+      /*
+       * "Clear formatting" writes four nulls, which leaves rows that exist for nothing. Pruning
+       * here rather than leaving them is not tidiness: a cleared cell row keeps its (column, PO)
+       * pair alive, and a cleared FIXED column row would keep that column in the layout with no
+       * settings on it, which the reader of the table would take for a deliberate placement.
+       */
+      await pgExecute(WorkspaceCellPruneOps(caller.staffId), client);
+      await pgExecute(WorkspaceRowStylePruneOps(caller.staffId), client);
+      await pgExecute(WorkspaceColumnPruneOps(caller.staffId), client);
+      return count;
+    });
+    /*
+     * The columns come back with the answer, and that is what lets the sheet show a colour the
+     * instant it is applied.
+     *
+     * Two of them need it. A column style is ON one of these rows, so the browser cannot draw it
+     * without them; and a cell style in a FIXED column needs that column's row ID, which may have
+     * been created by this very request - the browser has no way to know it otherwise, and would
+     * have to re-read all 200 rows to find out. Returning them turns a refetch into a merge.
+     */
+    return ok({ styled, columns: (await pgQuery(WorkspaceColumnsOps(caller.staffId))).data });
   });
 }

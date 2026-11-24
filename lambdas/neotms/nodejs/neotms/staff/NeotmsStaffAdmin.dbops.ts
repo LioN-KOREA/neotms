@@ -38,7 +38,10 @@ import {
   type SqlRow,
 } from "../../utils/PostgresUtils.js";
 import type { FieldSpec } from "../NeotmsWrite.js";
-import { updateFragments } from "../NeotmsWrite.js";
+import {
+  setAssignments,
+  updateFragments,
+} from "../NeotmsWrite.js";
 import type { StaffAdminUpdate } from "../neotms.schemas.js";
 
 /** `text[]` from `array_agg`, as a string array. node-postgres hands these over already parsed. */
@@ -306,8 +309,7 @@ export const StaffAdminUpdateOps: (
     sql: `
       WITH updated AS (
         UPDATE staff
-           SET ${fields.fragment},
-               updated_at = now()
+           SET ${setAssignments([fields.fragment], "updated_at = now()")}
          WHERE id = :id
            AND deleted = false
         RETURNING id, mgr_id, mgr_name, mgr_name_eng, mgr_email, mgr_phone, mgr_position,

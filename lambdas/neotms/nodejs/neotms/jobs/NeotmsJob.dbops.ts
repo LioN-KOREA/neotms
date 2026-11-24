@@ -72,6 +72,7 @@ import {
   derivedInsert,
   derivedUpdate,
   insertFragments,
+  setAssignments,
   updateFragments,
   upsertFragments,
   type DerivedSpec,
@@ -616,9 +617,11 @@ export const JobUpdateOps: (
   return {
     sql: `
       UPDATE job j
-         SET ${[fields.fragment, ...derived].filter((f) => f.length > 0).join(",\n             ")},
-             updated_at = now(),
-             created_by = :created_by
+         SET ${setAssignments(
+           [fields.fragment, ...derived],
+           "updated_at = now()",
+           "created_by = :created_by",
+         )}
         FROM project p
        WHERE j.id = :id
          AND j.deleted = false

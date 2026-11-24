@@ -1,13 +1,15 @@
 import { neotmsApi } from './neotms.client'
 import type {
+  AssignableAttribute,
+  AssignableStaffView,
+  AttachmentUpload,
+  AttachmentUploadInput,
   CodeInput,
   CodeListView,
   CodeRow,
   CodeUpdateInput,
   CustomerInput,
   CustomerRow,
-  AssignableAttribute,
-  AssignableStaffView,
   DashboardRole,
   DashboardSummary,
   FxRateListView,
@@ -22,6 +24,8 @@ import type {
   ListPage,
   ListQuery,
   PoApprovalInput,
+  PoRequestMailInput,
+  PoRequestMailSent,
   PoSettlementInput,
   ProfileView,
   ProjectAcceptanceInput,
@@ -31,15 +35,11 @@ import type {
   PurchaseOrderInput,
   PurchaseOrderRow,
   PurchaseOrderUpdate,
-  ReportQuery,
-  ReportResult,
-  AttachmentUpload,
-  AttachmentUploadInput,
-  PoRequestMailInput,
-  PoRequestMailSent,
   RecentSearchForgetInput,
   RecentSearchRecordInput,
   RecentSearchView,
+  ReportQuery,
+  ReportResult,
   RoleAdminListView,
   RoleAdminRow,
   RoleCreateInput,
@@ -55,7 +55,9 @@ import type {
   TranslatorRow,
   WorkloadCounts,
   WorkspaceColumnDef,
+  WorkspaceColumnRef,
   WorkspaceSheet,
+  WorkspaceStyle,
 } from './neotms.types'
 
 /**
@@ -577,6 +579,35 @@ export const reorderWorkspaceColumns = (columnIds: string[]) =>
 
 export const writeWorkspaceCell = (input: { columnId: string; poId: string; value: string }) =>
   neotmsApi<{ saved: boolean }>('/api/v0/workspace/cells', { method: 'PUT', body: input })
+
+/**
+ * 열의 **전체 배치** — 어디에 있고 얼마나 넓은지.
+ *
+ * 한 열만 보내지 않는다. 열 하나를 끌면 그 뒤의 열들이 전부 한 칸씩 밀리므로, 바뀐 것은 언제나
+ * '배치' 이지 '열 하나' 가 아니다. 일부만 보내면 빠진 열이 낡은 위치에 남아 움직인 열들 사이로
+ * 끼어든다.
+ */
+export const setWorkspaceLayout = (
+  columns: { key?: string; id?: string; ordNo: number; width: number }[],
+) => neotmsApi<WorkspaceColumnDef[]>('/api/v0/workspace/layout', { method: 'PUT', body: { columns } })
+
+/**
+ * 고른 범위에 꾸밈 하나를 적용한다.
+ *
+ * `style` 에서 **보내지 않은 속성은 그대로 두고**, `null` 로 보낸 속성은 지운다. 배경색을 칠하는
+ * 것이 지난주에 걸어 둔 굵게를 지우면 안 되고, '꾸밈 지우기' 는 네 가지를 모두 `null` 로 보내는
+ * 일이어야 하기 때문이다.
+ */
+export const setWorkspaceStyles = (input: {
+  style: Partial<WorkspaceStyle>
+  cells?: { key?: string; id?: string; poId: string }[]
+  columns?: WorkspaceColumnRef[]
+  rows?: string[]
+}) =>
+  neotmsApi<{ styled: number; columns: WorkspaceColumnDef[] }>('/api/v0/workspace/styles', {
+    method: 'PUT',
+    body: input,
+  })
 
 export const fetchJobs = (query: JobListQuery, signal?: AbortSignal) =>
   neotmsApi<ListPage<JobRow>>('/api/v0/jobs', { query: { ...query }, signal })

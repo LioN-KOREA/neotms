@@ -10,7 +10,7 @@ import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
 import { Modal } from '@/shared/ui/Modal'
 import ui from '@/shared/ui/ui.module.css'
-import { DEFAULT_COLUMNS } from './workspaceColumns'
+import { customColumnsOf, DEFAULT_COLUMNS } from './workspaceColumns'
 
 interface Props {
   columns: readonly WorkspaceColumnDef[]
@@ -36,7 +36,13 @@ interface Props {
  * 지울 수도 옮길 수도 없는 열이지만 목록에 적는다. 적지 않으면 이 대화상자는 "열 관리" 라는
  * 이름으로 **열의 절반만** 보여 주는 화면이 되고, 처음 여는 사람은 기본 열이 사라진 줄 안다.
  */
-export function WorkspaceColumnsModal({ columns, onClose, onSaved }: Props) {
+export function WorkspaceColumnsModal({ columns: stored, onClose, onSaved }: Props) {
+  /*
+   * 추가 열만. 서버의 열 목록에는 **기본 열의 설정 행**도 들어 있다 — 사람이 납품일을 끌거나
+   * 칠하면 그 열에도 행이 생긴다. 그 행들을 걸러내지 않으면 이 화면이 '납품일' 을 사람이 만든
+   * 열처럼 보여 주고, 이름 없는 행으로 그리고, 삭제 버튼까지 달아 준다.
+   */
+  const columns = customColumnsOf(stored)
   const create = useCreateWorkspaceColumn()
   const rename = useRenameWorkspaceColumn()
   const remove = useDeleteWorkspaceColumn()
@@ -233,7 +239,7 @@ export function WorkspaceColumnsModal({ columns, onClose, onSaved }: Props) {
                     <button
                       type="button"
                       className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
-                      onClick={() => setEditing({ id: column.id, label: column.label })}
+                      onClick={() => setEditing({ id: column.id, label: column.label ?? '' })}
                       disabled={pending}
                     >
                       이름

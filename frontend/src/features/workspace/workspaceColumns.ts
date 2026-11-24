@@ -1,4 +1,8 @@
-import type { WorkspaceRow } from '@/apis/neotms.types'
+import type {
+  WorkspaceColumnDef,
+  WorkspaceRow,
+  WorkspaceStyle,
+} from '@/apis/neotms.types'
 
 /**
  * 나의 업무 의 기본 열. **열 수와 순서가 요구사항이고, 지울 수 없다.**
@@ -122,5 +126,144 @@ export function defaultCellText(
       return row.poState ?? ''
     default:
       return ''
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* 코드가 가진 열 + 서버가 가진 설정                                            */
+/* -------------------------------------------------------------------------- */
+
+/** 시트가 실제로 그리는 열 하나. 기본 열과 추가 열을 **같은 모양**으로 만든 것이다. */
+export interface SheetColumn {
+  /** ReactGrid 의 `columnId`. 기본 열은 키, 추가 열은 `custom:<id>`. */
+  columnId: string
+  /** 기본 열이면 그 키, 추가 열이면 null. 꾸밈을 보낼 때 이 둘 중 하나를 쓴다. */
+  key: string | null
+  /** 추가 열이면 그 id, 기본 열이면 null. 배치를 보낼 때 쓴다. */
+  customId: string | null
+  /**
+   * 서버의 열 행 id — **있을 때만.**
+   *
+   * 칸 꾸밈 맵의 키가 이 값이다. 기본 열은 사람이 한 번 손대야 행이 생기므로, 손댄 적 없는
+   * 기본 열에서는 null 이고 그 열에는 칸 꾸밈도 있을 수 없다(가리킬 행이 없으니 저장될 수도
+   * 없었다). 그래서 null 은 "꾸밈 없음" 과 같은 뜻이 된다.
+   */
+  styleId: string | null
+  label: string
+  width: number
+  style: WorkspaceStyle
+  /** 기본 열의 명세. 추가 열에는 없다 — 그래서 이 값이 "이 열은 무엇을 고치는가" 를 답한다. */
+  spec: DefaultColumnSpec | null
+}
+
+const BLANK_STYLE: WorkspaceStyle = {
+  bgColor: null,
+  textColor: null,
+  textSize: null,
+  bold: null,
+  italic: null,
+  underline: null,
+  strike: null,
+  textAlign: null,
+}
+
+/** 추가 열의 기본 너비. 기본 열은 각자 `DEFAULT_COLUMNS` 의 값을 쓴다. */
+export const CUSTOM_COLUMN_WIDTH = 150
+
+/**
+ * 서버가 보낸 설정을 코드가 가진 열 목록에 **겹친다.**
+ *
+ * ## 서버의 행은 '열' 이 아니라 '설정' 이다
+ *
+ * 기본 열 14개는 코드에 있고, 서버에는 그중 **사람이 손댄 것만** 행으로 있다. 납품일을 한 번도
+ * 끌거나 칠하지 않았다면 그 행은 없고, 없다는 것이 곧 "코드가 정한 위치와 너비, 꾸밈 없음" 이라는
+ * 완전한 답이다. 그래서 이 함수는 서버 목록을 그리는 것이 아니라 **코드 목록에 겹친다.**
+ *
+ * 이름도 코드 쪽이 이긴다. 기본 열의 이름은 UI 의 말이고 번역의 대상이므로, 서버에 복사해 두면
+ * 화면에서 '납품일' 을 '납기' 로 고친 날 기존 사용자만 옛 단어를 보게 된다.
+ *
+ * ## 순서
+ *
+ * `ordNo` 가 있는 열이 먼저, 그 숫자대로. 없는 열은 그 뒤에 **코드가 적은 순서대로** 붙는다.
+ * 한 번이라도 끌어 놓은 사람은 모든 열에 번호가 있으므로(배치는 전체를 보낸다) 섞인 상태는
+ * 드물지만, 앞으로 15번째 기본 열이 생기면 기존 사용자에게는 번호가 없는 열이 하나 생긴다 —
+ * 그때 그 열은 맨 뒤에 나타난다. 맨 앞이 아니라 맨 뒤인 것이 중요하다: 새 열이 남의 시트
+ * 맨 왼쪽에 끼어드는 것보다 낫다.
+ */
+export function mergeColumns(stored: readonly WorkspaceColumnDef[]): SheetColumn[] {
+  const byKey = new Map<string, WorkspaceColumnDef>()
+  const custom: WorkspaceColumnDef[] = []
+  for (const row of stored) {
+    if (row.key) byKey.set(row.key, row)
+    else custom.push(row)
+  }
+
+  const merged: { column: SheetColumn; sort: number }[] = []
+
+  DEFAULT_COLUMNS.forEach((spec, index) => {
+    const row = byKey.get(spec.key)
+    merged.push({
+      column: {
+        columnId: spec.key,
+        key: spec.key,
+        customId: null,
+        styleId: row?.id ?? null,
+        label: spec.label,
+        width: row?.width ?? spec.width,
+        style: row?.style ?? BLANK_STYLE,
+        spec,
+      },
+      sort: row?.ordNo ?? 1000 + index,
+    })
+  })
+
+  custom.forEach((row, index) => {
+    merged.push({
+      column: {
+        columnId: customColumnId(row.id),
+        key: null,
+        customId: row.id,
+        styleId: row.id,
+        // 추가 열에 이름이 없을 수는 없다(서버의 CHECK). 그래도 빈 머리글보다는 낫게 떨어뜨린다.
+        label: row.label ?? '(이름 없음)',
+        width: row.width ?? CUSTOM_COLUMN_WIDTH,
+        style: row.style,
+        spec: null,
+      },
+      sort: row.ordNo ?? 2000 + index,
+    })
+  })
+
+  merged.sort((a, b) => a.sort - b.sort)
+  return merged.map((entry) => entry.column)
+}
+
+/** 서버 목록에서 **사람이 만든** 열만. 열 관리 화면이 쓰는 목록이다. */
+export const customColumnsOf = (stored: readonly WorkspaceColumnDef[]): WorkspaceColumnDef[] =>
+  stored.filter((row) => row.key === null)
+
+/**
+ * 칸 하나에 실제로 적용되는 꾸밈. **칸 → 행 → 열** 순서로 합친다.
+ *
+ * 가장 좁은 것이 이긴다. 칸과 행은 **이 일**에 대한 표시이고(이 PO 가 급하다, 이 값이 확인
+ * 안 됐다), 열은 시트의 생김새에 대한 것이기 때문이다. 각 속성을 따로 합치므로, 노란 행에 굵게만
+ * 지정한 열이 겹치면 노란 바탕에 굵은 글씨가 된다 — 한쪽이 다른 쪽을 통째로 덮지 않는다.
+ */
+export function resolveStyle(
+  cell: WorkspaceStyle | undefined,
+  row: WorkspaceStyle | null,
+  column: WorkspaceStyle,
+): WorkspaceStyle {
+  const pick = <K extends keyof WorkspaceStyle>(key: K): WorkspaceStyle[K] =>
+    cell?.[key] ?? row?.[key] ?? column[key]
+  return {
+    bgColor: pick('bgColor'),
+    textColor: pick('textColor'),
+    textSize: pick('textSize'),
+    bold: pick('bold'),
+    italic: pick('italic'),
+    underline: pick('underline'),
+    strike: pick('strike'),
+    textAlign: pick('textAlign'),
   }
 }

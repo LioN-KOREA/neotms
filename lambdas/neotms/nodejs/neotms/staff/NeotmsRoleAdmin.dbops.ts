@@ -42,7 +42,10 @@ import {
   type SqlRow,
 } from "../../utils/PostgresUtils.js";
 import type { FieldSpec } from "../NeotmsWrite.js";
-import { updateFragments } from "../NeotmsWrite.js";
+import {
+  setAssignments,
+  updateFragments,
+} from "../NeotmsWrite.js";
 import type { RoleAdminCreate, RoleAdminUpdate } from "../neotms.schemas.js";
 
 /**
@@ -310,7 +313,7 @@ export const RoleUpdateOps: (
     sql: `
       WITH updated AS (
         UPDATE sys_role
-           SET ${fields.fragment}
+           SET ${setAssignments([fields.fragment], "updated_at = now()")}
          WHERE id = :id
         RETURNING id, role_code, role_name, active
       )

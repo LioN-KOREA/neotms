@@ -339,6 +339,8 @@ because Supavisor routes on the tenant encoded in the username.
 | `004_recent_searches.sql` | **only for a database that already has data.** Adds `staff_recent_search`, the five most recent search terms per person per list screen. Additive and re-runnable; apply it **before** the deploy, because the screens read it as soon as they load. A database built from `001` has the table already |
 | `005_project_acceptance.sql` | **only for a database that already has data.** Adds `project.acceptance_status` and the `project_acceptance` record — the PM's accept / reject on a project. Additive and re-runnable; apply it **before** the deploy, because every project list and detail selects the column. A database built from `001` has both already. See §6.5 |
 | `006_workspace.sql` | **only for a database that already has data.** Adds `workspace_column` and `workspace_cell` — the custom columns of 나의 업무 and the values in them — plus `NEOTMS_PERMISSION_WORKSPACE_READ` to the permission CHECK, the sidebar row, and a re-grant of the superuser. Additive and re-runnable; apply it **before** the deploy. A database built from `001` + `002` has all of it already. See §6.7 |
+| `007_workspace_styles.sql` | **only for a database that already has data.** Gives every column of 나의 업무 a row — including the fourteen the application ships — so position, width and colour can be stored per person, and adds `workspace_row_style`. Additive and re-runnable; apply it **before** the deploy, because the sheet selects the new columns on every read. See §6.7 |
+| `008_workspace_text.sql` | **only for a database that already has data.** Italic, underline, strikethrough and alignment on the three 나의 업무 style tables. Additive and re-runnable; apply it **before** the deploy, for the same reason as `007`. See §6.7 |
 | `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
 
 These two replace the sixteen numbered migrations that used to build the schema a step
@@ -548,6 +550,8 @@ of the symptom points away from the cause.
 | `003_access_control.sql` | **on an existing database only** — the permission rows and the PM / 담당영업 attributes | every screen answers 403, for everybody. The deployed application asks `sys_role_permission` what a role may do; until this runs that table does not exist, so the answer is "nothing" and the message blames the role. The reverse mistake is louder and better: running it against a *new* database fails on apply, because `sys_role_auth` is not there to read |
 | `005_project_acceptance.sql` | **on an existing database only** — `project.acceptance_status` and `project_acceptance` | **the project screens stop working entirely**, which is worse than it sounds for a feature nobody has used yet: the column is in the SELECT list of every project read, so the list and the detail answer `42703` and render as an error. This is the one in this table whose symptom is bigger than its feature |
 | `006_workspace.sql` | **on an existing database only** — the two 나의 업무 tables and its permission | 나의 업무 is missing from the sidebar for everybody (nobody can hold a permission the CHECK refuses) and `GET /api/v0/workspace` answers 500 with `42P01`. Nothing else changes — no other screen reads either table — so unlike `005` the blast radius is exactly the feature |
+| `007_workspace_styles.sql` | **on an existing database only** — layout and style columns | 나의 업무 answers 500 with `42703` on every read, so the screen is an error page. Same blast radius as `006`: nothing else reads these tables |
+| `008_workspace_text.sql` | **on an existing database only** — the four text-style columns | the same `42703`, same blast radius |
 
 Both install files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
 applying `002` to a database that already has some of these rows adds only what is missing.
@@ -1027,7 +1031,7 @@ offline against a throwaway database:
 docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
-for f in 001_schemas 002_initial_seeding 005_project_acceptance 006_workspace; do
+for f in 001_schemas 002_initial_seeding 005_project_acceptance 006_workspace 007_workspace_styles 008_workspace_text; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
@@ -1502,9 +1506,35 @@ One consequence to state plainly: NEOTMS soft-deletes, so a deleted PO's values 
 because the row left the sheet, not because the cascade fired. Undeleting that PO brings its notes
 back. That is intended, not accidental.
 
+#### Moving, resizing and colouring
+
+Every column can be dragged to a new position and resized, the fourteen fixed ones included — the
+one thing they cannot be is deleted. A toolbar above the sheet paints the current selection:
+background, text colour, bold and size, plus 꾸밈 지우기.
+
+**Reordering is a two-step gesture**, because that is what ReactGrid does: click a header to select
+the column, then press it again and drag. Dragging straight from an unselected header selects a
+*range* of columns instead. Nobody discovers that, so the toolbar says it.
+
+Styles resolve **cell over row over column**, property by property. A row marked yellow keeps its
+yellow inside a column that only sets bold, and a cell set green wins over both. The row style is
+what makes "flag these two POs" survive a re-sort — colouring fourteen cells does not.
+
+This is the part that needed the schema change rather than just extra columns: the fourteen fixed
+columns live in frontend code and had no row in `workspace_column`, so there was nowhere to record
+that *this person* drags 납품일 to the front. `col_key` gives them a row, written lazily — never
+touched means no row, and no row means ship order, ship width, no style. The labels are **not**
+copied into the database: they belong to the UI, and a copy would leave existing users looking at
+the old word after a rename.
+
+One thing worth knowing about colours: they are checked as `#rrggbb` by both the request schema and
+a `CHECK` on all three tables. These values end up in a browser's style attribute, so a string that
+is not literally a colour has no business reaching the API.
+
 #### Before it works
 
-- **Apply `db/006_workspace.sql`** to an existing database, before the deploy.
+- **Apply `db/006_workspace.sql`, `db/007_workspace_styles.sql` and `db/008_workspace_text.sql`**
+  to an existing database, before the deploy.
 - **Grant 나의 업무 on 사용자 관리.** `NEOTMS_PERMISSION_WORKSPACE_READ` is deliberately not handed
   out by `003`'s translation — 나의 업무 has no legacy counterpart, so there is no flag to translate
   from, and any rule that file invented would be a new grant presented as a migration. Only the
