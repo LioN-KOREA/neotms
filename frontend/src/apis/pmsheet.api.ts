@@ -1,0 +1,386 @@
+/**
+ * PM 업무 시트(나의 업무 v2) API — 서버 `pmsheet/` 모듈과 짝.
+ *
+ * 쿼리 키는 `['workspace', 'pm', …]` 아래에 둔다. 작업·PO 수정 훅(`useUpdateJob`,
+ * `useUpdatePurchaseOrder`)이 성공하면 `['workspace']` 를 무효화하므로, 시트에서 연동 칸을 고치면
+ * 이 시트도 저절로 새 값을 받는다.
+ */
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { neotmsApi } from './neotms.client'
+
+/* -------------------------------------------------------------------------- */
+/* Types                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** 칸·행·열의 꾸밈. 없는 속성은 '물려받음'. */
+export interface PmStyle {
+  bg?: string | null
+  fg?: string | null
+  size?: number | null
+  bold?: boolean | null
+  italic?: boolean | null
+  underline?: boolean | null
+  strike?: boolean | null
+  align?: 'left' | 'center' | 'right' | null
+  valign?: 'top' | 'middle' | 'bottom' | null
+  border?: 'none' | 'thin' | 'thick' | null
+  /** 테두리를 그릴 변: t·b·l·r 조합. */
+  borderSides?: string | null
+  borderColor?: string | null
+  decimals?: number | null
+}
+
+export interface PmPoBrief {
+  poId: string
+  poCode: string
+  translatorId: string | null
+  tranName: string | null
+  volume: string | null
+  eday: string | null
+  edayTime: string | null
+  approved: boolean
+  moneyState: string | null
+  coinCode: string | null
+  state: string | null
+}
+
+export interface PmSheetRow {
+  jobId: string
+  jobCode: string
+  jobName: string | null
+  workCode: string | null
+  jobType: string | null
+  slang: string | null
+  elang: string | null
+  jobVolume: string | null
+  jobEday: string | null
+  jobEdayTime: string | null
+  jobState: string | null
+  projectId: string
+  prjCode: string
+  prjName: string | null
+  prjState: string | null
+  customerId: string | null
+  cusCodeName: string | null
+  cusMgrName: string | null
+  prjMgrName: string | null
+  handoverAt: string | null
+  tr: PmPoBrief | null
+  rv: PmPoBrief | null
+  pmState: string | null
+  fields: Record<string, string>
+  rowStyle: PmStyle
+  ordNo: number | null
+  groupMonthly: boolean
+  mergedInto: string | null
+}
+
+export interface PmSheetCell {
+  jobId: string
+  colKey: string
+  value: string | null
+  style: PmStyle
+  note: string | null
+}
+
+/** 사용자 열(가제 열). */
+export interface PmCustomColumn {
+  id: string
+  label: string
+}
+
+/** `prefs.columns` — 열 순서·너비·열 꾸밈·추가 열. */
+export interface PmColumnsPref {
+  order?: string[]
+  widths?: Record<string, number>
+  styles?: Record<string, PmStyle>
+  custom?: PmCustomColumn[]
+  hidden?: string[]
+}
+
+/** 조건부 서식 규칙 하나. */
+export type PmCondOp =
+  | 'contains'
+  | 'notContains'
+  | 'empty'
+  | 'notEmpty'
+  | 'equals'
+  | 'dateBefore'
+  | 'dateOn'
+  | 'dateAfter'
+
+export interface PmCondClause {
+  /** 조건을 볼 열. 비우면 서식을 칠할 그 칸 자신. */
+  column?: string | null
+  op: PmCondOp
+  /** 글자 조건의 값, 또는 날짜 조건의 기준일(`today` 또는 `YYYY-MM-DD`). */
+  value?: string
+}
+
+export interface PmCondRule {
+  id: string
+  name?: string
+  /** 서식을 칠할 열들. */
+  columns: string[]
+  join: 'and' | 'or'
+  clauses: PmCondClause[]
+  style: PmStyle
+  /** 행 전체를 칠할지. */
+  wholeRow?: boolean
+  enabled?: boolean
+}
+
+export interface PmFilterFavorite {
+  id: string
+  label: string
+  filters: Record<string, string[]>
+}
+
+export interface PmViewPref {
+  freezeCols?: number
+  freezeRows?: number
+}
+
+export interface PmPrefs {
+  columns?: PmColumnsPref
+  cf?: { rules?: PmCondRule[]; defaults?: boolean }
+  filters?: { favorites?: PmFilterFavorite[] }
+  shortcuts?: { map?: Record<string, string> }
+  view?: PmViewPref
+}
+
+export interface PmSheetView {
+  staff: { id: string; name: string }
+  mine: boolean
+  rows: PmSheetRow[]
+  cells: PmSheetCell[]
+  prefs: PmPrefs
+  pendingHandovers: number
+}
+
+export interface PmHandover {
+  id: string
+  jobId: string
+  status: number
+  message: string | null
+  reply: string | null
+  snapshot: Record<string, unknown>
+  changedKeys: string[]
+  fromStaffId: string | null
+  fromName: string | null
+  toStaffId: string
+  toName: string | null
+  createdAt: string
+  answeredAt: string | null
+}
+
+export interface PmNotice {
+  id: string
+  kind: 'handover' | 'rehandover' | 'revision' | 'reject' | 'accept'
+  jobId: string | null
+  handoverId: string | null
+  message: string | null
+  fromName: string | null
+  createdAt: string
+  read: boolean
+  jobCode: string | null
+  jobName: string | null
+  prjCode: string | null
+}
+
+export interface PmStaff {
+  id: string
+  name: string
+  rows: number
+}
+
+export interface PmTranslatorSuggestion {
+  translatorId: string
+  name: string
+  lastHandoverAt: string | null
+  prjCode: string | null
+  times: number
+}
+
+/** PM 진행 상태(기획서). 서버 `PM_STATES` 와 같은 목록·순서. */
+export const PM_STATES = [
+  '인계 수령',
+  '배포 대기',
+  '선편집 요청',
+  '선편집 중',
+  '선편집 완',
+  '번역 의뢰',
+  '번역 중',
+  '번역 완',
+  '감수 의뢰',
+  '감수 중',
+  '감수 완',
+  '후편집 요청',
+  '후편집 중',
+  '후편집 완',
+  '납품 대기',
+  '납품 완료',
+  '홀딩/캔슬',
+  '별도 관리 프로젝트(시작)',
+  '별도 관리 프로젝트(종료)',
+] as const
+
+export const GROUP_START = '별도 관리 프로젝트(시작)'
+export const GROUP_END = '별도 관리 프로젝트(종료)'
+
+/* -------------------------------------------------------------------------- */
+/* Fetchers                                                                   */
+/* -------------------------------------------------------------------------- */
+
+const qs = (staffId?: string | null) => (staffId ? `?staffId=${encodeURIComponent(staffId)}` : '')
+
+export const fetchPmSheet = (staffId: string | null, signal?: AbortSignal) =>
+  neotmsApi<PmSheetView>(`/api/v0/pm-sheet${qs(staffId)}`, { signal })
+
+export const fetchPmStaff = (signal?: AbortSignal) => neotmsApi<PmStaff[]>('/api/v0/pm-sheet/staff', { signal })
+
+export const fetchPendingHandovers = (staffId: string | null, signal?: AbortSignal) =>
+  neotmsApi<(PmHandover & { row: PmSheetRow })[]>(`/api/v0/pm-sheet/handovers${qs(staffId)}`, { signal })
+
+export const fetchNotices = (signal?: AbortSignal) =>
+  neotmsApi<{ items: PmNotice[]; unread: number; pendingHandovers: number }>('/api/v0/me/notices', { signal })
+
+export const fetchProjectHandovers = (projectId: string, signal?: AbortSignal) =>
+  neotmsApi<PmHandover[]>(`/api/v0/projects/${encodeURIComponent(projectId)}/job-handovers`, { signal })
+
+export const fetchTranslatorSuggestions = (jobId: string, signal?: AbortSignal) =>
+  neotmsApi<PmTranslatorSuggestion[]>(
+    `/api/v0/pm-sheet/translator-suggestions?jobId=${encodeURIComponent(jobId)}`,
+    { signal },
+  )
+
+export type PmRowPatch = {
+  staffId?: string
+  jobId: string
+  pmState?: string | null
+  fields?: Record<string, string>
+  rowStyle?: PmStyle
+  ordNo?: number | null
+  groupMonthly?: boolean
+  mergedInto?: string | null
+  hidden?: boolean
+}
+
+export type PmCellWrite = {
+  jobId: string
+  colKey: string
+  value?: string | null
+  style?: PmStyle
+  note?: string | null
+}
+
+export const patchPmRow = (input: PmRowPatch) =>
+  neotmsApi<{ saved: boolean; prjState: string | null }>('/api/v0/pm-sheet/rows', { method: 'PUT', body: input })
+
+export const writePmCells = (staffId: string | undefined, items: PmCellWrite[]) =>
+  neotmsApi<{ saved: number }>('/api/v0/pm-sheet/cells', { method: 'PUT', body: { staffId, items } })
+
+export const writePmPref = (staffId: string | undefined, kind: keyof PmPrefs, data: unknown) =>
+  neotmsApi<{ saved: boolean }>(`/api/v0/pm-sheet/prefs/${kind}`, { method: 'PUT', body: { staffId, data } })
+
+export const createHandovers = (jobIds: string[], message: string | null) =>
+  neotmsApi<{ created: number; skipped: { jobId: string; reason: string }[] }>('/api/v0/pm-sheet/handovers', {
+    method: 'POST',
+    body: { jobIds, message },
+  })
+
+export const answerHandover = (id: string, action: 'accept' | 'revision' | 'reject', reply: string | null) =>
+  neotmsApi<{ status: number }>(`/api/v0/pm-sheet/handovers/${encodeURIComponent(id)}/answer`, {
+    method: 'POST',
+    body: { action, reply },
+  })
+
+export const readNotices = (ids: string[] | null) =>
+  neotmsApi<{ read: number }>('/api/v0/me/notices/read', { method: 'POST', body: { ids } })
+
+/* -------------------------------------------------------------------------- */
+/* Hooks                                                                      */
+/* -------------------------------------------------------------------------- */
+
+export const pmKeys = {
+  all: ['workspace', 'pm'] as const,
+  sheet: (staffId: string | null) => ['workspace', 'pm', 'sheet', staffId ?? 'me'] as const,
+  staff: ['workspace', 'pm', 'staff'] as const,
+  handovers: (staffId: string | null) => ['workspace', 'pm', 'handovers', staffId ?? 'me'] as const,
+  notices: ['workspace', 'pm', 'notices'] as const,
+  project: (id: string) => ['workspace', 'pm', 'project', id] as const,
+  suggestions: (jobId: string) => ['workspace', 'pm', 'suggest', jobId] as const,
+}
+
+export function usePmSheet(staffId: string | null) {
+  return useQuery({
+    queryKey: pmKeys.sheet(staffId),
+    queryFn: ({ signal }) => fetchPmSheet(staffId, signal),
+    staleTime: 15_000,
+  })
+}
+
+export function usePmStaff(enabled = true) {
+  return useQuery({ queryKey: pmKeys.staff, queryFn: ({ signal }) => fetchPmStaff(signal), enabled })
+}
+
+export function usePendingHandovers(staffId: string | null) {
+  return useQuery({
+    queryKey: pmKeys.handovers(staffId),
+    queryFn: ({ signal }) => fetchPendingHandovers(staffId, signal),
+    refetchInterval: 60_000,
+  })
+}
+
+/** 알림. 1분마다 다시 묻는다 — 브라우저 알림과 배지가 이것을 본다. */
+export function useNotices(enabled = true) {
+  return useQuery({
+    queryKey: pmKeys.notices,
+    queryFn: ({ signal }) => fetchNotices(signal),
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+    enabled,
+  })
+}
+
+export function useProjectHandovers(projectId: string) {
+  return useQuery({
+    queryKey: pmKeys.project(projectId),
+    queryFn: ({ signal }) => fetchProjectHandovers(projectId, signal),
+  })
+}
+
+export function useTranslatorSuggestions(jobId: string | null) {
+  return useQuery({
+    queryKey: pmKeys.suggestions(jobId ?? ''),
+    queryFn: ({ signal }) => fetchTranslatorSuggestions(jobId ?? '', signal),
+    enabled: !!jobId,
+    staleTime: 60_000,
+  })
+}
+
+export function useCreateHandovers() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ jobIds, message }: { jobIds: string[]; message: string | null }) =>
+      createHandovers(jobIds, message),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: pmKeys.all }),
+  })
+}
+
+export function useAnswerHandover() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, action, reply }: { id: string; action: 'accept' | 'revision' | 'reject'; reply: string | null }) =>
+      answerHandover(id, action, reply),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: pmKeys.all }),
+  })
+}
+
+export function useReadNotices() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: string[] | null) => readNotices(ids),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: pmKeys.notices }),
+  })
+}

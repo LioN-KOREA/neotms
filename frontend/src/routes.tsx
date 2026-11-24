@@ -22,7 +22,7 @@ import { CallbackView } from '@/features/auth/CallbackView'
 import { LogoutView } from '@/features/auth/LogoutView'
 import { CustomersView } from '@/features/customers/CustomersView'
 import { DashboardView } from '@/features/dashboard/DashboardView'
-import { WorkspaceView } from '@/features/workspace/WorkspaceView'
+import { PmSheetView } from '@/features/pmsheet/PmSheetView'
 import { JobsView } from '@/features/jobs/JobsView'
 import { MaintenanceView } from '@/features/maintenance/MaintenanceView'
 import { InvoicePaymentView } from '@/features/payment/InvoicePaymentView'
@@ -265,7 +265,7 @@ export const neotmsRouter = createBrowserRouter([
         path: 'workspace',
         element: (
           <RequireMenu permission={NEOTMS_PERMISSION_WORKSPACE_READ}>
-            <WorkspaceView />
+            <PmSheetView />
           </RequireMenu>
         ),
       },

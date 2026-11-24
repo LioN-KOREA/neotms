@@ -1,0 +1,258 @@
+/**
+ * PM 시트의 ReactGrid 칸 종류.
+ *
+ * `sheet` — 이 시트의 거의 모든 칸. 보이는 글자(`text`)와 고칠 때의 글자(`raw`)가 **다르다**:
+ * 날짜는 `11/13(금)` 으로 보이지만 고칠 때는 `2026-11-13`, 수식은 결과가 보이지만 고칠 때는
+ * `=[분량]*2`. 기본 text 칸은 이 둘을 구별하지 못해서, 수식 칸을 한 번 열었다 닫으면 수식이
+ * 결과 값으로 덮어써진다. 그래서 칸 종류를 하나 만들었다.
+ *
+ * 복사는 `text`(보이는 글자)가 나간다 — 엑셀·구글 시트에 붙였을 때 보던 그대로가 들어가도록.
+ * 붙여넣기는 `update` 로 들어와 `text` 에 새 글자가 담긴다; 그 글자를 해석하는 것은 시트의 몫이다.
+ */
+import type { CSSProperties } from 'react'
+import {
+  getCharFromKey,
+  isAlphaNumericKey,
+  isNavigationKey,
+  keyCodes,
+  type Cell,
+  type CellTemplate,
+  type Compatible,
+  type Uncertain,
+  type UncertainCompatible,
+} from '@silevis/reactgrid'
+import css from './PmSheet.module.css'
+
+export interface SheetCell extends Cell {
+  type: 'sheet'
+  /** 보이는 글자 (복사되는 글자). */
+  text: string
+  /** 고칠 때 입력칸에 들어가는 글자. 없으면 `text`. */
+  raw?: string
+  /** 링크. `internal` 이면 앱 안 이동. */
+  href?: string
+  internal?: boolean
+  onNavigate?: (href: string) => void
+  /** 칸 메모 — 있으면 오른쪽 위에 빨간 삼각형. */
+  note?: string
+  tooltip?: string
+  /** 고를 수 있는 값(드롭다운). `free` 면 목록 밖 글자도 적을 수 있다(콤보). */
+  choices?: string[]
+  free?: boolean
+  /** 번역가 칸의 '변경' 단추. */
+  onOpen?: () => void
+  openLabel?: string
+  /** 칸 안 글꼴·정렬 — ReactGrid 의 CellStyle 이 받지 않는 것들. */
+  inner?: CSSProperties
+  placeholder?: string
+}
+
+let datalistSeq = 0
+
+export class SheetCellTemplate implements CellTemplate<SheetCell> {
+  getCompatibleCell(uncertain: Uncertain<SheetCell>): Compatible<SheetCell> {
+    const text = typeof uncertain.text === 'string' ? uncertain.text : ''
+    return { ...uncertain, type: 'sheet', text, value: Number.NaN } as Compatible<SheetCell>
+  }
+
+  update(cell: Compatible<SheetCell>, cellToMerge: UncertainCompatible<SheetCell>): Compatible<SheetCell> {
+    // 붙여넣기·채우기 핸들: 들어온 글자를 그대로 새 '고칠 글자' 로.
+    const text = typeof cellToMerge.text === 'string' ? cellToMerge.text : ''
+    return this.getCompatibleCell({ ...cell, text, raw: text })
+  }
+
+  isFocusable = () => true
+
+  handleKeyDown(
+    cell: Compatible<SheetCell>,
+    keyCode: number,
+    ctrl: boolean,
+    shift: boolean,
+    alt: boolean,
+    key?: string,
+    capsLock?: boolean,
+  ): { cell: Compatible<SheetCell>; enableEditMode: boolean } {
+    if (cell.nonEditable) return { cell, enableEditMode: false }
+    if (!ctrl && !alt && isAlphaNumericKey(keyCode) && !(shift && keyCode === keyCodes.SPACE) && !cell.choices) {
+      // 글자를 치면 그 글자로 새로 쓰기 시작 — 엑셀과 같다.
+      const char = getCharFromKey(key ?? '', shift, capsLock)
+      return { cell: this.getCompatibleCell({ ...cell, text: char, raw: char }), enableEditMode: true }
+    }
+    if (keyCode === keyCodes.DELETE || keyCode === keyCodes.BACKSPACE) {
+      return { cell: this.getCompatibleCell({ ...cell, text: '', raw: '' }), enableEditMode: false }
+    }
+    return { cell, enableEditMode: keyCode === keyCodes.POINTER || keyCode === keyCodes.ENTER || keyCode === keyCodes.F2 }
+  }
+
+  handleCompositionEnd(cell: Compatible<SheetCell>, eventData: string) {
+    // 한글 입력(IME) — 조합이 끝난 글자로 편집을 시작한다.
+    return { cell: this.getCompatibleCell({ ...cell, text: eventData, raw: eventData }), enableEditMode: !cell.nonEditable }
+  }
+
+  getClassName(cell: Compatible<SheetCell>): string {
+    return `${css.sheetCell} ${cell.className ?? ''}`
+  }
+
+  render(
+    cell: Compatible<SheetCell>,
+    isInEditMode: boolean,
+    onCellChanged: (cell: Compatible<SheetCell>, commit: boolean) => void,
+  ) {
+    if (!isInEditMode) {
+      const body = cell.href ? (
+        <a
+          className={css.cellLink}
+          href={cell.href}
+          target={cell.internal ? undefined : '_blank'}
+          rel={cell.internal ? undefined : 'noreferrer'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            if (cell.internal && cell.onNavigate) {
+              e.preventDefault()
+              cell.onNavigate(cell.href!)
+            }
+          }}
+        >
+          {cell.text}
+        </a>
+      ) : (
+        <span className={css.cellText}>{cell.text || (cell.placeholder ? <i className={css.placeholder}>{cell.placeholder}</i> : '')}</span>
+      )
+      return (
+        <div className={css.cellInner} style={cell.inner} title={cell.tooltip ?? cell.note}>
+          {body}
+          {cell.onOpen ? (
+            <button
+              type="button"
+              className={css.pickBtn}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                cell.onOpen?.()
+              }}
+            >
+              {cell.openLabel ?? '변경'}
+            </button>
+          ) : null}
+          {cell.choices && !cell.nonEditable ? <span className={css.caret}>▾</span> : null}
+          {cell.note ? <span className={css.noteMark} /> : null}
+        </div>
+      )
+    }
+
+    const initial = cell.raw ?? cell.text
+    if (cell.choices && !cell.free) {
+      return (
+        <select
+          className={css.cellSelect}
+          autoFocus
+          defaultValue={initial}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (isNavigationKey(e.keyCode) || e.keyCode === keyCodes.ENTER) e.stopPropagation()
+            if (e.keyCode === keyCodes.ESCAPE) onCellChanged(cell, false)
+          }}
+          onChange={(e) => onCellChanged(this.getCompatibleCell({ ...cell, text: e.target.value, raw: e.target.value }), true)}
+          onBlur={() => onCellChanged(cell, false)}
+        >
+          <option value="">(없음)</option>
+          {cell.choices.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      )
+    }
+
+    let escaped = false
+    const listId = cell.choices ? `pmsheet-dl-${String(++datalistSeq)}` : undefined
+    return (
+      <>
+        <input
+          className={css.cellInput}
+          ref={(input) => {
+            if (input) {
+              input.focus()
+              input.setSelectionRange(input.value.length, input.value.length)
+            }
+          }}
+          list={listId}
+          defaultValue={initial}
+          onChange={(e) => onCellChanged(this.getCompatibleCell({ ...cell, text: e.currentTarget.value, raw: e.currentTarget.value }), false)}
+          onBlur={(e) =>
+            onCellChanged(this.getCompatibleCell({ ...cell, text: e.currentTarget.value, raw: e.currentTarget.value }), !escaped)
+          }
+          onCopy={(e) => e.stopPropagation()}
+          onCut={(e) => e.stopPropagation()}
+          onPaste={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (isAlphaNumericKey(e.keyCode) || isNavigationKey(e.keyCode)) e.stopPropagation()
+            if (e.keyCode === keyCodes.ESCAPE) escaped = true
+          }}
+        />
+        {listId ? (
+          <datalist id={listId}>
+            {cell.choices!.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+        ) : null}
+      </>
+    )
+  }
+}
+
+/** 머리글 — 열 이름, 정렬 단추, 필터 단추. */
+export interface SheetHeaderCell extends Cell {
+  type: 'sheetHeader'
+  text: string
+  hint?: string
+  direction?: 'asc' | 'desc' | null
+  filtered?: boolean
+  onSort?: () => void
+  onFilter?: (x: number, y: number) => void
+  inner?: CSSProperties
+}
+
+export class SheetHeaderTemplate implements CellTemplate<SheetHeaderCell> {
+  getCompatibleCell(uncertain: Uncertain<SheetHeaderCell>): Compatible<SheetHeaderCell> {
+    const text = typeof uncertain.text === 'string' ? uncertain.text : ''
+    return { ...uncertain, type: 'sheetHeader', text, value: Number.NaN } as Compatible<SheetHeaderCell>
+  }
+  getClassName = () => 'rg-header-cell'
+  isFocusable = () => false
+  render(cell: Compatible<SheetHeaderCell>) {
+    return (
+      <div className={css.headerCell} style={cell.inner} title={cell.hint}>
+        <span className={css.headerText}>{cell.text}</span>
+        <button
+          type="button"
+          className={`${css.hdrBtn} ${cell.direction ? css.hdrOn : ''}`}
+          title="이 열로 정렬"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            cell.onSort?.()
+          }}
+        >
+          {cell.direction === 'asc' ? '▲' : cell.direction === 'desc' ? '▼' : '⇅'}
+        </button>
+        <button
+          type="button"
+          className={`${css.hdrBtn} ${cell.filtered ? css.hdrOn : ''}`}
+          title="필터"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            cell.onFilter?.(r.left, r.bottom)
+          }}
+        >
+          {cell.filtered ? '◆' : '▾'}
+        </button>
+      </div>
+    )
+  }
+}

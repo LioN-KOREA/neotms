@@ -1,0 +1,182 @@
+/* PM 업무 시트 (나의 업무 v2) */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border, #d9dde3);
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.tab {
+  position: relative;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-muted, #5b6472);
+}
+.tab:hover { background: rgba(127, 127, 127, 0.08); }
+.tabOn {
+  border-color: var(--border, #d9dde3);
+  background: var(--surface, #fff);
+  color: var(--text, #1f2328);
+  font-weight: 600;
+  margin-bottom: -1px;
+}
+.badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 9px;
+  background: #d93025;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  font-weight: 700;
+}
+.badgeMuted { background: #8a94a3; }
+
+.staffBar { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.staffBtn {
+  padding: 5px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border, #d9dde3);
+  background: var(--surface, #fff);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.staffBtnOn { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+.otherBanner {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #fff4e5;
+  color: #8a4b00;
+  font-size: 12.5px;
+  margin-bottom: 8px;
+}
+
+/* 도구막대 */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border, #e3e6ea);
+  background: var(--surface-2, #f8f9fb);
+  font-size: 12.5px;
+}
+.group { display: inline-flex; gap: 2px; align-items: center; padding-right: 6px; border-right: 1px solid var(--border, #e3e6ea); }
+.group:last-child { border-right: none; }
+.tool {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  color: inherit;
+}
+.tool:hover:not(:disabled) { background: rgba(127, 127, 127, 0.14); }
+.tool:disabled { opacity: 0.4; cursor: default; }
+.toolOn { background: rgba(26, 115, 232, 0.14); border-color: rgba(26, 115, 232, 0.4); }
+.toolSelect { height: 26px; font: inherit; font-size: 12px; border: 1px solid var(--border, #d9dde3); border-radius: 4px; background: var(--surface, #fff); color: inherit; }
+.swatch { width: 18px; height: 18px; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.2); cursor: pointer; padding: 0; }
+.scope { color: var(--text-muted, #6b7280); margin-left: auto; font-size: 12px; }
+.fav { display: inline-flex; align-items: center; border: 1px solid #1a73e8; border-radius: 12px; overflow: hidden; }
+.favBtn { border: none; background: transparent; color: #1a73e8; font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer; }
+.favOn { background: #1a73e8; color: #fff; }
+.favX { border: none; background: transparent; color: #1a73e8; cursor: pointer; padding: 0 6px 0 0; font-size: 12px; }
+
+/* 오늘 할 일 */
+.today { border-bottom: 1px solid var(--border, #e3e6ea); font-size: 13px; }
+.todayHead {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 10px; border: none; background: #fff8ec; cursor: pointer; font: inherit; text-align: left; color: inherit;
+}
+.todayList { max-height: 220px; overflow: auto; }
+.todayItem {
+  display: flex; gap: 10px; width: 100%; padding: 5px 14px; border: none; border-top: 1px solid #f1e3c8;
+  background: #fffdf8; cursor: pointer; font: inherit; font-size: 12.5px; text-align: left; color: inherit;
+}
+.todayItem:hover { background: #ffefd2; }
+.todayWhat { min-width: 84px; font-weight: 600; color: #b45f06; }
+
+/* 시트 */
+.gridWrap { overflow: auto; max-height: calc(100vh - 290px); min-height: 320px; position: relative; }
+.gridWrap :global(.rg-cell) { font-size: 12.5px; }
+.sheetCell { padding: 0 !important; }
+.cellInner {
+  display: flex; align-items: center; gap: 4px; width: 100%; height: 100%; padding: 0 5px; position: relative; overflow: hidden;
+}
+.cellText { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.placeholder { color: #9aa3ae; font-style: normal; }
+.cellLink { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1a73e8; text-decoration: underline; }
+.cellInput { width: 100%; height: 100%; border: none; outline: 2px solid #1a73e8; padding: 0 5px; font: inherit; font-size: 12.5px; }
+.cellSelect { width: 100%; height: 100%; font: inherit; font-size: 12.5px; }
+.caret { color: #9aa3ae; font-size: 10px; }
+.pickBtn {
+  flex: none; border: 1px solid #c6cbd2; background: #fff; border-radius: 3px; font-size: 11px; padding: 0 5px; line-height: 17px; cursor: pointer; color: #333;
+}
+.noteMark {
+  position: absolute; top: 0; right: 0; width: 0; height: 0;
+  border-top: 7px solid #e53935; border-left: 7px solid transparent;
+}
+.headerCell { display: flex; align-items: center; gap: 2px; width: 100%; padding: 0 2px 0 5px; }
+.headerText { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.hdrBtn { border: none; background: transparent; color: #9aa3ae; cursor: pointer; font-size: 10px; padding: 0 2px; }
+.hdrOn { color: #1a73e8; }
+
+.monthRow { font-weight: 700; }
+
+/* 팝업 */
+.popover {
+  position: fixed; z-index: 1000; width: 250px; max-height: 380px; display: flex; flex-direction: column;
+  background: var(--surface, #fff); border: 1px solid #c6cbd2; border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  font-size: 12.5px; color: var(--text, #1f2328);
+}
+.popHead { padding: 8px; border-bottom: 1px solid #eceef1; display: flex; flex-direction: column; gap: 6px; }
+.popList { overflow: auto; padding: 4px 8px; flex: 1 1 auto; }
+.popItem { display: flex; gap: 6px; align-items: center; padding: 2px 0; cursor: pointer; }
+.popFoot { display: flex; gap: 6px; justify-content: flex-end; padding: 8px; border-top: 1px solid #eceef1; flex-wrap: wrap; }
+.suggest {
+  position: fixed; z-index: 1000; width: 280px; background: var(--surface, #fff); border: 1px solid #c6cbd2; border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); font-size: 12.5px; color: var(--text, #1f2328);
+}
+.suggestHead { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid #eceef1; font-weight: 600; }
+.suggestItem {
+  display: flex; flex-direction: column; width: 100%; padding: 6px 10px; border: none; border-top: 1px solid #f3f4f6;
+  background: transparent; text-align: left; cursor: pointer; font: inherit; color: inherit;
+}
+.suggestItem:hover { background: #f1f6fe; }
+.suggestSub { color: #6b7280; font-size: 11.5px; }
+
+/* 인계 시트 */
+.hoWrap { overflow: auto; max-height: calc(100vh - 260px); }
+.hoTable { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+.hoTable th, .hoTable td { border: 1px solid #e3e6ea; padding: 4px 6px; white-space: nowrap; text-align: left; }
+.hoTable th { background: #f3f4f6; position: sticky; top: 0; z-index: 1; }
+.hoChanged { background: #fff59d !important; }
+.hoActions { display: flex; gap: 4px; }
+.hoMsg { white-space: normal !important; min-width: 180px; max-width: 320px; color: #374151; }
+
+/* 조건부 서식 */
+.rule { border: 1px solid #e3e6ea; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+.ruleHead { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.clause { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+.colChecks { display: flex; flex-wrap: wrap; gap: 2px 10px; max-height: 96px; overflow: auto; padding: 4px; border: 1px solid #eceef1; border-radius: 4px; }
+.preview { display: inline-block; padding: 2px 10px; border: 1px solid #ddd; border-radius: 3px; }
+.kbd { display: inline-block; min-width: 110px; padding: 2px 8px; border: 1px solid #c6cbd2; border-radius: 4px; background: #f8f9fb; font-family: monospace; text-align: center; cursor: pointer; }
+.kbdRec { border-color: #1a73e8; background: #e8f0fe; }
+.small { font-size: 12px; color: #6b7280; }

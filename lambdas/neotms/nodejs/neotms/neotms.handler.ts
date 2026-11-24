@@ -169,6 +169,28 @@ import {
   setWorkspaceStyles,
   writeWorkspaceCell,
 } from "./workspace/NeotmsWorkspaceManager.js";
+import {
+  answerHandover,
+  createHandovers,
+  getPmSheet,
+  listNotices,
+  listPendingHandovers,
+  listPmStaff,
+  listProjectHandovers,
+  patchPmRow,
+  readNotices,
+  translatorSuggestions,
+  writePmCells,
+  writePmPref,
+} from "./pmsheet/NeotmsPmSheetManager.js";
+import {
+  PmCellsSchema,
+  PmHandoverAnswerSchema,
+  PmHandoverCreateSchema,
+  PmNoticesReadSchema,
+  PmPrefSchema,
+  PmRowPatchSchema,
+} from "./pmsheet/NeotmsPmSheet.schemas.js";
 import { getProfile } from "./profile/NeotmsProfileManager.js";
 import { registerSelf } from "./profile/NeotmsRegistrationManager.js";
 import { getWorkload, runReport } from "./reports/NeotmsReportManager.js";
@@ -686,6 +708,51 @@ const handleSetWorkspaceStyles: RRHandler = async (request) => {
 };
 
 /*
+ * The PM work sheet ("나의 업무" v2, pmsheet/). Sheet routes are WORKSPACE_READ like the PO-level
+ * workspace: what they write is a sheet, and the TMS values a sheet edits go through the job and PO
+ * endpoints with their own permissions. Handing a job over is a sales act on the project, so it is
+ * PROJECT_UPDATE. Notices are anyStaff: the sales PM who receives "수정 요청" may hold no sheet.
+ */
+const handleGetPmSheet: RRHandler = async (request) => getPmSheet(callerOf(request), request);
+const handleListPmStaff: RRHandler = async () => listPmStaff();
+const handlePatchPmRow: RRHandler = async (request) => {
+  const parsed = parseBody(PmRowPatchSchema, request.body);
+  return parsed.ok ? patchPmRow(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
+};
+const handleWritePmCells: RRHandler = async (request) => {
+  const parsed = parseBody(PmCellsSchema, request.body);
+  return parsed.ok ? writePmCells(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
+};
+const handleWritePmPref: RRHandler = async (request) => {
+  const parsed = parseBody(PmPrefSchema, request.body);
+  return parsed.ok
+    ? writePmPref(callerOf(request), request.pathParams["kind"] ?? "", parsed.value)
+    : parsed.response;
+};
+const handleListPendingHandovers: RRHandler = async (request) =>
+  listPendingHandovers(callerOf(request), request);
+const handleCreateHandovers: RRHandler = async (request) => {
+  const parsed = parseBody(PmHandoverCreateSchema, request.body);
+  return parsed.ok ? createHandovers(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
+};
+const handleAnswerHandover: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(PmHandoverAnswerSchema, request.body);
+  return parsed.ok ? answerHandover(callerOf(request), id, parsed.value, writeContext(request)) : parsed.response;
+};
+const handleListProjectHandovers: RRHandler = async (request) => {
+  const id = recordId(request);
+  return id ? listProjectHandovers(id) : NOT_A_RECORD_ID;
+};
+const handleListNotices: RRHandler = async (request) => listNotices(callerOf(request));
+const handleReadNotices: RRHandler = async (request) => {
+  const parsed = parseBody(PmNoticesReadSchema, request.body);
+  return parsed.ok ? readNotices(callerOf(request), parsed.value) : parsed.response;
+};
+const handleTranslatorSuggestions: RRHandler = async (request) => translatorSuggestions(request);
+
+/*
  * Codes - the code tables, in two halves.
  *
  * The read is `anyStaff` and the writes are MAINTENANCE, which is the whole reason there are two
@@ -1169,6 +1236,20 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: WORKSPACE_CELLS, method: "PUT", handler: handleWriteWorkspaceCell, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: WORKSPACE_LAYOUT, method: "PUT", handler: handleSetWorkspaceLayout, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: WORKSPACE_STYLES, method: "PUT", handler: handleSetWorkspaceStyles, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+
+  // -- PM work sheet (나의 업무 v2, per JOB) ----------------------------------
+  { path: "/api/v0/pm-sheet", method: "GET", handler: handleGetPmSheet, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/staff", method: "GET", handler: handleListPmStaff, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/rows", method: "PUT", handler: handlePatchPmRow, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/cells", method: "PUT", handler: handleWritePmCells, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/prefs/:kind", method: "PUT", handler: handleWritePmPref, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/handovers", method: "GET", handler: handleListPendingHandovers, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/handovers", method: "POST", handler: handleCreateHandovers, permission: NEOTMS_PERMISSION_PROJECT_UPDATE },
+  { path: "/api/v0/pm-sheet/handovers/:id/answer", method: "POST", handler: handleAnswerHandover, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/translator-suggestions", method: "GET", handler: handleTranslatorSuggestions, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: `${PROJECTS}/:id/job-handovers`, method: "GET", handler: handleListProjectHandovers, permission: NEOTMS_PERMISSION_PROJECT_READ },
+  { path: "/api/v0/me/notices", method: "GET", handler: handleListNotices, anyStaff: true },
+  { path: "/api/v0/me/notices/read", method: "POST", handler: handleReadNotices, anyStaff: true },
 
   // -- Maintenance (the code tables) ----------------------------------------
   //
