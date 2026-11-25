@@ -366,6 +366,16 @@ export const PmSheetRowsOps = (staffId: string): SqlOps<PmSheetRow[]> => ({
 });
 
 /** Whether a job is on a sheet - the gate for every write to that sheet's row and cells. */
+/** 시트 주인의 그 작업 비고 칸 (없으면 null). 재인계 비고를 덧붙일 때 읽는다. */
+export const SheetRemarkOps = (staffId: string, jobId: string): SqlOps<string | null> => ({
+  sql: `SELECT fields->>'remark' AS remark FROM pm_sheet_row WHERE staff_id = :staff_id AND job_id = :job_id`,
+  parameters: [param("staff_id", staffId, "id"), param("job_id", jobId, "id")],
+  mapper: (rows) => {
+    const v = rows[0]?.["remark"];
+    return typeof v === "string" ? v : null;
+  },
+});
+
 export const PmSheetHasJobOps = (staffId: string, jobId: string): SqlOps<boolean> => ({
   sql: `
     SELECT 1

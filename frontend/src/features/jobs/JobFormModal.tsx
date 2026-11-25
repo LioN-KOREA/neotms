@@ -682,7 +682,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
       title={isEdit ? '작업 수정' : '작업 등록'}
       onClose={onClose}
       isDirty={dirty && !pending}
-      width={820}
+      width={1040}
       footer={
         <>
           <button type="button" className={ui.btn} onClick={onClose} disabled={pending}>

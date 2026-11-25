@@ -63,5 +63,7 @@ export const TOOL_ICONS = {
   /** 바뀐 칸 확인: 체크 */
   confirm: tool(<><path d="M3 9.5l3.5 3.5L15 4.5" /></>),
   /** 배율: 돋보기 */
+  /** 고정: 압정 */
+  freeze: tool(<><path d="M7 2.5h4" /><path d="M7.8 2.5v4.2L5 9.5h8l-2.8-2.8V2.5" /><path d="M9 9.5v6" /></>),
   zoom: tool(<><circle cx="7.5" cy="7.5" r="5" /><path d="M11.2 11.2 15.5 15.5" /></>),
 }

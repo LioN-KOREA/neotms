@@ -178,6 +178,8 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
               ‹
             </button>
           ) : null}
+          {body}
+          {/* 통합 행의 M — 숫자 뒤에 (팀장님 2026-11-25). */}
           {cell.badge ? (
             <button
               type="button"
@@ -192,7 +194,6 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
               {cell.badge.text}
             </button>
           ) : null}
-          {body}
           {cell.step ? (
             <button
               type="button"

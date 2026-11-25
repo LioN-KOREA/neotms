@@ -279,6 +279,27 @@ export const createHandovers = (jobIds: string[], message: string | null) =>
     body: { jobIds, message },
   })
 
+/** 프로젝트의 '인계' — 고른 작업을 담당PM 에게, `send` 면 PM 마다 인계 메일까지 (팀장님 2026-11-25). */
+export type JobHandoverInput = {
+  jobIds: string[]
+  formats: string[]
+  formatText: string
+  layouts: string[]
+  layoutText: string
+  note: string
+  cc: string[]
+  send: boolean
+  hiworksId?: string
+  hiworksPassword?: string
+}
+export type JobHandoverResult = {
+  created: number
+  skipped: { jobId: string; reason: string }[]
+  mails: { pmName: string; recipient: string; subject: string; sent: boolean; error?: string }[]
+}
+export const sendJobHandover = (projectId: string, input: JobHandoverInput) =>
+  neotmsApi<JobHandoverResult>(`/api/v0/projects/${encodeURIComponent(projectId)}/handover`, { method: 'POST', body: input })
+
 export const answerHandover = (id: string, action: 'accept' | 'revision' | 'reject', reply: string | null) =>
   neotmsApi<{ status: number }>(`/api/v0/pm-sheet/handovers/${encodeURIComponent(id)}/answer`, {
     method: 'POST',
@@ -384,6 +405,15 @@ export function useCreateHandovers() {
     mutationFn: ({ jobIds, message }: { jobIds: string[]; message: string | null }) =>
       createHandovers(jobIds, message),
     onSuccess: () => void qc.invalidateQueries({ queryKey: pmKeys.all }),
+  })
+}
+
+export function useSendJobHandover() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projectId, input }: { projectId: string; input: JobHandoverInput }) => sendJobHandover(projectId, input),
+    // 인계는 작업 상태(대기→진행)와 인계 여부도 바꾼다 — 작업 목록까지 모두 새로.
+    onSuccess: () => void qc.invalidateQueries(),
   })
 }
 

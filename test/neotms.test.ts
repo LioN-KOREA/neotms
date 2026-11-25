@@ -3726,7 +3726,8 @@ describe("the 대시보드 aggregate", () => {
     const offenders = walkTs(neotmsLambdaDir)
       .map((file) => path.relative(neotmsLambdaDir, file))
       .filter((relative) => /["'](진행|보류|완료|취소|견적)["']/.test(tsCode(relative)));
-    expect(offenders.sort()).toEqual(["NeotmsPoStates.ts", "NeotmsProjectStates.ts"]);
+    // 2026-11-25: job_state got its own module too (handover moves 대기 -> 진행) - a third column, a third vocabulary.
+    expect(offenders.sort()).toEqual(["NeotmsJobStates.ts", "NeotmsPoStates.ts", "NeotmsProjectStates.ts"]);
 
     const states = tsCode("NeotmsProjectStates.ts");
     const server = [
@@ -5139,16 +5140,17 @@ describe("date defaults, bulk operations and in-place editing", () => {
      * content, and a 5-column grid makes the step buttons line up between the two fields.
      */
     const field = frontendCode("shared", "ui", "DateField.tsx");
-    expect(field).toContain("ui.dateStack");
+    // 2026-11-25 (팀장님): a 2x2 grid - [date][time] on top, each one's buttons underneath.
+    expect(field).toContain("ui.dateGrid");
     expect(field).toContain("ui.dateBtns");
-    expect(field).toContain("ui.dateTimeRow");
+    expect(field).toContain("ui.dateTimeBtns");
     // The inline width override on the time box is gone - the row grid sizes it now.
     expect(field).not.toContain("style={{ width: 92");
 
     const css = frontendCode("shared", "ui", "ui.module.css");
     // `.dateStack` is also the calendar popup's anchor; without `position: relative` the popup
     // measures itself against the modal and lands somewhere else entirely.
-    expect(css).toMatch(/\.dateStack \{[^}]*position: relative/);
+    expect(css).toMatch(/\.dateGrid \{[^}]*position: relative/);
     // 2026-11-25: '달력' left the row for an icon inside the text box, so the row is 오늘/+1/+3/+7.
     expect(css).toMatch(/\.dateBtns \{[^}]*grid-template-columns: repeat\(4, 1fr\)/);
     expect(field).toContain("className={ui.dateIcon}");
@@ -5575,7 +5577,8 @@ describe("date defaults, bulk operations and in-place editing", () => {
      * own columns" below - this is the local statement of the two numbers, worth having because
      * these are the two tables that keep gaining columns.
      */
-    expect(view.match(/colSpan=\{11\}/g)).toHaveLength(1);
+    // 2026-11-25: the job table gained 인계 여부, so twelve.
+    expect(view.match(/colSpan=\{12\}/g)).toHaveLength(1);
     expect(view.match(/colSpan=\{10\}/g)).toHaveLength(1);
     // `indeterminate` is a DOM property with no HTML attribute, so it can only be set through a ref.
     // Without it a partial selection renders as an empty box, and the header reads "nothing selected"

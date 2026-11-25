@@ -668,6 +668,28 @@ export const HandoverMailSchema = v.object({
 });
 
 /**
+ * 프로젝트의 '인계' (팀장님 2026-11-25) — 고른 작업을 각 담당PM 에게, 원하면 메일까지.
+ * 편집포맷·레이아웃은 고른 것 또는 직접 입력 중 하나는 있어야 한다(관리자가 확인).
+ * 메일 주소는 받는 PM 의 직원 정보에서 서버가 정한다 — 이 몸체에는 참조(cc)만 온다.
+ * 하이웍스 ID·비밀번호는 `send` 일 때만 쓰이고, 저장되지 않는다.
+ */
+export const JobHandoverSchema = v.object({
+  jobIds: v.pipe(v.array(IdSchema), v.minLength(1), v.maxLength(100)),
+  formats: v.optional(v.array(v.picklist(HANDOVER_FORMATS)), []),
+  formatText: v.optional(v.pipe(v.string(), v.maxLength(200)), ""),
+  layouts: v.optional(v.array(v.picklist(HANDOVER_LAYOUTS)), []),
+  layoutText: v.optional(v.pipe(v.string(), v.maxLength(200)), ""),
+  note: v.optional(v.pipe(v.string(), v.maxLength(2000)), ""),
+  cc: v.optional(
+    v.pipe(v.array(v.pipe(v.string(), v.trim(), v.email("must be an email address"), v.maxLength(300))), v.maxLength(30)),
+    [],
+  ),
+  send: v.boolean(),
+  hiworksId: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(300))),
+  hiworksPassword: v.optional(v.pipe(v.string(), v.maxLength(300))),
+});
+
+/**
  * How many breakdown rows to return. Whole, small, and arriving as either a string or a number.
  *
  * Built like `OrdNoSchema` below and for the same reason: this value reaches the server as a query
@@ -1229,6 +1251,7 @@ export type PoSettlement = v.InferOutput<typeof PoSettlementSchema>;
 export type InvoiceTranslatorCreate = v.InferOutput<typeof InvoiceTranslatorCreateSchema>;
 export type InvoiceTranslatorUpdate = v.InferOutput<typeof InvoiceTranslatorUpdateSchema>;
 export type HandoverMailSend = v.InferOutput<typeof HandoverMailSchema>;
+export type JobHandoverInput = v.InferOutput<typeof JobHandoverSchema>;
 export type ReportQuery = v.InferOutput<typeof ReportQuerySchema>;
 export type CodeCreate = v.InferOutput<typeof CodeCreateSchema>;
 export type CodeUpdate = v.InferOutput<typeof CodeUpdateSchema>;

@@ -530,7 +530,12 @@ export function DateField({ value, onChange, id, label, disabled = false, childr
         {label}
       </label>
 
-      <div className={ui.dateStack}>
+      {/*
+       * 배치 (팀장님 2026-11-25): 위 줄에 [날짜] [시간], 아래 줄에 각 칸의 단추.
+       *   [  날짜  ] [ 시간 ]
+       *   오늘 +1 +3 +7   12시 18시
+       */}
+      <div className={`${ui.dateGrid} ${time ? ui.dateGridTime : ''}`}>
         {/* 달력은 칸 오른쪽 안의 아이콘으로 연다 (팀장님 2026-11-25 — 따로 있던 '달력' 단추 대신). */}
         <div className={ui.dateInputWrap}>
           <DateTextInput id={id} value={value} onChange={onChange} disabled={disabled} />
@@ -552,50 +557,30 @@ export function DateField({ value, onChange, id, label, disabled = false, childr
           </button>
         </div>
 
-        <div className={ui.dateBtns}>
+        {time ? (
+          <div className={ui.dateTimeCell}>
+            <TimeInput value={time.value} onChange={time.onChange} ariaLabel={time.ariaLabel} disabled={disabled} />
+          </div>
+        ) : null}
 
-          <button
-            type="button"
-            className={small}
-            disabled={disabled}
-            onClick={() => onChange(todayKst())}
-          >
+        <div className={ui.dateBtns}>
+          <button type="button" className={small} disabled={disabled} onClick={() => onChange(todayKst())}>
             오늘
           </button>
-
+          {/* `type="button"`. 빠지면 제출이 되어 `+1` 을 누르는 순간 모달이 저장되고 닫힌다. */}
           {DAY_STEPS.map((days) => (
-            <button
-              key={days}
-              /*
-               * `type="button"`. 빠지면 제출이 되어 `+1` 을 누르는 순간 모달이 저장되고 닫힌다.
-               */
-              type="button"
-              className={small}
-              disabled={disabled}
-              onClick={() => step(days)}
-            >
+            <button key={days} type="button" className={small} disabled={disabled} onClick={() => step(days)}>
               +{days}
             </button>
           ))}
         </div>
 
         {time ? (
-          <div className={ui.dateTimeRow}>
-            <TimeInput value={time.value} onChange={time.onChange} ariaLabel={time.ariaLabel} disabled={disabled} />
-            <button
-              type="button"
-              className={small}
-              disabled={disabled}
-              onClick={() => time.onChange('12:00')}
-            >
+          <div className={`${ui.dateBtns} ${ui.dateTimeBtns}`}>
+            <button type="button" className={small} disabled={disabled} onClick={() => time.onChange('12:00')}>
               12시
             </button>
-            <button
-              type="button"
-              className={small}
-              disabled={disabled}
-              onClick={() => time.onChange('18:00')}
-            >
+            <button type="button" className={small} disabled={disabled} onClick={() => time.onChange('18:00')}>
               18시
             </button>
           </div>

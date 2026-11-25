@@ -79,6 +79,15 @@ export type HandoverChoices = {
    * was asked for or whether the template is broken.
    */
   note: string;
+  /** 편집포맷 직접 입력 (팀장님 2026-11-25). 비어 있으면 그 줄을 그리지 않는다. */
+  formatText?: string;
+  /** 레이아웃 직접 입력. */
+  layoutText?: string;
+  /**
+   * 납품요청일을 프로젝트 머리가 아니라 고른 작업들의 납기로 쓴다 — 작업을 골라 PM 마다 따로
+   * 보내는 새 인계(NeotmsJobHandover). 납기가 여럿이면 날짜마다 한 줄에 그 언어를 적는다.
+   */
+  deadlineFromJobs?: boolean;
 };
 
 /** One mail, ready to send. */
@@ -277,6 +286,37 @@ function twelveHour(time: string | null): string | null {
  * It goes to a single operating PM, from the sales manager's own Hiworks account - which is why
  * there is no signature and no sender block in the body. The mail client already shows both.
  */
+/** 직접 입력한 편집포맷·레이아웃 — 고른 칸과 같은 초록으로 한 줄. 비어 있으면 줄이 없다. */
+function customRow(label: string, text: string | undefined): string {
+  const value = (text ?? "").trim();
+  if (!value) return "";
+  return `<tr>
+  <td style="${HEAD}"></td>
+  <td style="${HEAD}">${esc(label)} 직접입력</td>
+  <td style="${PICKED}" colspan="4">${esc(value)}</td>
+  ${tail}
+</tr>
+`;
+}
+
+/** 고른 작업들의 납기, 날짜·시각마다 한 번, 그 날짜에 걸린 도착어(없으면 작업명)와 함께. */
+function jobDeadlines(jobs: readonly HandoverJob[]): { eday: string; time: string | null; langs: string[] }[] {
+  const out: { eday: string; time: string | null; langs: string[] }[] = [];
+  for (const job of jobs) {
+    const eday = (job.jobEday ?? "").trim();
+    if (!eday) continue;
+    const time = job.jobEdayTime ?? null;
+    let item = out.find((d) => d.eday === eday && (d.time ?? "") === (time ?? ""));
+    if (!item) {
+      item = { eday, time, langs: [] };
+      out.push(item);
+    }
+    const label = (isLinguistic(job.jobType) ? job.jobElang : job.jobName)?.trim() ?? "";
+    if (label && !item.langs.includes(label)) item.langs.push(label);
+  }
+  return out.sort((a, b) => `${a.eday} ${a.time ?? ""}`.localeCompare(`${b.eday} ${b.time ?? ""}`));
+}
+
 export function composeHandoverMail(
   project: ProjectRow,
   jobs: readonly HandoverJob[],
@@ -317,10 +357,24 @@ export function composeHandoverMail(
    * meridiem cells, so one date is what fits in it, and the project header is where a reader of
    * this mail would go to check it.
    */
-  const eday = (project.prjEday ?? "").trim();
-  const clock = twelveHour(project.prjEdayTime);
-  const due = eday ? `${shortDate(eday)}${clock ? ` ${clock}` : ""}` : "-";
-  const half = halfOfDay(project.prjEdayTime);
+  const deadlines = choices.deadlineFromJobs ? jobDeadlines(jobs) : [];
+  const single = deadlines.length === 1 ? deadlines[0]! : null;
+  const edayDay = single ? single.eday : (project.prjEday ?? "").trim();
+  const edayTime = single ? single.time : project.prjEdayTime;
+  const clock = twelveHour(edayTime);
+  const due =
+    deadlines.length > 1
+      ? deadlines
+          .map((d) => {
+            const c = twelveHour(d.time);
+            const when = `${shortDate(d.eday)}${c ? ` ${c}` : ""}`;
+            return d.langs.length > 0 ? `${when} ${d.langs.join(", ")}` : when;
+          })
+          .join("\n")
+      : edayDay
+        ? `${shortDate(edayDay)}${clock ? ` ${clock}` : ""}`
+        : "-";
+  const half = deadlines.length > 1 ? null : halfOfDay(edayTime);
 
   const colgroup = COLS.map((w) => `<col style="width:${w}px">`).join("");
 
@@ -360,7 +414,7 @@ ${gap}
 ${gap}
 <tr>
   <td style="${HEAD}" colspan="2" rowspan="2">납품요청일</td>
-  <td style="${CELL}" colspan="3" rowspan="2">${esc(due)}</td>
+  <td style="${CELL}" colspan="3" rowspan="2">${escLines(due)}</td>
   <td style="${half === "오전" ? PICKED : UNPICKED}">오전</td>
   ${tail}
 </tr>
@@ -375,14 +429,14 @@ ${gap}
   ${choiceCells(HANDOVER_FORMATS, choices.formats)}
   ${tail}
 </tr>
-<tr>
+${customRow("편집포맷", choices.formatText)}<tr>
   <td style="${HEAD}">형태</td>
   <td style="${HEAD}">레이아웃</td>
   ${choiceCells(HANDOVER_LAYOUTS, choices.layouts)}
   <td style="${CELL}">&nbsp;</td>
   ${tail}
 </tr>
-${gap}
+${customRow("레이아웃", choices.layoutText)}${gap}
 <tr>
   <td style="${HEAD}" colspan="2" rowspan="2">기타요청</td>
   <td style="${BASE};text-align:left;font-weight:700" colspan="4" rowspan="2">${escLines(choices.note.trim()) || "&nbsp;"}</td>

@@ -24,7 +24,7 @@ import { formatDate, isOverdue } from '@/shared/utils/format'
 import { useRecentSearch } from '@/shared/hooks/useRecentSearch'
 import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
-import { HandoverMailModal } from './HandoverMailModal'
+import { JobHandoverFlow } from './JobHandoverFlow'
 import { ProjectFormModal } from './ProjectFormModal'
 
 /**
@@ -499,13 +499,16 @@ export function ProjectsView() {
                        * kept away from where hands land often), and pushing the edit button
                        * along would move the one people press every day.
                        */}
-                      <button
-                        type="button"
-                        className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
-                        onClick={() => setHandingOver(row)}
-                      >
-                        인계메일
-                      </button>
+                      {/* 인계 (팀장님 2026-11-25) — 작업 선택 → 인계정보 입력. 인계는 프로젝트 수정 권한. */}
+                      {mayUpdate ? (
+                        <button
+                          type="button"
+                          className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`}
+                          onClick={() => setHandingOver(row)}
+                        >
+                          인계
+                        </button>
+                      ) : null}
                       {mayUpdate ? (
                         <button
                           type="button"
@@ -549,10 +552,11 @@ export function ProjectsView() {
       ) : null}
 
       {handingOver ? (
-        <HandoverMailModal
-          project={handingOver}
+        <JobHandoverFlow
+          projectId={handingOver.id}
+          projectLabel={`${handingOver.prjCode} ${handingOver.prjName ?? ''}`.trim()}
           onClose={() => setHandingOver(null)}
-          onSent={setNotice}
+          onDone={setNotice}
         />
       ) : null}
     </div>

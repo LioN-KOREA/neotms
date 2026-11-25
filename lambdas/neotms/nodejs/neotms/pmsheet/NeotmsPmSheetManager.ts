@@ -47,6 +47,7 @@ import {
   PmSheetCellWriteOps,
   PmSheetCellsOps,
   PmSheetHasJobOps,
+  SheetRemarkOps,
   PmSheetPrefWriteOps,
   PmSheetPrefsOps,
   PmSheetRowWriteOps,
@@ -83,6 +84,7 @@ import {
   type PmSeenInput,
 } from "./NeotmsPmSheet.schemas.js";
 import type { PoolClient } from "pg";
+import { appendRehandoverRemark } from "../handover/handoverRemark.js";
 
 const ID = /^\d{1,19}$/;
 
@@ -347,10 +349,23 @@ export async function answerHandover(
       if (status === 1 && handover.rehandover) {
         // 확인 차원의 인계 — 진행 상태는 그대로, 바뀐 칸은 모두 확인한 것으로.
         await markSeen(handover.toStaffId, [handover.jobId], null, client);
+        // 재인계 비고 — 기존 비고 아래에 '<재인계 비고>' 머리를 달고 덧붙인다 (팀장님 2026-11-25).
+        const current = (await pgQuery(SheetRemarkOps(handover.toStaffId, handover.jobId), client)).data;
+        const remark = appendRehandoverRemark(current, handover.message);
+        if (remark !== null) {
+          await pgExecute(PmSheetRowWriteOps(handover.toStaffId, handover.jobId, { fields: { remark } }, ctx.actor), client);
+        }
       } else if (status === 1) {
         // On the sheet, starting at the first PM step, and visible even if it was removed before.
+        // 인계 때 적은 내용(편집포맷·레이아웃·기타요청)이 시트 비고 칸으로 (팀장님 2026-11-25).
+        const remark = handover.message?.trim() ?? "";
         await pgExecute(
-          PmSheetRowWriteOps(handover.toStaffId, handover.jobId, { pmState: "인계 수령", hidden: false }, ctx.actor),
+          PmSheetRowWriteOps(
+            handover.toStaffId,
+            handover.jobId,
+            { pmState: "인계 수령", hidden: false, ...(remark ? { fields: { remark } } : {}) },
+            ctx.actor,
+          ),
           client,
         );
         await pgExecute(PmProjectStateSyncOps(handover.jobId, ctx.actor), client);

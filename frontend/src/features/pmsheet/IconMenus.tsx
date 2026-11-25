@@ -54,3 +54,75 @@ export function IconMenu<K extends string>(props: {
     </span>
   )
 }
+
+/**
+ * 고정 메뉴 (팀장님 2026-11-25) — 아이콘 단추 하나. 누르면 '열 고정 ▸' · '행 고정 ▸', 마우스를 올리면
+ * 없음 · 1개 · 2개 … 가 옆에 펼쳐진다. 행 고정 '없음' 은 머리행만 고정.
+ */
+export function FreezeMenu(props: {
+  icon: ReactNode
+  cols: number
+  rows: number
+  onCols: (n: number) => void
+  onRows: (n: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [sub, setSub] = useState<'cols' | 'rows' | null>(null)
+  const box = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [open])
+  const label = [props.cols > 0 ? `열 ${String(props.cols)}` : '', props.rows > 0 ? `행 ${String(props.rows)}` : ''].filter(Boolean).join('·')
+  const section = (key: 'cols' | 'rows', title: string, unit: string, max: number, value: number, pick: (n: number) => void) => (
+    <div className={css.freezeItem} onMouseEnter={() => setSub(key)} onClick={() => setSub(key)}>
+      <span>{title}</span>
+      <span className={css.freezeArrow}>▸</span>
+      {sub === key ? (
+        <div className={css.freezeSub}>
+          {Array.from({ length: max + 1 }, (_, n) => (
+            <button
+              key={n}
+              type="button"
+              className={`${css.freezeOpt} ${n === value ? css.freezeOn : ''}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                pick(n)
+                setOpen(false)
+              }}
+            >
+              {n === value ? '✓ ' : ''}
+              {n === 0 ? '없음' : `${unit} ${String(n)}개`}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+  return (
+    <span ref={box} className={css.paletteWrap}>
+      <button
+        type="button"
+        className={css.iconTool}
+        title="행·열 고정"
+        onClick={() => {
+          setOpen((o) => !o)
+          setSub(null)
+        }}
+      >
+        {props.icon}고정{label ? ` (${label})` : ''}
+        <span className={css.caretSm}>▾</span>
+      </button>
+      {open ? (
+        <div className={css.freezeMenu}>
+          {section('cols', '열 고정', '열', 6, props.cols, props.onCols)}
+          {section('rows', '행 고정', '행', 5, props.rows, props.onRows)}
+        </div>
+      ) : null}
+    </span>
+  )
+}

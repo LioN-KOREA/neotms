@@ -75,7 +75,7 @@ import {
 import { CondFormatModal, ColumnsModal, NoteModal, ShortcutsModal, StatesModal } from './PmSheetModals'
 import { ACTIONS, comboOf, effectiveShortcuts } from './shortcuts'
 import { ColorPalette } from './ColorPalette'
-import { IconMenu } from './IconMenus'
+import { FreezeMenu, IconMenu } from './IconMenus'
 import { ALIGN_ICONS, TOOL_ICONS, VALIGN_ICONS, WRAP_ICONS } from './menuIcons'
 import { effectiveStates, isClosedState, selectableStates, stateStyleFor } from './pmStates'
 import {
@@ -833,7 +833,8 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
         // 정렬·필터는 우클릭 메뉴로 (팀장님 2026-11-25). 시간 열은 메뉴에 정렬이 없다.
         onMenu: (x, y) => setColMenu({ key: c.key, x, y, jobId: null }),
         onSettings: c.key === 'pmState' ? () => setModal('states') : undefined,
-        inner: innerStyle(c.style),
+        // 머리행은 모든 사용자 기본 가운데 정렬 (팀장님 2026-11-25).
+        inner: innerStyle({ ...c.style, align: 'center' }),
         style: { ...toCellStyle(c.style), background: HEADER_BG },
       }),
     )],
@@ -964,7 +965,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           inner,
           wrap: style.wrap === 'wrap' || style.wrap === 'clip' ? style.wrap : null,
           onMenu: (x: number, y: number) => setColMenu({ key: column.key, x, y, jobId: row.jobId }),
-          // 통합 행: 행ID 앞 'M' — 누르면 통합 해제 (팀장님 2026-11-25).
+          // 통합 행: 행ID 숫자 뒤 'M' — 누르면 통합 해제 (팀장님 2026-11-25).
           badge:
             column.key === 'rowNo' && entry.merged.length > 0
               ? {
@@ -1354,12 +1355,13 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           <button type="button" className={css.iconTool} onClick={() => setModal('cf')}>{TOOL_ICONS.cf}조건부 서식</button>
           <button type="button" className={css.iconTool} onClick={() => setModal('columns')}>{TOOL_ICONS.columns}열 관리</button>
           <button type="button" className={css.iconTool} onClick={() => setModal('shortcuts')}>{TOOL_ICONS.shortcuts}단축키</button>
-          <select className={css.toolSelect} title="열 고정" value={freezeCols} onChange={(e) => void savePref('view', { ...(prefs.view ?? {}), freezeCols: Number(e.target.value) })}>
-            {[0, 1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n === 0 ? '열 고정 없음' : `열 ${String(n)}개 고정`}</option>)}
-          </select>
-          <select className={css.toolSelect} title="행 고정" value={freezeRows} onChange={(e) => void savePref('view', { ...(prefs.view ?? {}), freezeRows: Number(e.target.value) })}>
-            {[0, 1, 2, 3, 5].map((n) => <option key={n} value={n}>{n === 0 ? '머리행만 고정' : `행 ${String(n)}개 더 고정`}</option>)}
-          </select>
+          <FreezeMenu
+            icon={TOOL_ICONS.freeze}
+            cols={freezeCols}
+            rows={freezeRows}
+            onCols={(n) => void savePref('view', { ...(prefs.view ?? {}), freezeCols: n })}
+            onRows={(n) => void savePref('view', { ...(prefs.view ?? {}), freezeRows: n })}
+          />
         </span>
         <span className={css.group}>
           <button type="button" className={css.iconTool} title="고른 행(같은 프로젝트·같은 납기)을 한 행으로 — 경로 등은 맨 위 행의 값" onClick={() => void mergeRows()}>{TOOL_ICONS.merge}행 통합</button>

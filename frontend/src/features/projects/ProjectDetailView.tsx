@@ -59,7 +59,10 @@ import {
 } from '@/features/payment/poBulkApprove'
 import { duplicateJobInput } from '@/features/jobs/jobDuplicate'
 import { JobFormModal } from '@/features/jobs/JobFormModal'
-import { JobHandoverButton, ProjectHandoverStatus } from '@/features/pmsheet/ProjectHandover'
+import { useProjectHandovers } from '@/apis/pmsheet.api'
+import { HandoverStateCell } from './HandoverStateCell'
+import { latestHandoverByJob, tidyNumber } from './handoverState'
+import { JobHandoverFlow } from './JobHandoverFlow'
 import { ProjectAcceptanceModal } from './ProjectAcceptanceModal'
 import { JobPmName, JobPmSwapModal } from '@/features/jobs/JobPmSwapModal'
 import { JobTypeSwapModal, jobTypeSummary } from '@/features/jobs/JobTypeSwapModal'
@@ -179,6 +182,8 @@ export function ProjectDetailView() {
    * 없는 상태가 된다.
    */
   const [bulkError, setBulkError] = useState<unknown>(null)
+  /** 인계 창 — 열려 있으면 미리 고른 작업 번호들(빈 배열이면 작업 선택 창부터). */
+  const [handingOver, setHandingOver] = useState<string[] | null>(null)
 
   const project = projectQuery.data
   const jobs = useMemo(() => jobsQuery.data?.pages.flatMap((p) => p.items) ?? [], [jobsQuery.data])
@@ -222,6 +227,8 @@ export function ProjectDetailView() {
    * 삭제가 지우고 '더 보기' 가 늘린다).
    */
   const jobSel = useRowSelection(jobs)
+  const handoversQuery = useProjectHandovers(id ?? '')
+  const handoverOf = useMemo(() => latestHandoverByJob(handoversQuery.data), [handoversQuery.data])
   const poSel = useRowSelection(pos)
 
   /** 작업별 PO 건수. 위 주석의 "PO 없는 작업" 을 세우기 위한 것이다. */
@@ -678,6 +685,10 @@ export function ProjectDetailView() {
               </span>
             </div>
             <div className={ui.detailItem}>
+              <span className={ui.detailLabel}>고객사</span>
+              <span className={ui.detailValue}>{project.cusCodeName || '-'}</span>
+            </div>
+            <div className={ui.detailItem}>
               <span className={ui.detailLabel}>고객사 담당자</span>
               <span className={ui.detailValue}>{project.cusMgrName || '-'}</span>
             </div>
@@ -732,12 +743,6 @@ export function ProjectDetailView() {
            * 상태에서 누르는 사람을 만들고, 그 클릭은 아무 일도 하지 않으므로 화면이 고장난
            * 것으로 읽힌다.
            */}
-          {jobSel.selected.length > 0 && mayUpdateProject ? (
-            <JobHandoverButton
-              jobs={jobSel.selected.map((j) => ({ id: j.id, label: `${j.jobCode} ${j.jobName ?? ''}`.trim() }))}
-              onDone={setNotice}
-            />
-          ) : null}
           {jobSel.selected.length > 0 && mayCreateJob ? (
             <button
               type="button"
@@ -756,6 +761,20 @@ export function ProjectDetailView() {
               disabled={jobBusy}
             >
               선택 삭제
+            </button>
+          ) : null}
+          {/*
+           * 인계 (팀장님 2026-11-25) — 늘 보인다. 고른 작업이 없으면 작업 선택 창부터, 있으면 바로
+           * 인계정보 입력으로 (담당PM 이 빈 작업이 섞여 있으면 작업 선택 창부터).
+           */}
+          {mayUpdateProject && project ? (
+            <button
+              type="button"
+              className={`${ui.btn} ${ui.btnSm}`}
+              onClick={() => setHandingOver(jobSel.selected.map((j) => j.id))}
+              title="작업을 각 담당PM 에게 인계합니다"
+            >
+              인계
             </button>
           ) : null}
           {mayCreateJob ? (
@@ -810,6 +829,7 @@ export function ProjectDetailView() {
                     <th>PO</th>
                     <th>마감일</th>
                     <th>상태</th>
+                    <th>인계 여부</th>
                     {/* 머리글이 '수정' 이었다. 이 칸에 버튼이 셋(수정·PO 추가·삭제) 있으므로
                         그중 하나의 이름을 머리글로 쓰면 나머지 둘을 가린다 — PO 표와 같이 비운다. */}
                     <th />
@@ -821,7 +841,7 @@ export function ProjectDetailView() {
                     error={jobsQuery.error}
                     isEmpty={jobs.length === 0}
                     emptyText="이 프로젝트에는 작업이 없습니다. 작업을 추가하면 매출이 잡힙니다."
-                    colSpan={11}
+                    colSpan={12}
                   />
                   {jobs.map((job) => {
                     const poCount = poCountByJob.get(job.id) ?? 0
@@ -883,7 +903,7 @@ export function ProjectDetailView() {
                          */}
                         <td className={ui.cellMuted}>
                           <div>
-                            {job.jobVolume ?? '-'} {job.unitCode ?? ''}
+                            {tidyNumber(job.jobVolume) || '-'} {job.unitCode ?? ''}
                           </div>
                           <div>
                             <Amount value={job.jobPrice} coinCode={job.coinCode} />
@@ -929,6 +949,7 @@ export function ProjectDetailView() {
                           ariaLabel={`${job.jobCode} 상태`}
                           onCommit={(jobState) => patchJob(job, { jobState })}
                         />
+                        <HandoverStateCell handover={handoverOf.get(job.id)} jobLabel={`${job.jobCode} ${job.jobName ?? ''}`.trim()} />
                         <td>
                           <div className={ui.rowActions}>
                             {mayUpdateJob ? (
@@ -984,13 +1005,18 @@ export function ProjectDetailView() {
         )}
       </div>
 
-      <ProjectHandoverStatus
-        projectId={id}
-        jobLabel={(jobId) => {
-          const j = jobs.find((x) => x.id === jobId)
-          return j ? `${j.jobCode} ${j.jobName ?? ''}`.trim() : jobId
-        }}
-      />
+      {handingOver && project ? (
+        <JobHandoverFlow
+          projectId={project.id}
+          projectLabel={`${project.prjCode} ${project.prjName ?? ''}`.trim()}
+          preselected={handingOver}
+          onClose={() => setHandingOver(null)}
+          onDone={(m) => {
+            setNotice(m)
+            jobSel.clear()
+          }}
+        />
+      ) : null}
 
       {/* ── PO ─────────────────────────────────────────────────────────── */}
 

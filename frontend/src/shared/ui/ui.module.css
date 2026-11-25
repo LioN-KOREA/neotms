@@ -2079,6 +2079,8 @@
 .tgTitle { padding: 6px 10px; font-weight: 700; font-size: 12.5px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .tgBulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 10px; background: var(--nt-bg2, #f4f6f8); border-top: 1px solid var(--nt-line, #e5e7eb); font-size: 12px; }
 .tgBulkTitle { font-weight: 700; }
+.tgBulkHead { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; }
+.tgOnly { font-size: 11px; padding: 0 6px; color: var(--nt-ink2, #555); }
 .tgBulkGroup { display: inline-flex; align-items: center; gap: 4px; }
 .tgBulkGroup > select { width: auto; }
 .tgNarrow { width: 84px; }
@@ -2102,3 +2104,60 @@
 
 /* 할인 금액은 어디서나 빨간 글씨 (팀장님 2026-11-25) */
 .discountInput { color: #d93025 !important; }
+
+/* 메일 주소 칩 입력 (EmailChips) — 지메일 받는 사람 칸처럼. */
+.chipBox {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  height: auto !important; min-height: var(--nt-ctl-h, 30px); padding: 3px 6px !important; cursor: text;
+}
+.chipInput { flex: 1 1 120px; min-width: 120px; border: 0; outline: none; background: transparent; font: inherit; color: inherit; padding: 2px 0; }
+.mailChip {
+  display: inline-flex; align-items: center; gap: 2px; max-width: 100%;
+  padding: 1px 4px 1px 8px; border-radius: 12px; background: var(--nt-tint2, #e8eaf6); font-size: 12px; line-height: 18px;
+}
+.mailChipBad { background: #fde7e7; color: #c5221f; outline: 1px solid #f28b82; }
+.mailChipX { border: 0; background: transparent; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 3px; color: inherit; opacity: .7; }
+.mailChipX:hover { opacity: 1; }
+
+/* 인계 — 작업 선택 표 */
+.hoTable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.hoTable th { background: var(--nt-tint, #f1f3f8); font-weight: 600; text-align: left; padding: 6px; border-bottom: 1px solid var(--nt-line2, #dde1e6); white-space: nowrap; }
+.hoTable td { padding: 5px 6px; border-bottom: 1px solid var(--nt-line, #eceff3); vertical-align: top; }
+.hoTable tr.hoOff td { opacity: .55; }
+.hoMissing select { border-color: #d93025 !important; }
+.hoLang { display: flex; align-items: center; gap: 4px; }
+.hoDue { display: flex; gap: 4px; }
+.hoCustom { margin-top: 6px; }
+
+/* 언어 고르기 (LangCombo) — 입력하며 좁히기, 회색 자동완성 */
+.comboWrap { position: relative; width: 100%; min-width: 0; }
+.comboField { position: relative; display: flex; align-items: center; }
+.comboInput { padding-right: 24px !important; background: transparent !important; position: relative; z-index: 1; }
+.comboGhost {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none; color: #9aa0a6; border-color: transparent !important;
+  display: flex; align-items: center; white-space: pre; overflow: hidden; background: var(--nt-surface, #fff);
+}
+.comboCaret { position: absolute; right: 2px; z-index: 2; border: 0; background: transparent; color: #6b7280; cursor: pointer; font-size: 11px; padding: 0 6px; height: 100%; }
+.comboList {
+  position: absolute; z-index: 1200; top: calc(100% + 2px); left: 0; right: 0; max-height: 240px; overflow-y: auto;
+  background: var(--nt-surface, #fff); border: 1px solid var(--nt-line2, #c6cbd2); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+.comboItem { padding: 5px 10px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.comboActive { background: var(--nt-tint2, #e8eaf6); }
+.comboCurrent { font-weight: 700; }
+.comboEmpty { padding: 6px 10px; color: #9aa0a6; font-size: 12px; }
+
+/* 날짜 칸 배치 (DateField, 팀장님 2026-11-25): 위 줄 [날짜][시간], 아래 줄 각 칸의 단추. */
+.dateGrid { position: relative; display: grid; grid-template-columns: 1fr; gap: 4px; }
+.dateGridTime { grid-template-columns: minmax(0, 1fr) 110px; }
+.dateTimeCell { min-width: 0; }
+.dateTimeBtns { grid-template-columns: repeat(2, 1fr); }
+
+/* 작업 목록 '인계 여부' 칸 (HandoverStateCell) */
+.hoCell { white-space: nowrap; }
+.hoDone { color: #1e8e3e; font-weight: 700; }
+.hoWait { color: #e37400; font-weight: 700; }
+.hoNone { color: #9aa0a6; }
+.hoReject { color: #d93025; font-weight: 700; }
+.hoRevision { border: 0; background: transparent; padding: 0; font: inherit; color: #d93025; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.hoStamp { margin-left: 6px; font-size: 11px; color: #8a94a3; }

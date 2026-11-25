@@ -13,6 +13,7 @@
  *   * `custom`   — 사용자가 만든 가제 열.
  */
 import type { PmColumnsPref, PmStyle } from '@/apis/pmsheet.api'
+import { DEFAULT_COLUMN_STYLES } from './columnDefaults'
 
 export type SheetKind = 'text' | 'date' | 'hour' | 'number' | 'dropdown' | 'combo' | 'picker' | 'link' | 'flag'
 export type SheetSource = 'readonly' | 'job' | 'tr' | 'rv' | 'row' | 'custom'
@@ -98,7 +99,7 @@ export function buildColumns(pref: PmColumnsPref | undefined): SheetColumn[] {
         label: spec.label,
         width: pref?.widths?.[key] ?? spec.width,
         spec,
-        style: pref?.styles?.[key] ?? {},
+        style: { ...(DEFAULT_COLUMN_STYLES[key] ?? {}), ...(pref?.styles?.[key] ?? {}) },
       }
     })
 }

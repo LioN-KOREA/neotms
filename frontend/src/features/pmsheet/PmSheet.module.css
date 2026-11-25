@@ -276,7 +276,7 @@
 
 .rowHead { justify-content: center; color: #5f6368; font-variant-numeric: tabular-nums; }
 .badgeBtn {
-  flex: none; border: 1px solid #1a73e8; background: #e8f0fe; color: #1a73e8; border-radius: 3px;
+  flex: none; margin-left: 3px; border: 1px solid #1a73e8; background: #e8f0fe; color: #1a73e8; border-radius: 3px;
   font-size: 10px; font-weight: 700; line-height: 14px; padding: 0 3px; cursor: pointer;
 }
 .stepBtn {
@@ -296,3 +296,19 @@
 }
 .confirmPop button:first-child { background: #d93025; border-color: #d93025; color: #fff; font-weight: 600; }
 .confirmPop button:hover { filter: brightness(0.95); }
+
+/* 고정 메뉴 (FreezeMenu) */
+.freezeMenu {
+  position: absolute; z-index: 1100; top: 100%; left: 0; min-width: 130px; padding: 4px 0;
+  background: var(--surface, #fff); border: 1px solid #c6cbd2; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+}
+.freezeItem { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 12px; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+.freezeItem:hover { background: #e8f0fe; }
+.freezeArrow { color: #6b7280; font-size: 10px; }
+.freezeSub {
+  position: absolute; left: 100%; top: -5px; min-width: 96px; padding: 4px 0; display: flex; flex-direction: column;
+  background: var(--surface, #fff); border: 1px solid #c6cbd2; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+}
+.freezeOpt { border: 0; background: transparent; text-align: left; padding: 5px 12px; font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.freezeOpt:hover { background: #e8f0fe; }
+.freezeOn { font-weight: 700; color: #1a73e8; }

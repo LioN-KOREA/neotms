@@ -15,12 +15,14 @@ import { useAssignableStaff, useCodeOptions } from '@/apis/queries/neotms.query'
 import { useMyPmPrefs, useSaveLangFav, type LangFav } from '@/apis/pmsheet.api'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { Modal } from '@/shared/ui/Modal'
+import { LangCombo } from '@/shared/ui/LangCombo'
 import { NumberInput } from '@/shared/ui/NumberInput'
 import ui from '@/shared/ui/ui.module.css'
 import { formatMoney } from '@/shared/utils/money'
 import {
   basisOptions,
   centsText,
+  faceVolume,
   fitBasis,
   lineSubtotal,
   PRICE_MODES,
@@ -88,7 +90,7 @@ export function LanguagePickers(props: {
           출발어
         </label>
         <div className={ui.langRow}>
-          <CodeSelect id="job-slang" domain={CODE_DOMAIN.LANG} value={props.source} onChange={props.onSource} placeholder={props.sourcePlaceholder} pinned={langs} disabled={props.disabled} silent />
+          <LangCombo id="job-slang" ariaLabel="출발어" value={props.source} onChange={props.onSource} placeholder={props.sourcePlaceholder ?? null} pinned={langs} disabled={props.disabled} />
           {star(props.source, '출발어')}
         </div>
         <Shortcuts
@@ -107,22 +109,23 @@ export function LanguagePickers(props: {
       {props.onAddTarget ? (
         <div className={ui.field}>
           <label className={ui.label} htmlFor="job-elang-pick">
-            도착어 <span className={ui.hint}>(여러 개 — 고르고 추가, 또는 바로가기를 누르면 아래 표에 들어갑니다)</span>
+            도착어 <span className={ui.hint}>(여러 개 — 고르거나 바로가기를 누르면 아래 표에 바로 들어갑니다)</span>
           </label>
-          <div className={ui.langRow} style={{ gridTemplateColumns: '1fr auto auto' }}>
-            <CodeSelect id="job-elang-pick" domain={CODE_DOMAIN.LANG} value={pending} onChange={setPending} placeholder="도착어 고르기" pinned={langs} disabled={props.disabled} silent />
-            {star(pending, '도착어')}
-            <button
-              type="button"
-              className={`${ui.btn} ${ui.btnPrimary}`}
-              disabled={props.disabled || !pending}
-              onClick={() => {
-                props.onAddTarget?.(pending)
-                setPending('')
+          {/* 고르면 바로 표에 추가 — 칸은 비우지 않는다(옆 ☆ 로 즐겨찾기할 수 있게) (팀장님 2026-11-25). */}
+          <div className={ui.langRow}>
+            <LangCombo
+              id="job-elang-pick"
+              ariaLabel="도착어"
+              value={pending}
+              onChange={(code) => {
+                setPending(code)
+                if (code) props.onAddTarget?.(code)
               }}
-            >
-              추가
-            </button>
+              placeholder="도착어 고르기"
+              pinned={langs}
+              disabled={props.disabled}
+            />
+            {star(pending, '도착어')}
           </div>
           <Shortcuts
             title="도착어 바로가기"
@@ -258,6 +261,61 @@ function NameMenu(props: { x: number; y: number; label: string; onClose: () => v
 /* 언어별 설정 표                                                               */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * 담당PM 고르기 — 목록과 그 아래 한 글자 빠른 단추. 언어별 설정 표의 칸과 같은 모양이고, 인계의
+ * 작업 선택 창에서도 쓴다 (팀장님 2026-11-25).
+ */
+export function PmPickCell(props: {
+  pmId: string | null
+  pmName: string | null
+  onChange: (pmId: string | null, pmName: string | null) => void
+  ariaLabel: string
+  disabled?: boolean
+}) {
+  const { fav } = useFav()
+  const staff = useAssignableStaff(PM_ATTRIBUTE)
+  const people = staff.data?.items ?? []
+  const presets = fav.pmPresets ?? []
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}>
+      <select
+        className={ui.select}
+        aria-label={props.ariaLabel}
+        value={props.pmId ?? ''}
+        disabled={props.disabled}
+        onChange={(e) => {
+          const p = people.find((x) => x.id === e.target.value)
+          props.onChange(p?.id ?? null, p ? p.name || p.mgrId : null)
+        }}
+      >
+        <option value="">(지정 안 함)</option>
+        {props.pmId && !people.some((p) => p.id === props.pmId) ? <option value={props.pmId}>{props.pmName ?? props.pmId}</option> : null}
+        {people.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name || p.mgrId}
+          </option>
+        ))}
+      </select>
+      {presets.length > 0 ? (
+        <div className={ui.tgPresets}>
+          {presets.map((p) => (
+            <button
+              key={`${p.label}${p.staffId}`}
+              type="button"
+              className={`${ui.tgPreset} ${props.pmId === p.staffId ? ui.tgPresetOn : ''}`}
+              title={p.name}
+              disabled={props.disabled}
+              onClick={() => props.onChange(p.staffId, p.name)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function TargetTable(props: {
   lines: TargetLine[]
   onChange: (lines: TargetLine[]) => void
@@ -275,7 +333,10 @@ export function TargetTable(props: {
   const people = staff.data?.items ?? []
   const presets = fav.pmPresets ?? []
   const [customOpen, setCustomOpen] = useState(false)
-  const [bulk, setBulk] = useState({ raw: '', unit: '단어', basis: '250', price: '', face: '' })
+  const [bulk, setBulkRaw] = useState({ raw: '', unit: '단어', basis: '250', price: '', face: '', faceManual: false })
+  /** 모두적용 줄의 액면 물량은 물량·기준으로 자동 계산 — 직접 고치면 그 값을 쓴다 (팀장님 2026-11-25). */
+  const setBulk = (next: typeof bulk) =>
+    setBulkRaw(next.faceManual ? next : { ...next, face: faceVolume(next.raw, next.basis) ?? '' })
 
   const update = (key: string, patch: Partial<TargetLine>, refresh = false) =>
     onChange(lines.map((l) => (l.key === key ? (refresh ? refreshFace({ ...l, ...patch }) : { ...l, ...patch }) : l)))
@@ -290,6 +351,19 @@ export function TargetTable(props: {
       }),
     )
 
+  /** 줄 머리의 '모두적용' — 물량·기준·단가·액면 물량을 한꺼번에. 비워 둔 칸은 건너뛴다. */
+  const applyEverything = () =>
+    onChange(
+      lines.map((l) => {
+        let next: TargetLine = { ...l, basis: fitBasis(bulk.raw.trim() ? bulk.unit : l.unit, bulk.basis) }
+        if (bulk.raw.trim()) next = { ...next, rawVolume: bulk.raw, unit: bulk.unit }
+        if (bulk.price.trim()) next = { ...next, price: bulk.price }
+        if (bulk.faceManual && bulk.face.trim()) next = { ...next, face: bulk.face, faceManual: true }
+        else next = refreshFace({ ...next, faceManual: false })
+        return next
+      }),
+    )
+
   const cell = (children: ReactNode, extra?: string) => <div className={`${ui.tgCell} ${extra ?? ''}`}>{children}</div>
 
   return (
@@ -301,29 +375,40 @@ export function TargetTable(props: {
 
         {!editMode ? (
           <div className={ui.tgBulk}>
-            <span className={ui.tgBulkTitle}>모두적용</span>
+            <div className={ui.tgBulkHead}>
+              <button
+                type="button"
+                className={`${ui.btn} ${ui.btnPrimary} ${ui.btnSm}`}
+                disabled={disabled || lines.length === 0}
+                onClick={applyEverything}
+                title="아래 물량·기준·단가·액면 물량을 모든 언어 줄에 한꺼번에 넣습니다 (비워 둔 칸은 건너뜀)"
+              >
+                모두적용 (전체)
+              </button>
+              <span className={ui.hint}>칸 옆의 '이 칸만' 은 그 칸만 모든 줄에 넣습니다.</span>
+            </div>
             <span className={ui.tgBulkGroup}>
               물량
               <NumberInput aria-label="모두적용 물량" className={ui.tgNarrow} value={bulk.raw} onValueChange={(v) => setBulk({ ...bulk, raw: v })} />
               <CodeSelect ariaLabel="모두적용 단위" domain={CODE_DOMAIN.UNIT} value={bulk.unit} onChange={(v) => setBulk({ ...bulk, unit: v, basis: fitBasis(v, bulk.basis) })} placeholder={null} silent />
-              <button type="button" className={`${ui.btn} ${ui.btnSm}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('raw')}>모두적용</button>
+              <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm} ${ui.tgOnly}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('raw')} title="이 칸의 값만 모든 언어 줄에 넣습니다">이 칸만</button>
             </span>
             <span className={ui.tgBulkGroup}>
               기준
               <select className={ui.select} aria-label="모두적용 기준" value={bulk.basis} onChange={(e) => setBulk({ ...bulk, basis: e.target.value })}>
                 {basisOptions(bulk.unit).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
-              <button type="button" className={`${ui.btn} ${ui.btnSm}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('basis')}>모두적용</button>
+              <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm} ${ui.tgOnly}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('basis')} title="이 칸의 값만 모든 언어 줄에 넣습니다">이 칸만</button>
             </span>
             <span className={ui.tgBulkGroup}>
               단가
               <NumberInput aria-label="모두적용 단가" className={ui.tgNarrow} value={bulk.price} onValueChange={(v) => setBulk({ ...bulk, price: v })} />
-              <button type="button" className={`${ui.btn} ${ui.btnSm}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('price')}>모두적용</button>
+              <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm} ${ui.tgOnly}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('price')} title="이 칸의 값만 모든 언어 줄에 넣습니다">이 칸만</button>
             </span>
             <span className={ui.tgBulkGroup}>
               액면 물량
-              <NumberInput aria-label="모두적용 액면 물량" className={ui.tgNarrow} value={bulk.face} onValueChange={(v) => setBulk({ ...bulk, face: v })} />
-              <button type="button" className={`${ui.btn} ${ui.btnSm}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('face')}>모두적용</button>
+              <NumberInput aria-label="모두적용 액면 물량" className={ui.tgNarrow} value={bulk.face} onValueChange={(v) => setBulk({ ...bulk, face: v, faceManual: v.trim().length > 0 })} />
+              <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm} ${ui.tgOnly}`} disabled={disabled || lines.length === 0} onClick={() => applyAll('face')} title="이 칸의 값만 모든 언어 줄에 넣습니다">이 칸만</button>
             </span>
           </div>
         ) : null}
@@ -346,7 +431,7 @@ export function TargetTable(props: {
           {cell('합산', ui.tgHead)}
 
           {lines.length === 0 ? (
-            <div className={ui.tgEmpty}>도착어를 고르고 '추가' 를 누르거나, 도착어 바로가기를 눌러 주세요.</div>
+            <div className={ui.tgEmpty}>도착어를 고르거나 도착어 바로가기를 눌러 주세요.</div>
           ) : null}
 
           {lines.map((l) => {
@@ -355,7 +440,7 @@ export function TargetTable(props: {
               <div key={l.key} className={ui.tgLine}>
                 {cell(
                   editMode ? (
-                    <CodeSelect ariaLabel="도착어" domain={CODE_DOMAIN.LANG} value={l.lang} onChange={(v) => update(l.key, { lang: v })} placeholder={props.langPlaceholder ?? null} pinned={fav.langs} disabled={disabled} silent />
+                    <LangCombo ariaLabel="도착어" value={l.lang} onChange={(v) => update(l.key, { lang: v })} placeholder={props.langPlaceholder ?? null} pinned={fav.langs} disabled={disabled} />
                   ) : (
                     <>
                       <span className={ui.tgLang}>{nameOf(l.lang)}</span>
