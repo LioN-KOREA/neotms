@@ -97,6 +97,23 @@ export interface PmViewPref {
   freezeRows?: number
   /** 글을 적은 빈 줄들. */
   freeRows?: PmFreeRow[]
+  /** 작업 등록 창의 언어 즐겨찾기 (나만 적용). */
+  langFav?: LangFav
+}
+
+/**
+ * 작업 등록 창의 나만의 설정 (2026-11-25).
+ *   langs — ☆ 한 언어 (목록 맨 위)
+ *   src / tgt — 출발어 · 도착어 바로가기 단추 (`label` 은 우클릭으로 바꾼 이름)
+ *   pmPresets — 담당PM 한 글자 빠른 단추 (예: '윤' = 김재윤)
+ *   pairs — 예전(언어쌍 단추) 값. 더는 쓰지 않는다.
+ */
+export interface LangFav {
+  langs?: string[]
+  src?: { code: string; label?: string | null }[]
+  tgt?: { code: string; label?: string | null }[]
+  pmPresets?: { label: string; staffId: string; name: string }[]
+  pairs?: { s: string; e: string; label?: string | null }[]
 }
 
 export interface PmPrefs {
@@ -268,6 +285,33 @@ export const pmKeys = {
   notices: ['workspace', 'pm', 'notices'] as const,
   project: (id: string) => ['workspace', 'pm', 'project', id] as const,
   suggestions: (jobId: string) => ['workspace', 'pm', 'suggest', jobId] as const,
+}
+
+/** 내 개인 설정 문서들 (시트 없이). 시트 밖 화면(작업 등록의 언어 즐겨찾기)이 쓴다. */
+export const fetchMyPmPrefs = (signal?: AbortSignal) => neotmsApi<PmPrefs>('/api/v0/pm-sheet/prefs', { signal })
+
+const myPrefsKey = ['workspace', 'pm', 'myprefs'] as const
+
+export function useMyPmPrefs() {
+  return useQuery({ queryKey: myPrefsKey, queryFn: ({ signal }) => fetchMyPmPrefs(signal), staleTime: 60_000, retry: false })
+}
+
+/**
+ * 언어 즐겨찾기 저장. `view` 문서를 통째로 쓰므로, 쓰기 직전에 최신 문서를 다시 읽어 다른 값
+ * (시트의 틀 고정·빈 줄)을 지우지 않는다.
+ */
+export function useSaveLangFav() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (langFav: LangFav) => {
+      const fresh = await fetchMyPmPrefs()
+      await writePmPref(undefined, 'view', { ...(fresh.view ?? {}), langFav })
+    },
+    onMutate: (langFav) => {
+      qc.setQueryData<PmPrefs>(myPrefsKey, (old) => ({ ...(old ?? {}), view: { ...(old?.view ?? {}), langFav } }))
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: pmKeys.all }),
+  })
 }
 
 export function usePmSheet(staffId: string | null) {

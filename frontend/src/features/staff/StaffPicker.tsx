@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useAssignableStaff } from '@/apis/queries/neotms.query'
 import type { AssignableAttribute, AssignableStaff } from '@/apis/neotms.types'
 import { RecordPicker, type PickerOption } from '@/shared/ui/RecordPicker'
+import { SuggestPicker } from '@/shared/ui/SuggestPicker'
 
 /**
  * One eligible colleague as a picker row. `mgrId` is the subtitle - two people can share a name.
@@ -27,6 +28,8 @@ interface Props {
   onChange: (option: PickerOption | null) => void
   required?: boolean
   disabled?: boolean
+  /** 입력하면서 고르는 칸(드롭다운 추천·Tab). 프로젝트 창에서 쓴다. */
+  suggest?: boolean
 }
 
 /**
@@ -60,6 +63,7 @@ export function StaffPicker({
   onChange,
   required = false,
   disabled = false,
+  suggest = false,
 }: Props) {
   const [keyword, setKeyword] = useState('')
   const [submitted, setSubmitted] = useState('')
@@ -68,7 +72,7 @@ export function StaffPicker({
 
   const options = useMemo(() => {
     const all = (staffQuery.data?.items ?? []).map(assignableOption)
-    const needle = submitted.trim().toLowerCase()
+    const needle = (suggest ? keyword : submitted).trim().toLowerCase()
     if (!needle) return all
     /*
      * Name and `mgrId` both, because both are how somebody is identified here - a search for
@@ -80,7 +84,31 @@ export function StaffPicker({
         option.title.toLowerCase().includes(needle) ||
         (option.subtitle ?? '').toLowerCase().includes(needle),
     )
-  }, [staffQuery.data, submitted])
+  }, [staffQuery.data, submitted, suggest, keyword])
+
+  if (suggest) {
+    // 이름이 검색어로 시작하는 사람을 먼저 (회색 미리보기·Tab 이 그 사람을 넣는다).
+    const needle = keyword.trim().toLowerCase()
+    const ranked = needle
+      ? [...options].sort((a, b) => Number(!a.title.toLowerCase().startsWith(needle)) - Number(!b.title.toLowerCase().startsWith(needle)))
+      : options
+    return (
+      <SuggestPicker
+        id={id}
+        label={label}
+        required={required}
+        disabled={disabled}
+        selected={value}
+        onSelect={onChange}
+        options={ranked}
+        keyword={keyword}
+        onKeywordChange={setKeyword}
+        isLoading={staffQuery.isLoading}
+        placeholder="이름 또는 사번"
+        emptyText={needle ? `'${keyword.trim()}' 로 찾은 담당자가 없습니다.` : '지정할 수 있는 담당자가 없습니다.'}
+      />
+    )
+  }
 
   return (
     <RecordPicker

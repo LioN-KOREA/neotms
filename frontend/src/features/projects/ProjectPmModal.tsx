@@ -51,7 +51,7 @@ export function ProjectPmModal({ project, onClose, onDone }: Props) {
 
   return (
     <Modal
-      title="PM 재배정"
+      title="총괄PM 재배정"
       onClose={onClose}
       isDirty={!updateProject.isPending && !!pm}
       width={520}
@@ -79,8 +79,8 @@ export function ProjectPmModal({ project, onClose, onDone }: Props) {
       <ErrorNotice error={updateProject.error} />
 
       <InfoNotice>
-        배정하면 이 프로젝트는 새 PM 의 '인계받은 프로젝트 목록' 에 올라가고, 수락 여부를 다시
-        기다리게 됩니다. 이전 PM 이 남긴 답변과 사유는 프로젝트 상세의 수락 이력에 그대로
+        배정하면 이 프로젝트는 새 총괄PM 의 '인계받은 프로젝트 목록' 에 올라가고, 수락 여부를 다시
+        기다리게 됩니다. 이전 총괄PM 이 남긴 답변과 사유는 프로젝트 상세의 수락 이력에 그대로
         남습니다.
       </InfoNotice>
 
@@ -92,9 +92,9 @@ export function ProjectPmModal({ project, onClose, onDone }: Props) {
             <span className={ui.cellMono}>{project.prjCode}</span>
           </p>
           {project.prjPmName ? (
-            <span className={ui.hint}>현재 PM: {project.prjPmName}</span>
+            <span className={ui.hint}>현재 총괄PM: {project.prjPmName}</span>
           ) : (
-            <span className={ui.hint}>현재 지정된 PM 이 없습니다.</span>
+            <span className={ui.hint}>현재 지정된 총괄PM 이 없습니다.</span>
           )}
         </div>
 
@@ -102,7 +102,7 @@ export function ProjectPmModal({ project, onClose, onDone }: Props) {
           <StaffPicker
             attribute={PM_ATTRIBUTE}
             id="reassign-pm"
-            label="새 PM"
+            label="새 총괄PM"
             value={pm}
             onChange={setPm}
             required

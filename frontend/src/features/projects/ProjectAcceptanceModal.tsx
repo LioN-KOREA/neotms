@@ -60,7 +60,7 @@ export function ProjectAcceptanceModal({ project, accepted, onClose, onDone }: P
     onDone(
       accepted
         ? `'${project.prjName || project.prjCode}' 프로젝트를 수락했습니다.`
-        : `'${project.prjName || project.prjCode}' 프로젝트를 거절했습니다. 영업담당자가 다른 PM 을 배정할 수 있습니다.`,
+        : `'${project.prjName || project.prjCode}' 프로젝트를 거절했습니다. 영업담당자가 다른 총괄PM 을 배정할 수 있습니다.`,
     )
     onClose()
   }
@@ -92,7 +92,7 @@ export function ProjectAcceptanceModal({ project, accepted, onClose, onDone }: P
       <InfoNotice>
         {accepted
           ? '수락하면 이 프로젝트의 담당 PM 으로 확정됩니다. 수락은 이 화면에서 되돌릴 수 없고, 맡을 수 없게 되면 영업담당자에게 PM 재배정을 요청해야 합니다.'
-          : '거절하면 이 프로젝트는 담당자가 정해지지 않은 상태로 영업담당자에게 돌아갑니다. 거절도 되돌릴 수 없으며, 다시 맡으려면 PM 재배정을 받아야 합니다.'}
+          : '거절하면 이 프로젝트는 담당자가 정해지지 않은 상태로 영업담당자에게 돌아갑니다. 거절도 되돌릴 수 없으며, 다시 맡으려면 총괄PM 재배정을 받아야 합니다.'}
       </InfoNotice>
 
       <div className={ui.formGrid}>
@@ -121,7 +121,7 @@ export function ProjectAcceptanceModal({ project, accepted, onClose, onDone }: P
           <span className={ui.hint}>
             {accepted
               ? '비워 두셔도 됩니다. 적으시면 프로젝트 상세의 수락 이력에 함께 남습니다.'
-              : '비워 두셔도 되지만, 적어 주시면 영업담당자가 다음 PM 을 정할 때 같은 이유로 다시 거절되는 일을 줄일 수 있습니다.'}
+              : '비워 두셔도 되지만, 적어 주시면 영업담당자가 다음 총괄PM 을 정할 때 같은 이유로 다시 거절되는 일을 줄일 수 있습니다.'}
           </span>
         </div>
       </div>

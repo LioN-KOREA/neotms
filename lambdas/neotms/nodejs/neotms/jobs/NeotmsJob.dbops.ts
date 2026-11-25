@@ -116,6 +116,10 @@ export type JobRow = {
    * so it has no volume and no unit price; what it has is the total below, entered directly.
    */
   jobVolume: string | null;
+  /** db/010: counted volume, basis and price mode behind `jobVolume` / the total. */
+  jobRawVolume: string | null;
+  jobBasis: string | null;
+  jobPriceMode: string | null;
   unitCode: string | null;
   jobPriceSel: string | null;
   jobPrice: string | null;
@@ -221,6 +225,9 @@ const JOB_DETAIL_COLUMNS = `
   jdl.job_slang    AS job_slang,
   jdl.job_elang    AS job_elang,
   jdl.job_volume   AS job_volume,
+  jdl.job_raw_volume AS job_raw_volume,
+  jdl.job_basis    AS job_basis,
+  jdl.job_price_mode AS job_price_mode,
   jdl.unit_code    AS unit_code,
   jdl.job_price_sel AS job_price_sel,
   jdl.job_price    AS job_price,
@@ -259,6 +266,9 @@ export const toJobRow = (row: SqlRow): JobRow => ({
   jobElang: readText(row, "job_elang"),
   jobCategory: readText(row, "job_category"),
   jobVolume: readMoney(row, "job_volume"),
+  jobRawVolume: readMoney(row, "job_raw_volume"),
+  jobBasis: readMoney(row, "job_basis"),
+  jobPriceMode: readText(row, "job_price_mode"),
   unitCode: readText(row, "unit_code"),
   jobPriceSel: readText(row, "job_price_sel"),
   jobPrice: readMoney(row, "job_price"),
@@ -661,6 +671,9 @@ const JOB_LINGUISTIC_FIELDS: readonly FieldSpec<JobUpdate>[] = [
   { column: "job_slang", kind: "text", read: (i) => i.jobSlang },
   { column: "job_elang", kind: "text", read: (i) => i.jobElang },
   { column: "job_volume", kind: "money", read: (i) => i.jobVolume },
+  { column: "job_raw_volume", kind: "money", read: (i) => i.jobRawVolume },
+  { column: "job_basis", kind: "money", read: (i) => i.jobBasis },
+  { column: "job_price_mode", kind: "text", read: (i) => i.jobPriceMode },
   { column: "unit_code", kind: "text", read: (i) => i.unitCode },
   { column: "job_price_sel", kind: "text", read: (i) => i.jobPriceSel },
   { column: "job_price", kind: "money", read: (i) => i.jobPrice },

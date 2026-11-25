@@ -185,6 +185,16 @@ export async function writePmCells(
   });
 }
 
+/**
+ * The caller's own preference documents, without the sheet. Screens other than the sheet keep
+ * small personal settings here too (the job form's language favourites live in `view.langFav`).
+ */
+export async function readMyPmPrefs(caller: NeotmsCaller): Promise<ResponseData<Record<string, unknown> | string>> {
+  const owner = ownerOf(caller, undefined);
+  if (!owner) return badRequest("no staff record for this account");
+  return runDb("read my pm prefs", async () => ok((await pgQuery(PmSheetPrefsOps(owner))).data));
+}
+
 export async function writePmPref(
   caller: NeotmsCaller,
   kind: string,

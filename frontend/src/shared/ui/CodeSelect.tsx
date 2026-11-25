@@ -39,6 +39,8 @@ interface Props {
    * 비면 정말 비어 있으므로 경고를 끄면 안 된다.
    */
   silent?: boolean
+  /** 맨 위에 ★ 로 먼저 보일 값들 (언어 즐겨찾기). */
+  pinned?: readonly string[]
 }
 
 /**
@@ -75,8 +77,15 @@ export function CodeSelect({
   disabled,
   hint,
   silent,
+  pinned,
 }: Props) {
-  const { options, isEmpty, isLoading } = useCodeOptions(domain, value)
+  const { options: rawOptions, isEmpty, isLoading } = useCodeOptions(domain, value)
+  const options = pinned?.length
+    ? [
+        ...pinned.flatMap((v) => rawOptions.filter((o) => o.value === v).map((o) => ({ ...o, label: `★ ${o.label}` }))),
+        ...rawOptions.filter((o) => !pinned.includes(o.value)),
+      ]
+    : rawOptions
   const label = CODE_DOMAIN_LABELS[domain]
 
   /**

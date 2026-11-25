@@ -18,6 +18,9 @@ import {
   type JobUpdate,
 } from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
+import { NumberInput } from '@/shared/ui/NumberInput'
+import { LanguagePickers, TargetTable } from './TargetLanguages'
+import { centsText, faceVolume, fitBasis, planJobs, refreshFace, toCents, type PriceMode, type TargetLine } from './targetPricing'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
@@ -98,6 +101,20 @@ interface Props {
  */
 const MONEY_KEYS = ['jobVolume', 'jobPrice', 'jobPriceDis', 'jobPriceSum', 'coinCode']
 
+const EMPTY_LINE: TargetLine = {
+  key: '',
+  lang: '',
+  pmId: null,
+  pmName: null,
+  rawVolume: '',
+  unit: '단어',
+  basis: '250',
+  price: '',
+  mode: 'unit',
+  face: '',
+  faceManual: false,
+}
+
 export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Props) {
   const isEdit = !!job
   const createJob = useCreateJob()
@@ -177,6 +194,35 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
   })
   const [dirty, setDirty] = useState(false)
 
+  /*
+   * 언어별 설정 (팀장님 2026-11-25). 등록 창은 도착어마다 한 줄 → 저장하면 줄마다 작업 하나.
+   * 수정 창은 그 작업의 한 줄 — 기존 작업은 원래 물량·기준이 없으면 기준 1, 원래 물량 = 액면 물량.
+   */
+  const [targets, setTargets] = useState<TargetLine[]>(() => {
+    if (!job) return []
+    const unit = job.unitCode ?? '단어'
+    // 예전 작업(원래 물량·기준 없음)은 기준 1 — 물량이 곧 액면 물량이다.
+    const basis = fitBasis(unit, job.jobBasis ? String(Number(job.jobBasis)) : '1')
+    const face = job.jobVolume ?? ''
+    const raw = job.jobRawVolume ?? face
+    const auto = faceVolume(raw, basis)
+    return [
+      {
+        key: job.id,
+        lang: job.jobElang ?? '',
+        pmId: job.jobPmId,
+        pmName: job.jobPmName,
+        rawVolume: raw,
+        unit,
+        basis,
+        price: job.jobPrice ?? '',
+        mode: (job.jobPriceMode as PriceMode | null) ?? 'unit',
+        face,
+        faceManual: face !== '' && (auto === null || toCents(auto) !== toCents(face)),
+      },
+    ]
+  })
+
   /**
    * 합계를 사람이 직접 고쳤는지. 수정 화면은 **처음부터 고쳐진 것으로 취급한다** — 저장된
    * 합계가 손으로 조정된 값일 수 있고, 그 가능성이 이 플래그가 존재하는 이유 전부다.
@@ -213,13 +259,44 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
    * **원화 환산은 여기 없다.** 그건 이 폼의 상태가 아니라 통화·환율·시세에서 나오는 파생값이고,
    * 아래 `ksum` 이 렌더마다 계산한다 — 시세는 `set()` 이 불리지 않아도 도착한다.
    */
-  const computeSum = (f: typeof form) => {
+  const computeSum = (f: typeof form, lines: readonly TargetLine[] = targets) => {
     if (!isLinguistic(f.jobType)) return toDecimalInput(f.jobPriceSum)
-    // 할인이 비어 있으면 `decimalSubtract` 가 곱셈 결과를 그대로 돌려준다(money.ts).
-    return decimalSubtract(decimalMultiply(f.jobVolume, f.jobPrice), f.jobPriceDis)
+    const plan = planJobs(lines, f.jobPriceDis)
+    return plan ? centsText(plan.sums.reduce((a, b) => a + b, 0n)) : null
+  }
+
+  /** 언어별 설정 표가 바뀌면 총 합산을 다시 낸다 (금액을 건드린 것으로 친다). */
+  const updateTargets = (next: TargetLine[]) => {
+    setDirty(true)
+    setMoneyTouched(true)
+    setTargets(next)
+    setForm((prev) => ({ ...prev, jobPriceSum: computeSum(prev, next) ?? '' }))
+  }
+
+  const addTarget = (lang: string) => {
+    if (!lang) return
+    if (targets.some((t) => t.lang === lang)) return
+    const last = targets[targets.length - 1]
+    const mine = pm
+    updateTargets([
+      ...targets,
+      refreshFace({
+        ...EMPTY_LINE,
+        key: `${lang}-${String(Date.now())}`,
+        lang,
+        pmId: last?.pmId ?? mine?.id ?? null,
+        pmName: last?.pmName ?? mine?.title ?? null,
+        unit: last?.unit ?? '단어',
+        basis: last?.basis ?? '250',
+      }),
+    ])
   }
 
   const suggestedSum = computeSum(form)
+  const targetsSubtotal = (() => {
+    const plan = planJobs(targets, '0')
+    return plan ? centsText(plan.subtotals.reduce((a, b) => a + b, 0n)) : null
+  })()
 
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setDirty(true)
@@ -241,7 +318,9 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
        * 원화 금액은 이제 상태가 아니라 파생값이다(파일 머리말).
        */
       const nextLinguistic = isLinguistic(next.jobType)
-      if (!sumEdited && nextLinguistic && ['jobVolume', 'jobPrice', 'jobPriceDis'].includes(key)) {
+      if (nextLinguistic && key === 'jobPriceDis') {
+        next.jobPriceSum = computeSum(next) ?? ''
+      } else if (!sumEdited && nextLinguistic && ['jobVolume', 'jobPrice'].includes(key)) {
         next.jobPriceSum = computeSum(next) ?? ''
       }
       /*
@@ -316,7 +395,10 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
   }
 
   const name = form.jobName.trim()
-  const canSave = name.length > 0 && !!project && !pending
+  const linesOk =
+    !isLinguistic(form.jobType) ||
+    (targets.length > 0 && targets.every((t) => t.lang) && planJobs(targets, form.jobPriceDis) !== null)
+  const canSave = name.length > 0 && !!project && !pending && linesOk
 
   /** 이 작업이 언어쌍을 가지는지. 입력란과 저장 본문이 모두 이 한 값에서 갈린다. */
   const linguistic = isLinguistic(form.jobType)
@@ -436,6 +518,10 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
 
   const onSubmit = async () => {
     if (!project || name.length === 0) return
+    if (linguistic) {
+      await submitTargets()
+      return
+    }
 
     /*
      * 업무 구분에 맞는 쪽만 보낸다.
@@ -518,8 +604,75 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
    * 환산 버튼을 누른 뒤에는 이 경고가 **거의 항상 켜진다.** 그게 맞다: 합계는 원화가 되었고
    * 단가는 외화로 남아 있으므로 둘은 정말로 더 이상 곱해서 맞지 않는다(`convertToKrw` 주석).
    */
+  /**
+   * 언어 작업 저장. 등록이면 도착어마다 작업 하나 — 언어별 값(도착어·담당PM·물량·기준·단가·
+   * 가격 방식·금액)만 다르고 나머지는 같다. 할인은 언어별 합산 비율로 나눠 넣는다(끝수는 첫 작업).
+   * 하나씩 차례로 만든다. 중간에 실패하면 이미 만든 작업을 알려 주고 멈춘다(만든 것은 남는다).
+   */
+  const submitTargets = async () => {
+    if (!project) return
+    const plan = planJobs(targets, form.jobPriceDis, toDecimalInput(form.jobPriceSum))
+    if (!plan) return
+    const base = {
+      jobName: name,
+      workCode: form.workCode.trim() || null,
+      jobType: form.jobType.trim() || null,
+      jobSlang: form.jobSlang.trim() || null,
+      coinCode: form.coinCode.trim() || null,
+      coinRate: settled ? effectiveRate : null,
+      jobSday: form.jobSday || null,
+      jobSdayTime: form.jobSdayTime || null,
+      jobEday: form.jobEday || null,
+      jobEdayTime: form.jobEdayTime || null,
+      jobState: form.jobState.trim() || null,
+      jobMemo: form.jobMemo.trim() || null,
+    }
+    const inputOf = (t: TargetLine, i: number): JobUpdate => {
+      const sum = centsText(plan.sums[i]!)
+      return {
+        ...base,
+        jobPmId: t.pmId,
+        jobElang: t.lang || null,
+        jobVolume: toDecimalInput(t.face),
+        jobRawVolume: toDecimalInput(t.rawVolume),
+        jobBasis: t.basis || null,
+        jobPriceMode: t.mode,
+        unitCode: t.unit.trim() || null,
+        jobPrice: t.mode === 'free' ? '0' : toDecimalInput(t.price),
+        jobPriceDis: plan.discounts[i] === 0n ? null : centsText(plan.discounts[i]!),
+        jobPriceSum: sum,
+        // 수정 창에서 금액을 건드리지 않았으면 저장된 원화 값을 지킨다 (위 `ksum` 주석).
+        jobPriceKsum: job && !moneyTouched ? ksum : effectiveRate !== null ? decimalMultiply(sum, effectiveRate) : null,
+      }
+    }
+
+    if (job) {
+      await updateJob.mutateAsync({ id: job.id, input: inputOf(targets[0]!, 0) })
+      onSaved(`${name} 작업을 수정했습니다.`)
+      onClose()
+      return
+    }
+    const made: string[] = []
+    try {
+      for (const [i, t] of targets.entries()) {
+        const created = await createJob.mutateAsync({ ...inputOf(t, i), projectId: project.id, jobName: name } as JobInput)
+        made.push(created.jobCode)
+      }
+    } catch (err) {
+      if (made.length > 0) {
+        // 만든 것까지는 남는다 — 무엇이 만들어졌는지 알려 주고, 나머지는 창에 남겨 다시 저장하게 한다.
+        setTargets(targets.slice(made.length))
+        onSaved(`${made.length}개 작업은 등록했습니다 (${made.join(', ')}). 나머지는 저장하지 못했습니다 — 창에서 다시 저장해 주세요.`)
+      }
+      throw err
+    }
+    onSaved(`${name} 작업 ${made.length}개를 등록했습니다. (${made.join(', ')})`)
+    onClose()
+  }
+
   const differs =
     linguistic &&
+    isEdit &&
     suggestedSum !== null &&
     toDecimalInput(form.jobPriceSum) !== null &&
     decimalSubtract(toDecimalInput(form.jobPriceSum), suggestedSum) !== '0.00'
@@ -637,19 +790,22 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
          * here. One project routinely runs with its work split between two of them, and until this
          * picker existed the column was written only by the server's own default.
          */}
-        <div className={ui.field}>
-          <StaffPicker
-            attribute={PM_ATTRIBUTE}
-            id="job-pm"
-            label="담당 PM"
-            value={pm}
-            onChange={(option) => {
-              setDirty(true)
-              setPm(option)
-            }}
-            disabled={pending}
-          />
-        </div>
+        {/* 언어 작업의 담당 PM 은 언어별 설정 표에서 줄마다 정한다. */}
+        {linguistic ? null : (
+          <div className={ui.field}>
+            <StaffPicker
+              attribute={PM_ATTRIBUTE}
+              id="job-pm"
+              label="담당 PM"
+              value={pm}
+              onChange={(option) => {
+                setDirty(true)
+                setPm(option)
+              }}
+              disabled={pending}
+            />
+          </div>
+        )}
 
         {/*
          * 업무 구분. 아래 두 칸이 무엇이 될지를 이 값이 결정한다.
@@ -695,33 +851,13 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
          * 칸은 '지정 없음' 으로 남는다 — 저장되어 있는 사실을 화면이 바꾸지 않는다.
          */}
         {linguistic ? (
-          <>
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="job-slang">
-                출발어
-              </label>
-              <CodeSelect
-                id="job-slang"
-                domain={CODE_DOMAIN.LANG}
-                value={form.jobSlang}
-                onChange={(v) => set('jobSlang', v)}
-                placeholder={unsetPlaceholder(isEdit, form.jobSlang)}
-              />
-            </div>
-
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="job-elang">
-                도착어
-              </label>
-              <CodeSelect
-                id="job-elang"
-                domain={CODE_DOMAIN.LANG}
-                value={form.jobElang}
-                onChange={(v) => set('jobElang', v)}
-                placeholder={unsetPlaceholder(isEdit, form.jobElang)}
-              />
-            </div>
-          </>
+          <LanguagePickers
+            source={form.jobSlang}
+            onSource={(v) => set('jobSlang', v)}
+            sourcePlaceholder={unsetPlaceholder(isEdit, form.jobSlang) ?? undefined}
+            onAddTarget={isEdit ? undefined : addTarget}
+            disabled={pending}
+          />
         ) : (
           <div className={ui.field}>
             <label className={ui.label} htmlFor="job-category">
@@ -746,191 +882,155 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
          * 적어 넣었고, 그 행은 "1 단어 번역" 과 생긴 것이 같아졌다. 칸을 없애는 것이 그 관행을
          * 없애는 유일한 방법이다 — 비워 두라고 안내하는 것으로는 안 된다.
          */}
+        {/* 언어별 설정 표 + 할인 · 총 합산 (팀장님 2026-11-25). */}
         {linguistic ? (
           <>
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="job-volume">
-                물량
-              </label>
-              <div className={ui.inputRow}>
-                <input
-                  id="job-volume"
-                  className={`${ui.input} ${ui.inputNum}`}
-                  inputMode="decimal"
-                  value={form.jobVolume}
-                  onChange={(e) => set('jobVolume', e.target.value)}
+            <TargetTable
+              lines={targets}
+              onChange={updateTargets}
+              coin={form.coinCode}
+              editMode={isEdit}
+              langPlaceholder={unsetPlaceholder(isEdit, form.jobElang)}
+              disabled={pending}
+            />
+            <div className={ui.formRow} style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <div className={ui.field}>
+                <label className={ui.label} htmlFor="job-dis">
+                  할인금액 ({form.coinCode || 'KRW'})
+                </label>
+                <NumberInput
+                  id="job-dis"
+                  className={ui.discountInput}
+                  value={form.jobPriceDis}
+                  onValueChange={(v) => set('jobPriceDis', v)}
                 />
-                {/* 가로로 붙는 자리라 설명을 그리지 않는다 — CodeSelect 의 `silent` 주석 참고. */}
-                <CodeSelect
-                  ariaLabel="단위"
-                  domain={CODE_DOMAIN.UNIT}
-                  value={form.unitCode}
-                  onChange={(v) => set('unitCode', v)}
-                  placeholder="단위"
-                  silent
-                />
+                <span className={ui.hint}>{isEdit || targets.length < 2 ? '합계에서 빼는 금액입니다.' : '전체에서 빼는 금액입니다. 저장할 때 언어별 합산 비율로 나눠 넣습니다.'}</span>
+              </div>
+              <div className={ui.field}>
+                <label className={ui.label} htmlFor="job-sum">
+                  총 합산 금액 ({form.coinCode || 'KRW'})
+                </label>
+                <output id="job-sum" className={`${ui.input} ${ui.inputNum} ${ui.tgTotal}`}>
+                  {formatMoney(toDecimalInput(form.jobPriceSum))}
+                </output>
+                <span className={ui.hint}>
+                  언어별 합산 {formatMoney(targetsSubtotal)} − 할인 {formatMoney(toDecimalInput(form.jobPriceDis) ?? '0')}
+                </span>
               </div>
             </div>
-
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="job-price">
-                단가
-              </label>
-              <input
-                id="job-price"
-                className={`${ui.input} ${ui.inputNum}`}
-                inputMode="decimal"
-                value={form.jobPrice}
-                onChange={(e) => set('jobPrice', e.target.value)}
-              />
-            </div>
-
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="job-dis">
-                할인
-              </label>
-              <input
-                id="job-dis"
-                className={`${ui.input} ${ui.inputNum}`}
-                inputMode="decimal"
-                value={form.jobPriceDis}
-                onChange={(e) => set('jobPriceDis', e.target.value)}
-              />
-              <span className={ui.hint}>합계에서 빼는 금액입니다.</span>
-            </div>
           </>
-        ) : null}
-
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-coin">
-            통화
-          </label>
-          <select
-            id="job-coin"
-            className={ui.select}
-            value={form.coinCode}
-            onChange={(e) => set('coinCode', e.target.value)}
-          >
-            {unsetCoin ? <option value="">{unsetCoin}</option> : null}
-            {codeOptions(COIN_CODES, form.coinCode).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/*
-         * 환율 칸이 있던 자리. 이제 **상태를 보여 주고, 할 수 있는 동작을 준다.**
-         *
-         * 세 모습이 파일 머리말의 세 경우와 일대일로 대응한다. 원화면 할 것이 없고, 정산된
-         * 외화면 박힌 환율을 읽기만 하고, 미정산 외화면 환산 버튼이 나온다.
-         */}
-        <div className={ui.field}>
-          <span className={ui.label}>환율</span>
-          {isKrw ? (
-            <span className={ui.hint}>원화 금액입니다. 환산할 것이 없습니다.</span>
-          ) : settled ? (
-            <>
-              <output className={ui.hint} htmlFor="job-coin">
-                1 {coin} = <strong>{formatMoney(storedRate)}</strong> KRW
-              </output>
+        ) : (
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-sum">
+              합계 ({form.coinCode || '외화'})
+            </label>
+            <NumberInput
+              id="job-sum"
+              readOnly={form.jobType === JOB_TYPE_LINGUISTIC}
+              value={form.jobPriceSum}
+              onValueChange={(v) => {
+                if (linguistic) setSumEdited(true)
+                set('jobPriceSum', v)
+              }}
+            />
+            {linguistic ? null : (
               <span className={ui.hint}>
-                이미 원화로 환산된 건입니다. 이 환율과 아래 원화 금액은 그대로 보존합니다.
+                물량·단가 없이 전체 금액을 직접 넣습니다. 원화 환산 합계는 환율을 곱해 따라옵니다.
               </span>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                className={`${ui.btn} ${ui.btnSm}`}
-                onClick={convertToKrw}
-                disabled={!convertible || pending}
-              >
-                원화로 환산
-              </button>
-              {/*
-               * 누를 수 없을 때 **왜 없는지**를 쓴다. 이유가 셋이고 전부 오류가 아니다 —
-               * 시세를 읽는 중, 수집기가 아직 그 통화를 받아 오지 못함, 환산할 금액이 없음.
-               * "환산할 수 없습니다" 한 줄로 뭉치면 담당자는 셋 중 무엇인지 알 수 없고,
-               * 그중 둘은 기다리면 해결되는 것인데 고장으로 보고된다.
-               */}
-              <span className={fx.canConvert ? ui.hint : ui.hintWarn}>
-                {fx.isLoading
-                  ? '시세를 읽고 있습니다…'
-                  : !fx.canConvert
-                    ? `${coin} 시세가 아직 수집되지 않아 환산할 수 없습니다. 금액은 ${coin} 기준으로 그대로 저장됩니다.`
-                    : toDecimalInput(form.jobPriceSum) === null
-                      ? '환산할 합계를 먼저 입력하세요.'
-                      : `현 시세 1 ${coin} = ${formatMoney(fx.rate)} KRW 기준`}
-              </span>
-            </>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
-        {/*
-         * 합계. 언어 업무에서는 계산 결과이고, 비언어 업무에서는 **출발점**이다.
-         *
-         * 그래서 비언어일 때는 `setSumEdited(true)` 를 부르지 않는다. 그 플래그의 뜻은 "계산된
-         * 합계를 사람이 덮어썼다" 인데, 여기서는 덮어쓸 계산값이 애초에 없다. 불러 버리면 금액을
-         * 먼저 넣고 환율을 나중에 넣는 흔한 순서에서 원화 환산이 멈춘다 — 그 상태로 저장하면
-         * 리포트가 읽는 매출만 빈 값으로 남는다.
-         */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-sum">
-            합계 ({form.coinCode || '외화'})
-          </label>
-          <input
-            id="job-sum"
-            className={`${ui.input} ${ui.inputNum}`}
-            inputMode="decimal"
-            readOnly={form.jobType === JOB_TYPE_LINGUISTIC}
-            value={form.jobPriceSum}
-            onChange={(e) => {
-              if (linguistic) setSumEdited(true)
-              set('jobPriceSum', e.target.value)
-            }}
-          />
-          {linguistic ? null : (
-            <span className={ui.hint}>
-              물량·단가 없이 전체 금액을 직접 넣습니다. 원화 환산 합계는 환율을 곱해 따라옵니다.
-            </span>
-          )}
-        </div>
-
-        {/*
-         * 원화 환산 합계. **읽기 전용이다** — 타이핑하던 칸이었다.
-         *
-         * 이 값이 리포트의 매출이고, 폼이 보내는 금액 중 유일하게 사람이 적지 않는 값이다.
-         * 입력란으로 두면 통화·환율과 무관한 숫자가 들어갈 수 있었고, 그렇게 들어간 행은
-         * 어느 화면에서도 틀려 보이지 않았다 — 합계와 환율은 그대로니까.
-         *
-         * 서식을 입혀 보여 준다(`formatMoney`). 입력란이 아니므로 타이핑 중인 글자를 고칠 걱정이
-         * 없고, 천 단위 구분이 있는 쪽이 자리수를 눈으로 셀 수 있다.
-         */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-ksum">
-            원화 환산 합계 = 매출
-          </label>
-          <input
-            id="job-ksum"
-            className={`${ui.input} ${ui.inputNum}`}
-            value={formatMoney(ksum)}
-            readOnly
-          />
-          <span className={ui.hint}>
-            리포트의 매출은 이 값의 합입니다.
-            {settled ? null : effectiveRate === null ? null : (
+        {/* 통화 / 환율 / 원화 환산 합계 — 한 줄. 환율은 보기 전용(정산 때 정해진다). */}
+        <div className={ui.formRow} style={{ gridTemplateColumns: '1fr 1.3fr 1fr' }}>
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-coin">
+              통화
+            </label>
+            <select
+              id="job-coin"
+              className={ui.select}
+              value={form.coinCode}
+              onChange={(e) => set('coinCode', e.target.value)}
+            >
+              {unsetCoin ? <option value="">{unsetCoin}</option> : null}
+              {codeOptions(COIN_CODES, form.coinCode).map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className={ui.field}>
+            <span className={ui.label}>환율</span>
+            {isKrw ? (
+              <span className={ui.hint}>원화 금액입니다. 환산할 것이 없습니다.</span>
+            ) : settled ? (
               <>
-                {' '}
-                합계 × {formatMoney(effectiveRate)}
-                {fx.effectiveDate ? ` (${formatDate(fx.effectiveDate)} 기준)` : ''}
+                <output className={ui.hint} htmlFor="job-coin">
+                  1 {coin} = <strong>{formatMoney(storedRate)}</strong> KRW
+                </output>
+                <span className={ui.hint}>
+                  이미 원화로 환산된 건입니다. 이 환율과 아래 원화 금액은 그대로 보존합니다.
+                </span>
+              </>
+            ) : linguistic && !isEdit ? (
+              // 여러 언어를 한 번에 만들 때는 환산하지 않는다 — 합계만 원화로 바뀌고 언어별 단가는 외화로
+              // 남아 어긋난다. 저장한 뒤 작업 수정에서 작업마다 환산한다.
+              <span className={ui.hint}>
+                {fx.isLoading ? '시세를 읽고 있습니다…' : fx.rate ? `현 시세 1 ${coin} = ${formatMoney(fx.rate)} KRW 기준. 원화 환산은 저장 뒤 작업 수정에서 합니다.` : '원화 환산은 저장 뒤 작업 수정에서 합니다.'}
+              </span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className={`${ui.btn} ${ui.btnSm}`}
+                  onClick={convertToKrw}
+                  disabled={!convertible || pending}
+                >
+                  원화로 환산
+                </button>
+                {/*
+                 * 누를 수 없을 때 **왜 없는지**를 쓴다. 이유가 셋이고 전부 오류가 아니다 —
+                 * 시세를 읽는 중, 수집기가 아직 그 통화를 받아 오지 못함, 환산할 금액이 없음.
+                 * "환산할 수 없습니다" 한 줄로 뭉치면 담당자는 셋 중 무엇인지 알 수 없고,
+                 * 그중 둘은 기다리면 해결되는 것인데 고장으로 보고된다.
+                 */}
+                <span className={fx.canConvert ? ui.hint : ui.hintWarn}>
+                  {fx.isLoading
+                    ? '시세를 읽고 있습니다…'
+                    : !fx.canConvert
+                      ? `${coin} 시세가 아직 수집되지 않아 환산할 수 없습니다. 금액은 ${coin} 기준으로 그대로 저장됩니다.`
+                      : toDecimalInput(form.jobPriceSum) === null
+                        ? '환산할 합계를 먼저 입력하세요.'
+                        : `현 시세 1 ${coin} = ${formatMoney(fx.rate)} KRW 기준`}
+                </span>
               </>
             )}
-          </span>
+          </div>
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-ksum">
+              원화 환산 합계 = 매출
+            </label>
+            <input
+              id="job-ksum"
+              className={`${ui.input} ${ui.inputNum}`}
+              value={formatMoney(ksum)}
+              readOnly
+            />
+            <span className={ui.hint}>
+              리포트의 매출은 이 값의 합입니다.
+              {settled ? null : effectiveRate === null ? null : (
+                <>
+                  {' '}
+                  합계 × {formatMoney(effectiveRate)}
+                  {fx.effectiveDate ? ` (${formatDate(fx.effectiveDate)} 기준)` : ''}
+                </>
+              )}
+            </span>
+          </div>
         </div>
 
-        {/* 기간의 두 끝은 한 줄에 묶는다 — 프로젝트 서식과 같은 이유(그쪽 `.datePair` 주석). */}
         <div className={ui.datePair}>
           <DateField
             id="job-sday"
@@ -961,7 +1061,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
 
         <div className={ui.fieldWide}>
           <label className={ui.label} htmlFor="job-memo">
-            메모
+            비고
           </label>
           <textarea
             id="job-memo"

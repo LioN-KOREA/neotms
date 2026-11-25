@@ -236,7 +236,7 @@ export function DashboardView({ role }: DashboardViewProps) {
           <span className={ui.hint}>
             {role === 'pm'
               ? '수락 또는 거절을 선택해 주십시오.'
-              : '수락 대기 중이거나 PM 이 거절한 프로젝트입니다.'}
+              : '수락 대기 중이거나 총괄PM 이 거절한 프로젝트입니다.'}
           </span>
         </div>
 
@@ -258,7 +258,7 @@ export function DashboardView({ role }: DashboardViewProps) {
                 <th>프로젝트명</th>
                 <th>고객사</th>
                 {/* The PM's panel is all his own rows, so the useful name is the other seat's. */}
-                <th>{role === 'pm' ? '영업담당' : 'PM'}</th>
+                <th>{role === 'pm' ? '영업담당' : '총괄PM'}</th>
                 <th>마감일</th>
                 <th>수락</th>
                 <th>조치</th>
@@ -342,7 +342,7 @@ export function DashboardView({ role }: DashboardViewProps) {
                                 className={`${ui.btn} ${ui.btnSm}`}
                                 onClick={() => setReassigning(row)}
                               >
-                                PM 변경
+                                총괄PM 변경
                               </button>
                               <button
                                 type="button"
@@ -391,7 +391,7 @@ export function DashboardView({ role }: DashboardViewProps) {
                               </button>
                             </>
                           ) : (
-                            <span className={ui.hint}>PM 의 답변을 기다리는 중</span>
+                            <span className={ui.hint}>총괄PM 의 답변을 기다리는 중</span>
                           )}
                         </>
                       )}

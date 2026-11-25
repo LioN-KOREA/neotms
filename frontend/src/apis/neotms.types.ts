@@ -982,6 +982,10 @@ export interface JobRow {
   jobCategory: string | null
   /** 물량. 10진 문자열. */
   jobVolume: string | null
+  /** db/010 — 원래 물량 · 기준 · 가격 방식 (액면 물량은 jobVolume). */
+  jobRawVolume?: string | null
+  jobBasis?: string | null
+  jobPriceMode?: string | null
   unitCode: string | null
   jobPriceSel: string | null
   /** 단가. 10진 문자열. */
@@ -1036,6 +1040,9 @@ export interface JobInput {
   /** 업무 분류. 언어쌍과 둘 중 하나만 보낸다 — 어긋나면 서버가 400 으로 거절한다. */
   jobCategory?: string | null
   jobVolume?: string | null
+  jobRawVolume?: string | null
+  jobBasis?: string | null
+  jobPriceMode?: 'unit' | 'fixed' | 'free' | null
   unitCode?: string | null
   jobPriceSel?: string | null
   jobPrice?: string | null

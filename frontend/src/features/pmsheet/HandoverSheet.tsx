@@ -26,7 +26,7 @@ const COLS: { key: string; label: string; get: (s: Record<string, unknown>) => s
   { key: 'jobVolume', label: '분량', get: (s) => volume(s.jobVolume) },
   { key: 'jobEday', label: '납품일', get: (s) => formatSheetDate(str(s.jobEday)) },
   { key: 'jobEdayTime', label: '시간', get: (s) => formatHour(str(s.jobEdayTime)) },
-  { key: 'jobMemo', label: '작업 메모', get: (s) => str(s.jobMemo) },
+  { key: 'jobMemo', label: '작업 비고', get: (s) => str(s.jobMemo) },
 ]
 
 /** 분량은 세 자리 쉼표 (12,000). 숫자가 아니면 적힌 그대로. */

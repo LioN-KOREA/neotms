@@ -285,6 +285,12 @@ export const JobCreateSchema = v.object({
    */
   jobCategory: settable(CodeSchema),
   jobVolume: settable(VolumeSchema),
+  /** The counted volume before the basis divides it (db/010). `jobVolume` stays the billable one. */
+  jobRawVolume: settable(VolumeSchema),
+  /** Units per billable unit - 250 words, 800 characters, 1 (db/010). */
+  jobBasis: settable(VolumeSchema),
+  /** unit | fixed | free - how the total was derived (db/010). */
+  jobPriceMode: settable(v.picklist(["unit", "fixed", "free"])),
   unitCode: settable(CodeSchema),
   /** How the price was arrived at (rate card vs manual override). Value set unconfirmed. */
   jobPriceSel: settable(text(50)),

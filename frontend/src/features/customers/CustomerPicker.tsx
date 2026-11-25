@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useCustomers } from '@/apis/queries/neotms.query'
 import type { CustomerRow } from '@/apis/neotms.types'
 import { RecordPicker, type PickerOption } from '@/shared/ui/RecordPicker'
+import { SuggestPicker } from '@/shared/ui/SuggestPicker'
 
 /** 고객사 한 건을 `PickerOption` 으로. 코드를 보조 정보로 붙인다 — 같은 이름의 법인이 둘 있다. */
 export function customerOption(row: CustomerRow): PickerOption {
@@ -17,6 +18,9 @@ interface Props {
   onChange: (option: PickerOption | null) => void
   required?: boolean
   disabled?: boolean
+  /** 입력하면서 고르는 칸(드롭다운 추천·Tab). 프로젝트 창에서 쓴다. */
+  suggest?: boolean
+  label?: string
 }
 
 /** 몇 건을 보여 줄지. 고르는 화면이므로 짧아야 한다 — 길면 고르지 않고 훑기 시작한다. */
@@ -31,13 +35,20 @@ const PICK_LIMIT = 20
  * 비활성 상태(`enabled`)를 검색어 유무로 정하는 것도 같은 이유다. 빈 검색어로 호출하면 서버는
  * 전체 목록의 첫 페이지를 주는데, 그건 사용자가 요청한 적 없는 조회다.
  */
-export function CustomerPicker({ value, onChange, required = false, disabled = false }: Props) {
+export function CustomerPicker({ value, onChange, required = false, disabled = false, suggest = false, label = '고객사' }: Props) {
   const [keyword, setKeyword] = useState('')
   const [submitted, setSubmitted] = useState('')
 
+  // 추천 모드: 글자를 칠 때마다 (잠깐 멈췄을 때) 찾는다.
+  useEffect(() => {
+    if (!suggest) return
+    const t = setTimeout(() => setSubmitted(keyword.trim()), 200)
+    return () => clearTimeout(t)
+  }, [suggest, keyword])
+
   const customersQuery = useCustomers(
     { limit: PICK_LIMIT, q: submitted || undefined },
-    submitted.trim().length > 0 && !value,
+    submitted.trim().length > 0 && (suggest || !value),
   )
 
   const options = useMemo(
@@ -45,10 +56,37 @@ export function CustomerPicker({ value, onChange, required = false, disabled = f
     [customersQuery.data],
   )
 
+  if (suggest) {
+    return (
+      <SuggestPicker
+        id="prj-customer"
+        label={label}
+        required={required}
+        disabled={disabled}
+        selected={value}
+        onSelect={onChange}
+        options={
+          submitted
+            ? [...options].sort(
+                (a, b) =>
+                  Number(!a.title.toLowerCase().startsWith(submitted.toLowerCase())) -
+                  Number(!b.title.toLowerCase().startsWith(submitted.toLowerCase())),
+              )
+            : []
+        }
+        keyword={keyword}
+        onKeywordChange={setKeyword}
+        isLoading={Boolean(submitted) && customersQuery.isLoading}
+        placeholder="고객사명 또는 코드"
+        emptyText={submitted ? `'${submitted}' 로 찾은 고객사가 없습니다.` : '고객사명이나 코드를 입력하세요.'}
+      />
+    )
+  }
+
   return (
     <RecordPicker
       id="prj-customer"
-      label="고객사"
+      label={label}
       required={required}
       disabled={disabled}
       selected={value}

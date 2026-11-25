@@ -672,7 +672,7 @@ export function ProjectDetailView() {
               </span>
             </div>
             <div className={ui.detailItem}>
-              <span className={ui.detailLabel}>영업담당 / PM</span>
+              <span className={ui.detailLabel}>영업담당 / 총괄PM</span>
               <span className={ui.detailValue}>
                 {[project.prjMgrName, project.prjPmName].filter(Boolean).join(' / ') || '-'}
               </span>
@@ -705,7 +705,7 @@ export function ProjectDetailView() {
 
           {project.prjContent ? (
             <div className={ui.detailItem}>
-              <span className={ui.detailLabel}>내용</span>
+              <span className={ui.detailLabel}>비고</span>
               <span className={ui.detailValue}>{project.prjContent}</span>
             </div>
           ) : null}

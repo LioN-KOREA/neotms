@@ -68,6 +68,9 @@ interface Props {
  * sales manager has nobody who can ask its PM to look again after a rejection (that endpoint's authority
  * is `prj_mgr_id = <caller>`), so it quietly loses its only route out of that state.
  */
+/** 입금 칸을 보일지. 경영지원부 역할이 정해지면 그 역할 권한으로 바꾼다. */
+const SHOW_MONEY_STATE = false
+
 export function ProjectFormModal({ project, onClose, onSaved }: Props) {
   const isEdit = !!project
   const createProject = useCreateProject()
@@ -284,6 +287,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
         */}
         <div className={ui.field}>
           <CustomerPicker
+            suggest
             value={customer}
             onChange={(option) => {
               setDirty(true)
@@ -314,7 +318,8 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
           <StaffPicker
             attribute={PM_ATTRIBUTE}
             id="prj-pm"
-            label="PM"
+            label="총괄PM"
+            suggest
             value={pm}
             onChange={(option) => {
               setDirty(true)
@@ -329,6 +334,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             attribute={SALES_MANAGER_ATTRIBUTE}
             id="prj-sales-manager"
             label="영업담당"
+            suggest
             value={salesManager}
             onChange={(option) => {
               setDirty(true)
@@ -389,25 +395,32 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
          * '세금계산서' 가 있던 자리. 지금 쓰지 않으므로 뺐다 — 컬럼과 쓰기 스키마는 그대로이고,
          * 저장 본문에서 빠진 이유와 그 안전함은 위 `input` 주석에 적혀 있다.
          */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="prj-money-state">
-            입금
-          </label>
-          <select
-            id="prj-money-state"
-            className={ui.select}
-            value={form.prjMoneyState}
-            onChange={(e) => set('prjMoneyState', e.target.value)}
-          >
-            {/* 진행 상태와 같은 이유로 '선택 없음' 이 없다. 기본값은 `미정산` 이다. */}
-            {unsetMoney ? <option value="">{unsetMoney}</option> : null}
-            {codeOptions(MONEY_STATES, form.prjMoneyState).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/*
+         * 입금 — 등록·수정 창에서는 숨긴다 (팀장님 2026-11-25). 경영지원부 역할이 정해지면 그 역할에만
+         * 보이게 할 자리다 (`SHOW_MONEY_STATE`). 숨겨도 값은 그대로 저장된다 — 새 프로젝트는 '미정산',
+         * 고치는 프로젝트는 원래 값. 프로젝트 상세 화면에는 지금처럼 보인다.
+         */}
+        {SHOW_MONEY_STATE ? (
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="prj-money-state">
+              입금
+            </label>
+            <select
+              id="prj-money-state"
+              className={ui.select}
+              value={form.prjMoneyState}
+              onChange={(e) => set('prjMoneyState', e.target.value)}
+            >
+              {/* 진행 상태와 같은 이유로 '선택 없음' 이 없다. 기본값은 `미정산` 이다. */}
+              {unsetMoney ? <option value="">{unsetMoney}</option> : null}
+              {codeOptions(MONEY_STATES, form.prjMoneyState).map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
         {/*
          * 시작일·마감일을 날짜와 시각 두 칸으로 나눈 것은 컬럼이 그렇게 생겼기 때문이다
@@ -493,7 +506,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
         {/* '세금계산서 번호' 가 있던 자리 — 위 세금계산서 칸과 같은 이유로 뺐다. */}
         <div className={ui.fieldWide}>
           <label className={ui.label} htmlFor="prj-content">
-            내용
+            비고
           </label>
           <textarea
             id="prj-content"
@@ -505,10 +518,6 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
         </div>
       </div>
 
-      <p className={ui.hint}>
-        영업담당자와 PM 은 이 화면에서 지정하지 않습니다. 직원 목록 API 가 준비되면 추가됩니다 —
-        기존에 지정된 담당자는 저장해도 바뀌지 않습니다.
-      </p>
     </Modal>
   )
 }

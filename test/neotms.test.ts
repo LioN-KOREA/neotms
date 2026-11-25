@@ -5140,7 +5140,9 @@ describe("date defaults, bulk operations and in-place editing", () => {
     // `.dateStack` is also the calendar popup's anchor; without `position: relative` the popup
     // measures itself against the modal and lands somewhere else entirely.
     expect(css).toMatch(/\.dateStack \{[^}]*position: relative/);
-    expect(css).toMatch(/\.dateBtns \{[^}]*grid-template-columns: repeat\(5, 1fr\)/);
+    // 2026-11-25: '달력' left the row for an icon inside the text box, so the row is 오늘/+1/+3/+7.
+    expect(css).toMatch(/\.dateBtns \{[^}]*grid-template-columns: repeat\(4, 1fr\)/);
+    expect(field).toContain("className={ui.dateIcon}");
     // No wrapping survives in the date rows. A re-added `flex-wrap` would silently restore the
     // content-dependent breaking this test exists to prevent.
     expect(css).not.toMatch(/\.date\w* \{[^}]*flex-wrap/);
@@ -5171,14 +5173,18 @@ describe("date defaults, bulk operations and in-place editing", () => {
      * the modal body is `overflow-y: auto`, and CSS forces the other axis non-`visible` too, so an
      * over-wide popup grows a HORIZONTAL SCROLLBAR rather than being quietly hidden.
      */
+    /*
+     * 2026-11-25 (팀장님): the popup is no longer measured back inside the modal's clip box. It is
+     * `position: fixed` against the viewport (so the modal body's overflow cannot clip it) and its
+     * MIDDLE month is centred on the calendar icon, so the hand travels as little as possible.
+     */
     const field = frontendCode("shared", "ui", "DateField.tsx");
-    expect(field).toContain("function clipBox(node: HTMLElement)");
-    expect(field).toMatch(/overflowX !== 'visible'/);
-    expect(field).toContain("translate(${fit.dx}px, ${fit.dy}px)");
-    // `useLayoutEffect`, not `useEffect`: the latter runs after paint, so the calendar would show
-    // clipped for a frame and then jump - and a click inside that frame lands on the wrong day.
+    expect(field).toContain("position: 'fixed'");
+    expect(field).toContain("data-mid-month={offset === 0 ? '' : undefined}");
+    expect(field).toContain("let left = a.left + a.width / 2 - midCenter");
+    // Measured before paint: a calendar that shows for a frame and then jumps takes a click on the
+    // wrong day. (`useEffect` is used only for the outside-click listener.)
     expect(field).toContain("useLayoutEffect(() => {");
-    expect(field).not.toContain("useEffect(() => {");
   });
 
   test("a calendar that does not fit below its field flips above it", () => {
@@ -5197,11 +5203,10 @@ describe("date defaults, bulk operations and in-place editing", () => {
      * measures from `offsetParent` (`.dateStack`), which holds the input AND the today/+1/+3/+7
      * row - measuring from the input alone would drop the flipped calendar onto the buttons.
      */
+    // 2026-11-25: measured from the calendar icon against the window; below if it fits, else above.
     const field = frontendCode("shared", "ui", "DateField.tsx");
-    expect(field).toMatch(/overflowY !== 'visible'/);
-    expect(field).toContain("return { left, right, top, bottom }");
-    expect(field).toContain("pop.offsetParent as HTMLElement | null");
-    expect(field).toContain("anchor.top - gap - height");
+    expect(field).toContain("let top = a.bottom + gap");
+    expect(field).toContain("const above = a.top - gap - height");
 
     /*
      * The last resort is a pair, and the halves live in different files. A popup taller than the

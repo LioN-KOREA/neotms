@@ -182,6 +182,7 @@ import {
   translatorSuggestions,
   writePmCells,
   writePmPref,
+  readMyPmPrefs,
 } from "./pmsheet/NeotmsPmSheetManager.js";
 import {
   PmCellsSchema,
@@ -723,6 +724,7 @@ const handleWritePmCells: RRHandler = async (request) => {
   const parsed = parseBody(PmCellsSchema, request.body);
   return parsed.ok ? writePmCells(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
 };
+const handleReadMyPmPrefs: RRHandler = async (request) => readMyPmPrefs(callerOf(request));
 const handleWritePmPref: RRHandler = async (request) => {
   const parsed = parseBody(PmPrefSchema, request.body);
   return parsed.ok
@@ -1242,6 +1244,7 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: "/api/v0/pm-sheet/staff", method: "GET", handler: handleListPmStaff, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/rows", method: "PUT", handler: handlePatchPmRow, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/cells", method: "PUT", handler: handleWritePmCells, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/prefs", method: "GET", handler: handleReadMyPmPrefs, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/prefs/:kind", method: "PUT", handler: handleWritePmPref, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/handovers", method: "GET", handler: handleListPendingHandovers, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/handovers", method: "POST", handler: handleCreateHandovers, permission: NEOTMS_PERMISSION_PROJECT_UPDATE },

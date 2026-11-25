@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   addDays,
   calendarMonth,
@@ -8,6 +8,7 @@ import {
   todayKst,
   WEEKDAY_HEADS,
 } from '@/shared/utils/format'
+import { TimeInput } from './TimeInput'
 import ui from './ui.module.css'
 
 /**
@@ -233,34 +234,6 @@ export function DateTextInput({
 }
 
 /**
- * 팝업을 **자르는** 상자의 사각형. 없으면 화면 전체.
- *
- * 모달 본문은 `overflow-y: auto` 다. CSS 는 한 축이 `visible` 이 아니면 다른 축도 `auto` 로
- * 만들므로, 그 상자는 가로로도 자른다 — 즉 삐져나간 달력은 안 보이는 것이 아니라 **가로
- * 스크롤 막대를 만든다.** 그래서 화면이 아니라 이 상자를 기준으로 맞춰야 한다.
- *
- * 네 변을 모두 돌려준다. 가로만 보던 때에는 서식 아래쪽 날짜칸에서 열린 달력이 본문 바닥
- * 밑으로 내려갔고, 담당자는 달력을 보려고 **서식을 스크롤**해야 했다. 세로를 재지 않으면
- * 고칠 수 없는 문제다 — `.panel` 이 `max-height: calc(100vh - 80px)` 이고 `.body` 에는
- * `max-height` 가 없으므로, 자르는 높이는 CSS 에 적힌 수가 아니라 화면 높이에서 나온다.
- */
-function clipBox(node: HTMLElement): {
-  left: number
-  right: number
-  top: number
-  bottom: number
-} {
-  for (let at = node.parentElement; at; at = at.parentElement) {
-    const { overflowX, overflowY } = getComputedStyle(at)
-    if (overflowX !== 'visible' || overflowY !== 'visible') {
-      const { left, right, top, bottom } = at.getBoundingClientRect()
-      return { left, right, top, bottom }
-    }
-  }
-  return { left: 0, right: window.innerWidth, top: 0, bottom: window.innerHeight }
-}
-
-/**
  * 달력 석 달 — 전달·이번달·다음달.
  *
  * ## 왜 석 달인가
@@ -303,10 +276,13 @@ function CalendarPopup({
   value,
   onPick,
   onClose,
+  anchor,
 }: {
   value: string
   onPick: (next: string) => void
   onClose: () => void
+  /** 달력 아이콘. 가운데 달이 이 아이콘 바로 위나 아래에 오게 띄운다 (팀장님 2026-11-25). */
+  anchor: React.RefObject<HTMLElement | null>
 }) {
   const today = todayKst()
   // 가운데 달은 들어 있는 날짜의 달. 비어 있으면 이번 달이다.
@@ -327,70 +303,60 @@ function CalendarPopup({
    * 팝업은 열 때마다 새로 마운트된다.
    */
   const popRef = useRef<HTMLDivElement>(null)
-  const [fit, setFit] = useState<{ dx: number; dy: number; maxHeight?: number } | null>(null)
+  const [fit, setFit] = useState<{ left: number; top: number; maxHeight?: number } | null>(null)
 
+  /*
+   * 자리 잡기 (팀장님 2026-11-25): 가운데 달(석 달 중 둘째)의 한가운데가 **아이콘과 일직선**이
+   * 되게 좌우를 맞추고, 아이콘 아래에 공간이 있으면 아래, 없으면 위에 띄운다. 마우스를 조금만
+   * 움직여 날짜를 누를 수 있게 하려는 것이다.
+   *
+   * `position: fixed` — 모달 본문의 스크롤 상자(overflow)에 잘리지 않는다.
+   */
   useLayoutEffect(() => {
     const pop = popRef.current
-    if (!pop) return
-    const clip = clipBox(pop)
+    const icon = anchor.current
+    if (!pop || !icon) return
+    const a = icon.getBoundingClientRect()
     const box = pop.getBoundingClientRect()
-    /** 자르는 상자의 변에서 띄울 여백. */
+    const mid = pop.querySelector<HTMLElement>('[data-mid-month]')
     const margin = 8
-    /** 날짜칸과 달력 사이. CSS 의 `top: calc(100% + 4px)` 와 같은 수여야 뒤집어도 간격이 같다. */
     const gap = 4
-
-    let dx = 0
-    if (box.right > clip.right - margin) dx = clip.right - margin - box.right
-    // 왼쪽을 넘기는 쪽이 더 나쁘다 — 달력의 첫 날이 잘린다. 오른쪽 보정보다 뒤에 둬서 이긴다.
-    if (box.left + dx < clip.left + margin) dx = clip.left + margin - box.left
-
-    /*
-     * 상자보다 키가 큰 팝업. 밀어도 들어가지 않으므로 키를 깎고 안에서 스크롤하게 둔다.
-     * 아래 계산에는 **깎은 키**를 써야 한다 — 깎기 전 키로 재면 위로 뒤집을 자리가 없다고
-     * 판단해 버린다.
-     */
-    const room = clip.bottom - clip.top - margin * 2
+    const midCenter = mid ? mid.getBoundingClientRect().left - box.left + mid.offsetWidth / 2 : box.width / 2
+    let left = a.left + a.width / 2 - midCenter
+    left = Math.max(margin, Math.min(left, window.innerWidth - margin - box.width))
+    const room = window.innerHeight - margin * 2
     const maxHeight = box.height > room ? room : undefined
     const height = maxHeight ?? box.height
-
-    let dy = 0
-    if (box.top + height > clip.bottom - margin) {
-      /*
-       * 날짜칸 위로 뒤집는다. 기준점은 팝업의 `offsetParent`, 즉 `.dateStack` — 입력칸과
-       * today·+1·+3·+7 줄을 **함께** 담은 상자다. 입력칸만 기준으로 삼으면 뒤집은 달력이
-       * 그 버튼들을 덮는다.
-       */
-      const anchor = (pop.offsetParent as HTMLElement | null)?.getBoundingClientRect()
-      const above = anchor ? anchor.top - gap - height : null
-      dy =
-        above !== null && above >= clip.top + margin
-          ? above - box.top
-          : // 아래도 위도 안 되는 경우. 위쪽에 붙여 달력의 머리부터 보이게 한다.
-            clip.top + margin - box.top
+    let top = a.bottom + gap
+    if (top + height > window.innerHeight - margin) {
+      const above = a.top - gap - height
+      top = above >= margin ? above : Math.max(margin, window.innerHeight - margin - height)
     }
+    setFit({ left, top, maxHeight })
+  }, [anchor])
 
-    if (dx !== 0 || dy !== 0 || maxHeight !== undefined) setFit({ dx, dy, maxHeight })
-  }, [])
+  // 바깥을 누르면 닫는다 (아이콘은 제외 — 아이콘은 스스로 여닫는다).
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (popRef.current?.contains(t) || anchor.current?.contains(t)) return
+      onClose()
+    }
+    window.addEventListener('mousedown', onDown)
+    return () => window.removeEventListener('mousedown', onDown)
+  }, [anchor, onClose])
 
   return (
     <div
       ref={popRef}
       className={ui.calendarPop}
-      style={
-        fit === null
-          ? undefined
-          : {
-              // 0,0 이면 `transform` 을 아예 넣지 않는다 — 위 주석의 기준점 이야기.
-              transform:
-                fit.dx === 0 && fit.dy === 0 ? undefined : `translate(${fit.dx}px, ${fit.dy}px)`,
-              maxHeight: fit.maxHeight,
-            }
-      }
-      /*
-       * 달력 안의 mousedown 이 날짜칸의 blur 를 일으키지 않게 한다. 일어나면 blur 의 커밋이
-       * 먼저 돌고, 그 커밋이 값을 바꾸면 이 팝업이 다시 그려지면서 **누르려던 날이 다른
-       * 자리로 옮겨 간다.**
-       */
+      style={{
+        position: 'fixed',
+        left: fit?.left ?? -9999,
+        top: fit?.top ?? -9999,
+        maxHeight: fit?.maxHeight,
+        visibility: fit ? undefined : 'hidden',
+      }}
       onMouseDown={(e) => e.preventDefault()}
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return
@@ -438,7 +404,7 @@ function CalendarPopup({
           const at = shiftMonth(center.year, center.month, offset)
           const month = calendarMonth(at.year, at.month)
           return (
-            <div key={`${at.year}-${at.month}`}>
+            <div key={`${at.year}-${at.month}`} data-mid-month={offset === 0 ? '' : undefined}>
               <div className={ui.calendarTitle}>{month.title}</div>
               <div className={ui.calendarGrid}>
                 {WEEKDAY_HEADS.map((head) => (
@@ -529,7 +495,9 @@ const DAY_STEPS = [1, 3, 7] as const
  * 적는다. 둘이 별개의 상태이므로 그 요구는 저절로 지켜지고, 여기서 하는 일은 **섞지 않는 것**
  * 뿐이다.
  *
- * ## 시각은 `<input type="time">` 으로 남는다 — 견본의 00~23 드롭다운이 아니라
+ * ## (2026-11-25 바뀜) 시각은 이제 `TimeInput` — 24시간 글자칸에 ‹ › 한 시간 단추. 분은 그대로 지킨다.
+ *
+ * 아래는 그 전, `<input type="time">` 을 썼던 이유다 (분을 지켜야 한다는 점은 지금도 같다).
  *
  * 견본이 시 단위 드롭다운인 것은 tkinter 에 시각 입력이 없어서다. 그걸 그대로 옮기면 **분이
  * 사라진다** — `prj_sday_time` 에는 이미 분이 들어 있고(새 항목의 기본값이 `nowTimeKst()` 다),
@@ -549,6 +517,7 @@ const DAY_STEPS = [1, 3, 7] as const
  */
 export function DateField({ value, onChange, id, label, disabled = false, children, time }: Props) {
   const [open, setOpen] = useState(false)
+  const iconRef = useRef<HTMLButtonElement>(null)
 
   /* 날짜가 비어 있을 때 `+N` 의 기준. 빈 칸에서 `+3` 은 "오늘부터 3일" 이 유일하게 말이 된다. */
   const step = (days: number) => onChange(addDays(value || todayKst(), days))
@@ -562,19 +531,28 @@ export function DateField({ value, onChange, id, label, disabled = false, childr
       </label>
 
       <div className={ui.dateStack}>
-        <DateTextInput id={id} value={value} onChange={onChange} disabled={disabled} />
-
-        <div className={ui.dateBtns}>
+        {/* 달력은 칸 오른쪽 안의 아이콘으로 연다 (팀장님 2026-11-25 — 따로 있던 '달력' 단추 대신). */}
+        <div className={ui.dateInputWrap}>
+          <DateTextInput id={id} value={value} onChange={onChange} disabled={disabled} />
           <button
+            ref={iconRef}
             type="button"
-            className={small}
+            className={ui.dateIcon}
             disabled={disabled}
             aria-expanded={open}
             aria-label={`${label} 달력`}
+            title="달력"
             onClick={() => setOpen((v) => !v)}
           >
-            달력
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="3" width="13" height="11.5" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+              <path d="M1.5 6.5h13M5 1.5v3M11 1.5v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+              <path d="M4.5 9h2M9.5 9h2M4.5 11.8h2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+            </svg>
           </button>
+        </div>
+
+        <div className={ui.dateBtns}>
 
           <button
             type="button"
@@ -603,14 +581,7 @@ export function DateField({ value, onChange, id, label, disabled = false, childr
 
         {time ? (
           <div className={ui.dateTimeRow}>
-            <input
-              className={ui.input}
-              type="time"
-              aria-label={time.ariaLabel}
-              disabled={disabled}
-              value={time.value}
-              onChange={(e) => time.onChange(e.target.value)}
-            />
+            <TimeInput value={time.value} onChange={time.onChange} ariaLabel={time.ariaLabel} disabled={disabled} />
             <button
               type="button"
               className={small}
@@ -632,6 +603,7 @@ export function DateField({ value, onChange, id, label, disabled = false, childr
 
         {open && !disabled ? (
           <CalendarPopup
+            anchor={iconRef}
             value={value}
             onPick={(next) => {
               onChange(next)
