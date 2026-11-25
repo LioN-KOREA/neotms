@@ -1,15 +1,29 @@
 -- =====================================================================
--- 011_job_target_pricing.sql — 작업 등록의 언어별 설정 (2026-11-25, 팀장님 요청)
+-- NEOTMS :: 011_job_target_pricing.sql
+-- Per-target-language quantities and pricing on 작업 등록.
+-- =====================================================================
 --
--- 작업 등록 창은 도착어마다 물량 · 기준 · 단가 · 액면 물량을 따로 받고, 도착어마다 작업을
--- 하나씩 만든다. 청구 물량(액면 물량)은 지금까지처럼 job_volume 에 들어가고, 그것을 만든
--- 원래 물량과 기준, 가격 방식을 함께 남겨 둔다 — 수정 창에서 그대로 다시 보이게.
+-- Requested 2026-11-25 (팀장님).
 --
---   액면 물량(job_volume) = 원래 물량(job_raw_volume) ÷ 기준(job_basis), 소수 첫째 자리 반올림
---   (손으로 고칠 수도 있으므로 DB 는 이 식을 강제하지 않는다)
+-- The 작업 등록 form asks for 물량, 기준, 단가 and 액면 물량 once per
+-- target language, and creates one job per target language. The billed
+-- quantity (액면 물량) still goes into job_volume exactly as before. What
+-- is new is that the raw quantity, the basis and the pricing method that
+-- produced it are kept beside it, so the edit form can show them again
+-- as they were entered.
 --
--- 모두 NULL 가능 — 기존 작업 수천 건에는 이 값이 없고, 없으면 화면이 기준 1 · 원래 물량 =
--- 액면 물량 · 단가 방식으로 보여 준다. 다시 실행해도 안전하다.
+--   액면 물량 (job_volume)
+--     = 원래 물량 (job_raw_volume) / 기준 (job_basis),
+--       rounded to one decimal place
+--
+-- The database does NOT enforce that formula. The billed quantity can be
+-- overwritten by hand, and overriding it is a normal thing to do.
+--
+-- All three columns are nullable. Several thousand existing jobs have
+-- none of them, and with them absent the form falls back to 기준 1,
+-- 원래 물량 = 액면 물량, and the 단가 pricing method.
+--
+-- Nothing to migrate, no data touched, and the file is re-runnable.
 -- =====================================================================
 
 ALTER TABLE job_detail_linguistic

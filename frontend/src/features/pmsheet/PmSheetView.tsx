@@ -5,18 +5,19 @@
  *   * 내 업무  — 내가 인계 받은 작업들의 시트.
  *   * 인계     — 영업 담당이 나에게 넘긴, 아직 받지 않은 작업. 배지 = 건수.
  *   * 타PM 업무 — 다른 PM 의 시트를 열어 보고 고칠 수 있다(휴가·대리 처리). 고친 값은 그 PM 의 시트에 저장된다.
- *   * PO 시트(이전) — 개편 전의 PO 단위 시트. 비교·이행 기간 동안 남겨 둔다.
+ *
+ * 'PO 시트(이전)' 탭은 없앴다. PO 한 건이 한 행이던 개편 전 시트이고, 이 시트가 그 일을
+ * 대신한다 — 비교할 것이 없어진 뒤로는 같은 일을 하는 화면이 둘 있다는 사실만 남았다.
  */
 import { useState } from 'react'
 import { usePendingHandovers, usePmSheet, usePmStaff } from '@/apis/pmsheet.api'
 import { ErrorNotice, SuccessNotice } from '@/shared/ui/Feedback'
 import ui from '@/shared/ui/ui.module.css'
-import { WorkspaceView } from '@/features/workspace/WorkspaceView'
 import { HandoverSheet } from './HandoverSheet'
 import { PmSheet } from './PmSheet'
 import css from './PmSheet.module.css'
 
-type Tab = 'mine' | 'handover' | 'others' | 'legacy'
+type Tab = 'mine' | 'handover' | 'others'
 
 export function PmSheetView() {
   const [tab, setTab] = useState<Tab>('mine')
@@ -48,7 +49,6 @@ export function PmSheetView() {
             ['mine', '내 업무'],
             ['handover', '인계'],
             ['others', '타PM 업무'],
-            ['legacy', 'PO 시트(이전)'],
           ] as [Tab, string][]
         ).map(([id, label]) => (
           <button
@@ -81,7 +81,6 @@ export function PmSheetView() {
       {tab === 'others' ? (
         <OthersPane selected={other} onSelect={setOther} onNotice={show} onError={fail} />
       ) : null}
-      {tab === 'legacy' ? <WorkspaceView /> : null}
     </div>
   )
 }
