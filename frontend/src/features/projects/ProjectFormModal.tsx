@@ -118,6 +118,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
   const [form, setForm] = useState({
     prjName: project?.prjName ?? '',
     coinCode: project?.coinCode ?? 'KRW',
+    cusMgrName: project?.cusMgrName ?? '',
     prjField: project?.prjField ?? '',
     prjField2: project?.prjField2 ?? '',
     prjState: project?.prjState ?? PROJECT_STATE_QUOTE,
@@ -205,6 +206,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
       prjEday: form.prjEday || null,
       prjEdayTime: form.prjEdayTime || null,
       prjContent: form.prjContent.trim() || null,
+      cusMgrName: form.cusMgrName.trim() || null,
       /*
        * The two assignees, always sent - including as `null` when the box is empty.
        *
@@ -289,6 +291,22 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             }}
             required
             disabled={pending}
+          />
+        </div>
+
+        {/* 업체 담당자 — 이름을 자유롭게 적는다 (팀장님 2026-11-25). 고객사 바로 옆: 같은 쪽 사람이다. */}
+        <div className={ui.field}>
+          <label className={ui.label} htmlFor="prj-cus-mgr">
+            업체 담당자
+          </label>
+          <input
+            id="prj-cus-mgr"
+            className={ui.input}
+            maxLength={100}
+            value={form.cusMgrName}
+            onChange={(e) => set('cusMgrName', e.target.value)}
+            disabled={pending}
+            placeholder="예: 홍길동 과장"
           />
         </div>
 

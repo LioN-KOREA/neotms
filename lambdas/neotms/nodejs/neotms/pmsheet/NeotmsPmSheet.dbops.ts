@@ -23,6 +23,7 @@
 
 import { PO_STATE_CANCELLED } from "../NeotmsPoStates.js";
 import { PROJECT_STATE_ACTIVE, PROJECT_STATE_DONE, PROJECT_STATE_HOLD } from "../NeotmsProjectStates.js";
+import { PM_STATES } from "./NeotmsPmSheet.schemas.js";
 import { param, readBool, readId, readInt, readText, type SqlOps, type SqlRow } from "../../utils/PostgresUtils.js";
 
 /* -------------------------------------------------------------------------- */
@@ -488,7 +489,18 @@ export const PmProjectStateSyncOps = (jobId: string, actor: string): SqlOps<stri
                WHEN r.pm_state = '홀딩/캔슬' THEN :st_hold
                WHEN r.pm_state LIKE '별도 관리%' THEN NULL
                WHEN r.pm_state IS NULL THEN NULL
-               ELSE :st_active
+               WHEN r.pm_state = ANY(:builtin) THEN :st_active
+               -- a state the PM added: its own mapping (진행/완료/보류, or none) from their settings
+               ELSE (SELECT CASE e->>'prj'
+                              WHEN :st_active THEN :st_active
+                              WHEN :st_done THEN :st_done
+                              WHEN :st_hold THEN :st_hold
+                            END
+                       FROM pm_sheet_pref pf,
+                            jsonb_array_elements(CASE WHEN jsonb_typeof(pf.data->'states') = 'array'
+                                                      THEN pf.data->'states' ELSE '[]'::jsonb END) e
+                      WHERE pf.staff_id = r.staff_id AND pf.kind = 'columns' AND e->>'name' = r.pm_state
+                      LIMIT 1)
              END AS s
         FROM pm_sheet_row r
         JOIN job j ON j.id = r.job_id AND j.deleted = false
@@ -516,6 +528,7 @@ export const PmProjectStateSyncOps = (jobId: string, actor: string): SqlOps<stri
     param("st_active", PROJECT_STATE_ACTIVE, "text"),
     param("st_done", PROJECT_STATE_DONE, "text"),
     param("st_hold", PROJECT_STATE_HOLD, "text"),
+    param("builtin", [...PM_STATES], "textArray"),
   ],
   mapper: (rows) => (rows[0] ? readText(rows[0], "prj_state") : null),
 });

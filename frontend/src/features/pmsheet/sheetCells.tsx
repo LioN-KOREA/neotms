@@ -21,6 +21,7 @@ import {
   type Uncertain,
   type UncertainCompatible,
 } from '@silevis/reactgrid'
+import { FunnelIcon } from './menuIcons'
 import css from './PmSheet.module.css'
 
 export interface SheetCell extends Cell {
@@ -45,6 +46,12 @@ export interface SheetCell extends Cell {
   /** 칸 안 글꼴·정렬 — ReactGrid 의 CellStyle 이 받지 않는 것들. */
   inner?: CSSProperties
   placeholder?: string
+  /** 줄바꿈: 'wrap' 이면 여러 줄, 'clip' 이면 말줄임 없이 자름. 없으면 말줄임(…). */
+  wrap?: 'wrap' | 'clip' | null
+  /** 한 번 클릭으로 목록 열기(진행 상태). 칸의 화면 좌표를 넘긴다. */
+  onQuickPick?: (x: number, y: number) => void
+  /** 우클릭 메뉴 (이 열로 정렬 · 이 값으로 필터). */
+  onMenu?: (x: number, y: number) => void
 }
 
 let datalistSeq = 0
@@ -116,10 +123,43 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
           {cell.text}
         </a>
       ) : (
-        <span className={css.cellText}>{cell.text || (cell.placeholder ? <i className={css.placeholder}>{cell.placeholder}</i> : '')}</span>
+        <span
+          className={css.cellText}
+          style={
+            cell.wrap === 'wrap'
+              ? { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textOverflow: 'clip' }
+              : cell.wrap === 'clip'
+                ? { textOverflow: 'clip' }
+                : undefined
+          }
+        >
+          {cell.text || (cell.placeholder ? <i className={css.placeholder}>{cell.placeholder}</i> : '')}
+        </span>
       )
       return (
-        <div className={css.cellInner} style={cell.inner} title={cell.tooltip ?? cell.note}>
+        <div
+          className={css.cellInner}
+          style={cell.inner}
+          title={cell.tooltip ?? cell.note}
+          onContextMenu={
+            cell.onMenu
+              ? (e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  cell.onMenu?.(e.clientX, e.clientY)
+                }
+              : undefined
+          }
+          onClick={
+            cell.onQuickPick
+              ? (e) => {
+                  // 끌어서 범위를 고른 것이 아니라 한 칸을 누른 것일 때만 (click 은 같은 칸에서 떼야 생긴다).
+                  const r = e.currentTarget.getBoundingClientRect()
+                  cell.onQuickPick?.(r.left, r.bottom)
+                }
+              : undefined
+          }
+        >
           {body}
           {cell.onOpen ? (
             <button
@@ -211,8 +251,10 @@ export interface SheetHeaderCell extends Cell {
   hint?: string
   direction?: 'asc' | 'desc' | null
   filtered?: boolean
-  onSort?: () => void
-  onFilter?: (x: number, y: number) => void
+  /** ⚙ 단추 (진행 상태 열). */
+  onSettings?: () => void
+  /** 정렬·필터 메뉴 (우클릭, 또는 걸려 있다는 표시를 눌렀을 때). */
+  onMenu?: (x: number, y: number) => void
   inner?: CSSProperties
 }
 
@@ -225,34 +267,65 @@ export class SheetHeaderTemplate implements CellTemplate<SheetHeaderCell> {
   isFocusable = () => false
   render(cell: Compatible<SheetHeaderCell>) {
     return (
-      <div className={css.headerCell} style={cell.inner} title={cell.hint}>
+      <div
+        className={css.headerCell}
+        style={cell.inner}
+        title={cell.hint ? `${cell.hint}
+(우클릭: 정렬·필터)` : '우클릭: 정렬·필터'}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          cell.onMenu?.(e.clientX, e.clientY)
+        }}
+      >
         <span className={css.headerText}>{cell.text}</span>
-        <button
-          type="button"
-          className={`${css.hdrBtn} ${cell.direction ? css.hdrOn : ''}`}
-          title="이 열로 정렬"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation()
-            cell.onSort?.()
-          }}
-        >
-          {cell.direction === 'asc' ? '▲' : cell.direction === 'desc' ? '▼' : '⇅'}
-        </button>
-        <button
-          type="button"
-          className={`${css.hdrBtn} ${cell.filtered ? css.hdrOn : ''}`}
-          title="필터"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation()
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-            cell.onFilter?.(r.left, r.bottom)
-          }}
-        >
-          {cell.filtered ? '◆' : '▾'}
-        </button>
+        {cell.onSettings ? (
+          <button
+            type="button"
+            className={css.hdrBtn}
+            title="진행 상태 설정 (목록·색·연동, 나만 적용)"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              cell.onSettings?.()
+            }}
+          >
+            ⚙
+          </button>
+        ) : null}
+        {/* 정렬·필터는 우클릭 메뉴로. 걸려 있을 때만 표시가 남고, 표시를 눌러도 같은 메뉴가 열린다. */}
+        {cell.direction ? (
+          <button
+            type="button"
+            className={`${css.hdrBtn} ${css.hdrOn}`}
+            title={cell.direction === 'asc' ? '오름차순 정렬 중 — 눌러서 메뉴' : '내림차순 정렬 중 — 눌러서 메뉴'}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              cell.onMenu?.(r.left, r.bottom)
+            }}
+          >
+            {cell.direction === 'asc' ? '▲' : '▼'}
+          </button>
+        ) : null}
+        {cell.filtered ? (
+          <button
+            type="button"
+            className={`${css.hdrBtn} ${css.hdrOn}`}
+            title="필터 걸림 — 눌러서 메뉴"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              cell.onMenu?.(r.left, r.bottom)
+            }}
+          >
+            <FunnelIcon />
+          </button>
+        ) : null}
       </div>
     )
   }
 }
+

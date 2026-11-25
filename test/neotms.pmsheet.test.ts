@@ -12,6 +12,7 @@ import { changedKeys } from "../lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmShe
 import {
   PM_STATES as SERVER_STATES,
   PmCellsSchema,
+  PmRowPatchSchema,
   PmStyleSchema,
 } from "../lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmSheet.schemas";
 import { PmProjectStateSyncOps, PmSheetRowsOps } from "../lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmSheet.dbops";
@@ -27,6 +28,14 @@ import {
 } from "../frontend/src/features/pmsheet/sheetFormat";
 import { evaluateFormula } from "../frontend/src/features/pmsheet/sheetFormula";
 import { conditionalStyle, resolveDate, testClause } from "../frontend/src/features/pmsheet/conditional";
+import {
+  BUILTIN_STATES,
+  DEFAULT_STATES,
+  effectiveStates,
+  isClosedState,
+  selectableStates,
+  stateStyleFor,
+} from "../frontend/src/features/pmsheet/pmStates";
 
 // The client's list lives in a module that also pulls in React Query, so it is read as text.
 const CLIENT_STATES = (() => {
@@ -178,5 +187,60 @@ describe("conditional formatting", () => {
     expect(off).toBeNull();
     const orRule = { ...rule, join: "or" as const, clauses: [{ column: "pmState", op: "equals" as const, value: "없음" }, { op: "notEmpty" as const }] };
     expect(conditionalStyle({ rules: [orRule], colKey: "trEday", read, defaultKind: null, defaultState: null, defaults: true, now: NOW })).toEqual({ bg: "#990000" });
+  });
+});
+
+describe("personal PM states (⚙)", () => {
+  it("the client's built-in list matches the server's", () => {
+    expect([...BUILTIN_STATES]).toEqual([...SERVER_STATES]);
+  });
+
+  it("every built-in except the 별도 관리 markers has a default colour", () => {
+    for (const def of DEFAULT_STATES) {
+      if (def.name.startsWith("별도 관리")) expect(def.bg).toBeNull();
+      else expect(def.bg).toMatch(/^#[0-9A-F]{6}$/);
+    }
+  });
+
+  it("keeps built-in names and mappings fixed, appends missing built-ins, keeps custom ones", () => {
+    const merged = effectiveStates([
+      { name: "고객 확인 중", prj: "보류", bg: "#EFEFEF" },
+      { name: "납품 완료", prj: "진행", hidden: true },
+    ]);
+    expect(merged[0]).toMatchObject({ name: "고객 확인 중", builtin: false, prj: "보류" });
+    expect(merged[1]).toMatchObject({ name: "납품 완료", builtin: true, prj: "완료", hidden: true });
+    expect(merged.length).toBe(SERVER_STATES.length + 1);
+    expect(selectableStates(merged)).not.toContain("납품 완료");
+    expect(isClosedState("고객 확인 중", merged)).toBe(true);
+    expect(isClosedState("번역 중", merged)).toBe(false);
+  });
+
+  it("paints the chosen span: the cell, the row, or a column range in display order", () => {
+    const order = ["a", "pmState", "b", "c", "d"];
+    const defs = effectiveStates([
+      { name: "X", bg: "#111111", span: "cell" },
+      { name: "Y", bg: "#222222", span: "row" },
+      { name: "Z", bg: "#333333", span: "range", from: "c", to: "pmState" },
+    ]);
+    expect(stateStyleFor("X", "pmState", order, defs)).toEqual({ bg: "#111111" });
+    expect(stateStyleFor("X", "b", order, defs)).toBeNull();
+    expect(stateStyleFor("Y", "d", order, defs)).toEqual({ bg: "#222222" });
+    expect(stateStyleFor("Z", "b", order, defs)).toEqual({ bg: "#333333" });
+    expect(stateStyleFor("Z", "a", order, defs)).toBeNull();
+    expect(stateStyleFor(null, "pmState", order, defs)).toBeNull();
+  });
+
+  it("the server maps a custom state through the owner's own settings", () => {
+    const ops = PmProjectStateSyncOps("1", "t");
+    expect(ops.sql).toContain("pm_state = ANY(:builtin)");
+    expect(ops.sql).toContain("pf.staff_id = r.staff_id AND pf.kind = 'columns'");
+    expect((ops.parameters ?? []).find((p) => p.name === "builtin")).toBeTruthy();
+  });
+
+  it("accepts a custom state name but bounds it", () => {
+    expect(v.safeParse(PmRowPatchSchema, { jobId: "1", pmState: "고객 확인 중" }).success).toBe(true);
+    expect(v.safeParse(PmRowPatchSchema, { jobId: "1", pmState: "x".repeat(51) }).success).toBe(false);
+    expect(v.safeParse(PmStyleSchema, { wrap: "wrap" }).success).toBe(true);
+    expect(v.safeParse(PmStyleSchema, { wrap: "shrink" }).success).toBe(false);
   });
 });

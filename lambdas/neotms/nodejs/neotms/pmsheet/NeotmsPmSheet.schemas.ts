@@ -56,6 +56,8 @@ export const PmStyleSchema = v.strictObject({
   borderSides: v.optional(v.nullable(v.pipe(v.string(), v.regex(/^[tblr]{0,4}$/, "border sides are t, b, l, r")))),
   borderColor: v.optional(v.nullable(Colour)),
   decimals: v.optional(v.nullable(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(6)))),
+  /** Overflowing text: spill over (default), wrap onto more lines, or clip. */
+  wrap: v.optional(v.nullable(v.picklist(["overflow", "wrap", "clip"]))),
 });
 
 const SheetOwner = { staffId: v.optional(IdSchema) };
@@ -63,7 +65,12 @@ const SheetOwner = { staffId: v.optional(IdSchema) };
 export const PmRowPatchSchema = v.object({
   ...SheetOwner,
   jobId: IdSchema,
-  pmState: v.optional(v.nullable(v.picklist(PM_STATES))),
+  /**
+   * A state from the built-in list or one the PM added in their own state settings (personal -
+   * stored in their `columns` preference). Free text, bounded; how a custom state moves the
+   * project is read from that preference by `PmProjectStateSyncOps`.
+   */
+  pmState: v.optional(v.nullable(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(50)))),
   fields: v.optional(
     v.record(v.picklist(PM_ROW_FIELDS), v.pipe(v.string(), v.maxLength(2000))),
   ),

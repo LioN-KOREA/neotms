@@ -760,6 +760,8 @@ export interface ProjectInput {
   prjMgrId?: string | null
   prjPmId?: string | null
   customerContactId?: string | null
+  /** 업체 담당자 이름(자유 입력). */
+  cusMgrName?: string | null
   prjField?: string | null
   prjField2?: string | null
   prjState?: string | null

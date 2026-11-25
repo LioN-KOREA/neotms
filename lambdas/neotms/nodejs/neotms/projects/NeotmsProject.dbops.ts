@@ -16,9 +16,9 @@
 // PM delivers the work, and either of them may legitimately open the project. They are different
 // people and different report dimensions - see the DDL comment on project.prj_mgr_id.
 //
-// ## It carries four denormalised names
+// ## It carries three denormalised names (plus the typed customer contact name)
 //
-// `cus_code_name`, `prj_mgr_name`, `prj_pm_name` and `cus_mgr_name` are maintained copies of values
+// `cus_code_name`, `prj_mgr_name` and `prj_pm_name` are maintained copies of values
 // this database already holds, kept so the list screen does not join four tables per row. None of
 // them is accepted from the request; each is written by a scalar subquery against the id the
 // request did send. See `DerivedSpec` in NeotmsWrite for why.
@@ -462,6 +462,8 @@ const PROJECT_FIELDS: readonly FieldSpec<ProjectUpdate>[] = [
   { column: "prj_name", kind: "text", read: (i) => i.prjName },
   { column: "customer_id", kind: "id", read: (i) => i.customerId },
   { column: "customer_contact_id", kind: "id", read: (i) => i.customerContactId },
+  // Typed on the form (free text) - no longer derived from customer_contact_id, which new projects rarely have.
+  { column: "cus_mgr_name", kind: "text", read: (i) => i.cusMgrName },
   { column: "corp_id", kind: "id", read: (i) => i.corpId },
   { column: "coin_code", kind: "text", read: (i) => i.coinCode },
   { column: "prj_mgr_id", kind: "id", read: (i) => i.prjMgrId },
@@ -479,7 +481,7 @@ const PROJECT_FIELDS: readonly FieldSpec<ProjectUpdate>[] = [
 ];
 
 /**
- * The four denormalised names, each driven by the id the request supplied.
+ * The three denormalised names, each driven by the id the request supplied.
  *
  * `deleted = false` on the customer subquery is not belt-and-braces. The foreign key only requires
  * that the customer row exists, and a soft-deleted customer still exists - so the FK would accept a
@@ -494,12 +496,6 @@ const PROJECT_DERIVED: readonly DerivedSpec<ProjectUpdate>[] = [
     column: "cus_code_name",
     expression: "(SELECT c.cus_name FROM customer c WHERE c.id = :customer_id AND c.deleted = false)",
     read: (i) => i.customerId,
-  },
-  {
-    column: "cus_mgr_name",
-    expression:
-      "(SELECT cc.cus_mgr_name FROM customer_contact cc WHERE cc.id = :customer_contact_id)",
-    read: (i) => i.customerContactId,
   },
   {
     column: "prj_mgr_name",

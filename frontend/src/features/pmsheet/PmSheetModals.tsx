@@ -2,12 +2,14 @@
  * PM 시트의 대화상자 — 조건부 서식, 단축키, 열 관리, 칸 메모.
  */
 import { useState } from 'react'
-import type { PmColumnsPref, PmCondClause, PmCondOp, PmCondRule, PmStyle } from '@/apis/pmsheet.api'
+import type { PmColumnsPref, PmCondClause, PmCondOp, PmCondRule, PmStateDef, PmStyle } from '@/apis/pmsheet.api'
 import { Modal } from '@/shared/ui/Modal'
 import ui from '@/shared/ui/ui.module.css'
 import { COND_OP_LABELS, isDateOp, needsValue } from './conditional'
 import { FIXED_COLUMNS, buildColumns, type SheetColumn } from './sheetColumns'
 import { ACTIONS, DEFAULT_SHORTCUTS, comboOf } from './shortcuts'
+import { ColorPalette } from './ColorPalette'
+import { DEFAULT_STATES } from './pmStates'
 import css from './PmSheet.module.css'
 
 const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -358,6 +360,136 @@ export function NoteModal(props: { title: string; initial: string; onClose: () =
       }
     >
       <textarea autoFocus rows={6} style={{ width: '100%', font: 'inherit' }} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
+    </Modal>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* 진행 상태 설정 (⚙, 개인 설정)                                              */
+/* -------------------------------------------------------------------------- */
+
+export function StatesModal(props: {
+  states: PmStateDef[]
+  columns: SheetColumn[]
+  onClose: () => void
+  onSave: (states: PmStateDef[]) => void
+}) {
+  const [list, setList] = useState<PmStateDef[]>(props.states.map((s) => ({ ...s })))
+  const [name, setName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const update = (i: number, patch: Partial<PmStateDef>) => setList((l) => l.map((s, j) => (j === i ? { ...s, ...patch } : s)))
+  const move = (i: number, d: -1 | 1) =>
+    setList((l) => {
+      const j = i + d
+      if (j < 0 || j >= l.length) return l
+      const next = [...l]
+      ;[next[i], next[j]] = [next[j]!, next[i]!]
+      return next
+    })
+  const add = () => {
+    const n = name.trim()
+    if (!n) return
+    if (n.length > 50) return setError('상태 이름은 50자까지입니다.')
+    if (list.some((s) => s.name === n)) return setError('같은 이름의 상태가 이미 있습니다.')
+    setError(null)
+    setList((l) => [...l, { name: n, builtin: false, prj: '진행', bg: '#EFEFEF', fg: '#000000', span: 'cell' }])
+    setName('')
+  }
+
+  return (
+    <Modal
+      title="진행 상태 설정 (나만 적용)"
+      width={860}
+      onClose={props.onClose}
+      footer={
+        <>
+          <button type="button" className={`${ui.btn} ${ui.btnGhost}`} onClick={() => setList(DEFAULT_STATES.map((s) => ({ ...s })))}>기본값</button>
+          <button type="button" className={`${ui.btn} ${ui.btnGhost}`} onClick={props.onClose}>취소</button>
+          <button type="button" className={`${ui.btn} ${ui.btnPrimary}`} onClick={() => props.onSave(list)}>저장</button>
+        </>
+      }
+    >
+      <p className={css.small} style={{ marginTop: 0 }}>
+        여기서 바꾼 목록·색은 <b>내 시트에만</b> 적용됩니다. 기본 상태는 이름과 프로젝트 연동을 바꿀 수 없고, 체크를 끄면 목록에서 빠집니다.
+        추가한 상태는 고른 프로젝트 진행상태로 연동됩니다. '칠할 곳' 으로 그 칸만 / 행 전체 / 열 범위를 정합니다.
+      </p>
+      <div className={css.stateRow} style={{ fontWeight: 600, borderBottom: '1px solid #d9dde3' }}>
+        <span />
+        <span>상태</span>
+        <span>프로젝트 연동</span>
+        <span>바탕</span>
+        <span>글자</span>
+        <span>칠할 곳</span>
+        <span />
+      </div>
+      <div style={{ maxHeight: 420, overflow: 'auto' }}>
+        {list.map((s, i) => (
+          <div key={s.name} className={css.stateRow} style={s.hidden ? { opacity: 0.45 } : undefined}>
+            <input
+              type="checkbox"
+              title={s.builtin ? '목록에 보이기' : '사용'}
+              checked={!s.hidden}
+              onChange={(e) => update(i, { hidden: !e.target.checked })}
+            />
+            <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <button type="button" className={css.tool} onClick={() => move(i, -1)} title="위로">▲</button>
+              <button type="button" className={css.tool} onClick={() => move(i, 1)} title="아래로">▼</button>
+              <span className={css.statePreview} style={{ background: s.bg ?? 'transparent', color: s.fg ?? undefined, fontWeight: s.bold ? 700 : undefined }}>
+                {s.name}
+              </span>
+            </span>
+            <select
+              className={css.toolSelect}
+              disabled={s.builtin}
+              title={s.builtin ? '기본 상태의 연동은 고정입니다' : undefined}
+              value={s.prj ?? ''}
+              onChange={(e) => update(i, { prj: (e.target.value || null) as PmStateDef['prj'] })}
+            >
+              <option value="진행">진행</option>
+              <option value="완료">완료</option>
+              <option value="보류">보류</option>
+              <option value="">연동 안 함</option>
+            </select>
+            <ColorPalette title="바탕 색" value={s.bg} button={<span className={css.hexPreview} style={{ background: s.bg ?? 'transparent', display: 'inline-block' }} />} onPick={(c) => update(i, { bg: c })} />
+            <ColorPalette title="글자 색" value={s.fg} button={<b style={{ color: s.fg ?? '#000' }}>가</b>} onPick={(c) => update(i, { fg: c })} noneLabel="자동" />
+            <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <select className={css.toolSelect} value={s.span ?? 'cell'} onChange={(e) => update(i, { span: e.target.value as PmStateDef['span'] })}>
+                <option value="cell">그 칸만</option>
+                <option value="row">행 전체</option>
+                <option value="range">열 범위…</option>
+              </select>
+              {s.span === 'range' ? (
+                <span style={{ display: 'flex', gap: 2 }}>
+                  <select className={css.toolSelect} style={{ width: 72 }} value={s.from ?? 'pmState'} onChange={(e) => update(i, { from: e.target.value })}>
+                    {props.columns.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  </select>
+                  <select className={css.toolSelect} style={{ width: 72 }} value={s.to ?? 'pmState'} onChange={(e) => update(i, { to: e.target.value })}>
+                    {props.columns.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                  </select>
+                </span>
+              ) : null}
+            </span>
+            <span>
+              {!s.builtin ? (
+                <button type="button" className={css.tool} onClick={() => setList((l) => l.filter((_, j) => j !== i))}>삭제</button>
+              ) : null}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+        <input
+          className={css.toolSelect}
+          style={{ flex: 1 }}
+          placeholder="새 상태 이름 (예: 고객 확인 중)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+        />
+        <button type="button" className={`${ui.btn} ${ui.btnSm}`} onClick={add}>+ 상태 추가</button>
+      </div>
+      {error ? <p style={{ color: '#d93025', margin: '6px 0 0' }}>{error}</p> : null}
     </Modal>
   )
 }

@@ -18,6 +18,8 @@ export interface PmStyle {
   borderSides?: string | null
   borderColor?: string | null
   decimals?: number | null
+  /** 글자가 넘칠 때: 넘치기(기본) / 자동 줄바꿈 / 자르기. */
+  wrap?: 'overflow' | 'wrap' | 'clip' | null
 }
 
 /** 조건부 서식 규칙 하나. */
@@ -50,4 +52,25 @@ export interface PmCondRule {
   /** 행 전체를 칠할지. */
   wholeRow?: boolean
   enabled?: boolean
+}
+
+/**
+ * 진행 상태 하나 (개인 설정 — `prefs.columns.states`, 다른 사람에게는 보이지 않는다).
+ *
+ * 기본 상태는 이름을 바꿀 수 없고 프로젝트 연동도 정해져 있다(서버가 이름으로 판단).
+ * 사용자가 추가한 상태는 `prj` 로 프로젝트 진행상태를 고른다 — null 이면 연동하지 않는다.
+ */
+export interface PmStateDef {
+  name: string
+  builtin?: boolean
+  /** 목록에서 뺀 기본 상태 (지운 것과 같지만 '기본값' 으로 되살릴 수 있게 남긴다). */
+  hidden?: boolean
+  prj?: '진행' | '완료' | '보류' | null
+  bg?: string | null
+  fg?: string | null
+  bold?: boolean | null
+  /** 칠할 곳: 그 칸만 / 행 전체 / 열 범위. */
+  span?: 'cell' | 'row' | 'range'
+  from?: string | null
+  to?: string | null
 }

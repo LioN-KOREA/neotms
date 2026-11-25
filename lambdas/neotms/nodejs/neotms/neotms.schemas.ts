@@ -220,6 +220,11 @@ export const ProjectCreateSchema = v.object({
   /** The PROJECT manager, who delivers the work. A different person, and a different report axis. */
   prjPmId: settable(IdSchema),
   customerContactId: settable(IdSchema),
+  /**
+   * The customer-side contact as typed on the project form (팀장님 2026-11-25: a free-text name).
+   * Legacy rows got this from `customer_contact`; new projects usually have no contact record.
+   */
+  cusMgrName: settable(text(100)),
   prjField: settable(CodeSchema),
   prjField2: settable(CodeSchema),
   prjState: settable(text(50)),

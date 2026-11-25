@@ -166,7 +166,7 @@
 .hoWrap { overflow: auto; max-height: calc(100vh - 260px); }
 .hoTable { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
 .hoTable th, .hoTable td { border: 1px solid #e3e6ea; padding: 4px 6px; white-space: nowrap; text-align: left; }
-.hoTable th { background: #f3f4f6; position: sticky; top: 0; z-index: 1; }
+.hoTable th { background: #FFD966; position: sticky; top: 0; z-index: 1; }
 .hoChanged { background: #fff59d !important; }
 .hoActions { display: flex; gap: 4px; }
 .hoMsg { white-space: normal !important; min-width: 180px; max-width: 320px; color: #374151; }
@@ -180,3 +180,62 @@
 .kbd { display: inline-block; min-width: 110px; padding: 2px 8px; border: 1px solid #c6cbd2; border-radius: 4px; background: #f8f9fb; font-family: monospace; text-align: center; cursor: pointer; }
 .kbdRec { border-color: #1a73e8; background: #e8f0fe; }
 .small { font-size: 12px; color: #6b7280; }
+
+/* 색 팔레트 (엑셀식) */
+.paletteWrap { position: relative; display: inline-flex; }
+.caretSm { font-size: 9px; margin-left: 2px; color: #6b7280; }
+.palette {
+  position: absolute; z-index: 1100; top: 100%; left: 0; width: 262px; padding: 8px;
+  background: var(--surface, #fff); color: var(--text, #1f2328); border: 1px solid #c6cbd2; border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); font-size: 12px;
+}
+.paletteHead { margin: 8px 0 4px; font-weight: 600; color: #374151; }
+.paletteGrid { display: grid; grid-template-columns: repeat(10, 20px); gap: 3px 4px; }
+.pswatch { width: 20px; height: 18px; padding: 0; border: 1px solid rgba(0, 0, 0, 0.18); cursor: pointer; border-radius: 2px; }
+.pswatch:hover { outline: 2px solid #E97132; outline-offset: 0; }
+.pswatchOn { outline: 2px solid #1a73e8; }
+.paletteNone, .paletteMore {
+  display: block; width: 100%; text-align: left; padding: 4px 6px; margin-top: 4px; border: none; background: transparent;
+  cursor: pointer; font: inherit; color: inherit; border-radius: 4px;
+}
+.paletteNone:hover, .paletteMore:hover { background: rgba(127, 127, 127, 0.12); }
+.paletteMore { border-top: 1px solid #eceef1; margin-top: 8px; padding-top: 6px; }
+.hiddenColor { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.hexRow { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.hexInput { width: 90px; height: 24px; font: inherit; font-family: monospace; border: 1px solid #c6cbd2; border-radius: 4px; padding: 0 6px; }
+.hexPreview { width: 24px; height: 20px; border: 1px solid #c6cbd2; border-radius: 3px; background-image: none; }
+.inkBar { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; }
+.inkBar i { display: block; width: 16px; height: 4px; margin-top: 1px; font-style: normal; }
+
+/* 정렬·줄바꿈 아이콘 메뉴 */
+.iconMenu {
+  position: absolute; z-index: 1100; top: 100%; left: 0; display: flex; gap: 2px; padding: 4px;
+  background: var(--surface, #fff); border: 1px solid #c6cbd2; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+}
+
+/* 진행 상태 한 번 클릭 목록 */
+.stateMenu {
+  position: fixed; z-index: 1100; min-width: 170px; max-height: 360px; overflow: auto; padding: 4px;
+  background: var(--surface, #fff); border: 1px solid #c6cbd2; border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+.stateItem {
+  display: block; width: 100%; margin: 2px 0; padding: 3px 10px; border: 1px solid transparent; border-radius: 10px;
+  font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.stateItem:hover { border-color: #1a73e8; }
+.stateItemOn { box-shadow: inset 0 0 0 2px #1a73e8; }
+.stateRow { display: grid; grid-template-columns: 20px 1fr 92px 56px 56px 150px 64px; gap: 6px; align-items: center; padding: 3px 0; border-bottom: 1px solid #f1f2f4; }
+.statePreview { display: inline-block; padding: 1px 10px; border-radius: 10px; font-size: 12px; }
+
+/* 우클릭 메뉴 */
+.ctxMenu {
+  position: fixed; z-index: 1200; min-width: 210px; padding: 4px 0;
+  background: var(--surface, #fff); color: var(--text, #1f2328); border: 1px solid #c6cbd2; border-radius: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2); font-size: 12.5px;
+}
+.ctxHead { padding: 4px 12px 6px; font-weight: 600; color: #6b7280; border-bottom: 1px solid #eceef1; margin-bottom: 4px; }
+.ctxItem { display: block; width: 100%; padding: 5px 12px; border: none; background: transparent; text-align: left; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; }
+.ctxItem:hover:not(:disabled) { background: #eef3fd; }
+.ctxItem:disabled { color: #b0b6bf; cursor: default; }
+.ctxOn { color: #1a73e8; font-weight: 600; }
+.ctxSep { height: 1px; margin: 4px 0; background: #eceef1; }

@@ -7,9 +7,9 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { neotmsApi } from './neotms.client'
-import type { PmCondRule, PmStyle } from './pmsheet.types'
+import type { PmCondRule, PmStateDef, PmStyle } from './pmsheet.types'
 
-export type { PmCondClause, PmCondOp, PmCondRule, PmStyle } from './pmsheet.types'
+export type { PmCondClause, PmCondOp, PmCondRule, PmStateDef, PmStyle } from './pmsheet.types'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
@@ -82,6 +82,8 @@ export interface PmColumnsPref {
   styles?: Record<string, PmStyle>
   custom?: PmCustomColumn[]
   hidden?: string[]
+  /** 진행 상태 목록·색·연동 (개인 설정). 없으면 기본 목록. */
+  states?: PmStateDef[]
 }
 
 export interface PmFilterFavorite {

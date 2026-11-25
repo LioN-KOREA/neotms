@@ -30,7 +30,6 @@ import '@silevis/reactgrid/styles.css'
 import {
   GROUP_END,
   GROUP_START,
-  PM_STATES,
   patchPmRow,
   pmKeys,
   useTranslatorSuggestions,
@@ -41,6 +40,7 @@ import {
   type PmPrefs,
   type PmSheetRow,
   type PmSheetView,
+  type PmStateDef,
   type PmStyle,
 } from '@/apis/pmsheet.api'
 import { useUpdateJob, useUpdatePurchaseOrder } from '@/apis/queries/neotms.mutation'
@@ -70,16 +70,20 @@ import {
   type Filters,
   type SortState,
 } from './sheetModel'
-import { CondFormatModal, ColumnsModal, NoteModal, ShortcutsModal } from './PmSheetModals'
+import { CondFormatModal, ColumnsModal, NoteModal, ShortcutsModal, StatesModal } from './PmSheetModals'
 import { ACTIONS, comboOf, effectiveShortcuts } from './shortcuts'
+import { ColorPalette } from './ColorPalette'
+import { IconMenu } from './IconMenus'
+import { ALIGN_ICONS, VALIGN_ICONS, WRAP_ICONS } from './menuIcons'
+import { effectiveStates, isClosedState, selectableStates, stateStyleFor } from './pmStates'
 import css from './PmSheet.module.css'
 
-const FILLS = ['#FFF2CC', '#D9EAD3', '#CFE2F3', '#F4CCCC', '#FCE5CD', '#EAD1DC', '#EFEFEF', '#FF9900', '#3271EA', '#990000']
-const INKS = ['#000000', '#CC0000', '#1155CC', '#38761D', '#B45F06', '#777777', '#FFFFFF']
 const SIZES = [9, 10, 11, 12, 13, 14, 16, 18, 20]
 const GROUP_COLOR = '#990000'
 const MONTH_COLOR = '#FF6D01'
-const DONE_STATES = new Set(['납품 완료', '홀딩/캔슬'])
+/** 머리글 색 (팀장님 2026-11-25, 모든 사람의 시트). */
+const HEADER_BG = '#FFD966'
+const LINE_HEIGHT = 16
 
 interface Props {
   sheet: PmSheetView
@@ -125,6 +129,9 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const rules: PmCondRule[] = prefs.cf?.rules ?? []
   const defaultsOn = prefs.cf?.defaults !== false
   const shortcuts = effectiveShortcuts(prefs.shortcuts?.map)
+  const stateDefs = effectiveStates(prefs.columns?.states)
+  const stateNames = selectableStates(stateDefs)
+  const columnOrder = columns.map((c) => c.key)
 
   /* ----------------------------------------------------------------------- */
   /* Local view state                                                        */
@@ -142,7 +149,10 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const [focusLocation, setFocusLocation] = useState<CellLocation | undefined>(undefined)
   const [flash, setFlash] = useState<string | null>(null)
   const [todayOpen, setTodayOpen] = useState(false)
-  const [modal, setModal] = useState<'cf' | 'shortcuts' | 'columns' | 'note' | null>(null)
+  const [modal, setModal] = useState<'cf' | 'shortcuts' | 'columns' | 'note' | 'states' | null>(null)
+  const [stateMenu, setStateMenu] = useState<{ jobId: string; x: number; y: number } | null>(null)
+  /** 우클릭 메뉴 — 머리글(jobId null) 또는 칸. */
+  const [colMenu, setColMenu] = useState<{ key: string; x: number; y: number; jobId: string | null } | null>(null)
   const [swapping, setSwapping] = useState<SwappableTranslatorPo | null>(null)
   const [suggestFor, setSuggestFor] = useState<{ jobId: string; which: 'tr' | 'rv'; x: number; y: number } | null>(null)
   const mouse = useRef({ x: 200, y: 200 })
@@ -240,7 +250,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
       }
       return { ok: true, value: t }
     }
-    if (column.key === 'pmState' && text && !(PM_STATES as readonly string[]).includes(text)) {
+    if (column.key === 'pmState' && text && !stateDefs.some((d) => d.name === text)) {
       return { ok: false, reason: `'${text}' 는 진행 상태 목록에 없습니다.` }
     }
     return { ok: true, value: text.trim() }
@@ -521,7 +531,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
         return void applyStyle({ align: 'right' }, '오른쪽 정렬')
       case 'clearFormat':
         return void applyStyle(
-          { bg: null, fg: null, size: null, bold: null, italic: null, underline: null, strike: null, align: null, valign: null, border: null, borderSides: null, decimals: null },
+          { bg: null, fg: null, size: null, bold: null, italic: null, underline: null, strike: null, align: null, valign: null, border: null, borderSides: null, decimals: null, wrap: null },
           '서식 지우기',
         )
       case 'todayBar':
@@ -533,7 +543,12 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
 
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
     const t = e.target as HTMLElement
-    if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return
+    // ReactGrid 는 칸을 고를 때 포커스를 숨은 <input class="rg-hidden-element"> 에 둔다. 그 입력칸까지
+    // '글자 입력 중' 으로 보고 건너뛰어서 Ctrl+Z 같은 단축키가 시트에서 먹지 않았다 (2026-11-25).
+    // 진짜로 글자를 고치는 칸(칸 편집기·대화상자 입력칸)에서만 건너뛴다 — 거기서 Ctrl+Z 는 글자 되돌리기다.
+    const typing =
+      (t.tagName === 'INPUT' && !t.classList.contains('rg-hidden-element')) || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+    if (typing) return
     const combo = comboOf(e.nativeEvent)
     if (!combo) return
     const action = Object.entries(shortcuts).find(([, c]) => c === combo)?.[0]
@@ -649,11 +664,11 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
         hint: c.spec.hint,
         direction: sort?.key === c.key ? sort.dir : null,
         filtered: (filters[c.key]?.length ?? 0) > 0,
-        onSort: () =>
-          setSort((s) => (s?.key === c.key ? (s.dir === 'asc' ? { key: c.key, dir: 'desc' } : null) : { key: c.key, dir: 'asc' })),
-        onFilter: (x, y) => setFilterPop({ key: c.key, x, y }),
+        // 정렬·필터는 우클릭 메뉴로 (팀장님 2026-11-25). 시간 열은 메뉴에 정렬이 없다.
+        onMenu: (x, y) => setColMenu({ key: c.key, x, y, jobId: null }),
+        onSettings: c.key === 'pmState' ? () => setModal('states') : undefined,
         inner: innerStyle(c.style),
-        style: toCellStyle(c.style),
+        style: { ...toCellStyle(c.style), background: HEADER_BG },
       }),
     ),
   }
@@ -678,7 +693,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     }
     const { row } = entry
     const ctx = { columns, cells, merged: entry.merged, inGroup: entry.inGroup, rowNo: entry.rowNo, overrides }
-    const doneRow = DONE_STATES.has(row.pmState ?? '')
+    const doneRow = isClosedState(row.pmState, stateDefs)
     const read = (key: string) => {
       const col = columnOf(key) ?? FIXED_COLUMNS.map((s) => ({ key: s.key, label: s.label, width: s.width, spec: s, style: {} })).find((c) => c.key === key)
       if (!col) return { raw: '', shown: '' }
@@ -709,7 +724,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           defaults: defaultsOn,
           now,
         })
-        let style = mergeStyle(cf, manual)
+        let style = mergeStyle(cf, stateStyleFor(row.pmState, column.key, columnOrder, stateDefs), manual)
         if (isGroupMarker) style = mergeStyle({ bg: GROUP_COLOR, fg: '#FFFFFF', bold: true }, style)
         const editable = isEditable(column, row)
         const po = column.spec.source === 'tr' ? row.tr : column.spec.source === 'rv' ? row.rv : null
@@ -729,7 +744,12 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           note: own?.note ?? undefined,
           tooltip: v.tooltip ?? (!editable && column.spec.source !== 'readonly' && !po && (column.spec.source === 'tr' || column.spec.source === 'rv') ? 'PO 가 없습니다 — 작업 화면에서 PO 를 발행하면 여기서 고칠 수 있습니다.' : undefined),
           nonEditable: !editable,
-          choices: column.key === 'pmState' ? [...PM_STATES] : column.key === 'task' ? TASK_OPTIONS : undefined,
+          choices: column.key === 'pmState' ? stateNames : column.key === 'task' ? TASK_OPTIONS : undefined,
+          // 진행 상태는 한 번 눌러 바로 목록을 연다 (팀장님 2026-11-25).
+          onQuickPick:
+            column.key === 'pmState' && editable
+              ? (x: number, y: number) => setStateMenu({ jobId: row.jobId, x, y })
+              : undefined,
           free: column.key === 'task',
           placeholder: column.spec.kind === 'picker' ? (po ? '미지정' : 'PO 없음') : undefined,
           onOpen:
@@ -747,9 +767,29 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
               : undefined,
           style: cellStyle,
           inner: innerStyle(style),
+          wrap: style.wrap === 'wrap' || style.wrap === 'clip' ? style.wrap : null,
+          onMenu: (x: number, y: number) => setColMenu({ key: column.key, x, y, jobId: row.jobId }),
         }
       }),
     }
+  })
+
+  /* 자동 줄바꿈 칸이 있는 행은 글자가 다 보이도록 높인다 (글자 폭은 대략 — 한글 12px, 그 밖 7px). */
+  const sizedRows: Row<GridCell>[] = renderRows.map((r) => {
+    let lines = 1
+    r.cells.forEach((cell, ci) => {
+      const c = cell as SheetCell
+      if (c.wrap !== 'wrap' || !c.text) return
+      const width = Math.max(20, (columns[ci]?.width ?? 100) - 12)
+      let total = 0
+      for (const para of c.text.split('\n')) {
+        let w = 0
+        for (const ch of para) w += /[ㄱ-힝]/.test(ch) ? 12.5 : 7
+        total += Math.max(1, Math.ceil(w / width))
+      }
+      lines = Math.max(lines, total)
+    })
+    return lines > 1 ? { ...r, height: Math.min(lines * LINE_HEIGHT + 9, 400) } : r
   })
 
   const highlights: Highlight[] = focus && flash ? [{ rowId: flash, columnId: focus.colKey, borderColor: '#FF6D01' }] : []
@@ -759,7 +799,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   /* ----------------------------------------------------------------------- */
 
   const todayItems = sheet.rows
-    .filter((r) => !r.mergedInto && !DONE_STATES.has(r.pmState ?? ''))
+    .filter((r) => !r.mergedInto && !isClosedState(r.pmState, stateDefs))
     .flatMap((r) => {
       const items: { row: PmSheetRow; colKey: string; what: string }[] = []
       if (r.tr?.eday === today) items.push({ row: r, colKey: 'trEday', what: '번역본 도착' })
@@ -830,6 +870,16 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   }
 
   const focusRow = focus ? rowById.get(focus.jobId) : undefined
+
+  /** 우클릭한 칸의 보이는 값 (빈 칸은 '(빈 칸)'). 머리글에서 열었으면 null. */
+  const menuValue = (m: { key: string; jobId: string | null }): string | null => {
+    if (!m.jobId) return null
+    const row = rowById.get(m.jobId)
+    const column = columnOf(m.key)
+    if (!row || !column) return null
+    const shown = cellValue(row, column, { columns, cells, merged: [], inGroup: false, rowNo: 0, overrides }, decimalsOf(row, column)).shown
+    return shown === '' ? BLANK : shown
+  }
 
   const toggleMonthly = async () => {
     if (!focusRow) return
@@ -903,16 +953,21 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           <button type="button" className={`${css.tool} ${focusStyle.underline ? css.toolOn : ''}`} title={`밑줄 (${shortcuts.underline ?? ''})`} onClick={() => toggle('underline', '밑줄')}><u>U</u></button>
           <button type="button" className={`${css.tool} ${focusStyle.strike ? css.toolOn : ''}`} title={`취소선 (${shortcuts.strike ?? ''})`} onClick={() => toggle('strike', '취소선')}><s>S</s></button>
         </span>
-        <span className={css.group} title="글자색">
-          가
-          {INKS.map((c) => <button key={c} type="button" className={css.swatch} style={{ background: c }} title={c} onClick={() => void applyStyle({ fg: c }, '글자색')} />)}
-          <button type="button" className={css.tool} title="글자색 지우기" onClick={() => void applyStyle({ fg: null }, '글자색 지우기')}>✕</button>
-        </span>
-        <span className={css.group} title="칸 색">
-          칸
-          {FILLS.map((c) => <button key={c} type="button" className={css.swatch} style={{ background: c }} title={c} onClick={() => void applyStyle({ bg: c }, '칸 색')} />)}
-          <input type="color" className={css.swatch} title="다른 색" onChange={(e) => void applyStyle({ bg: e.target.value.toUpperCase() }, '칸 색')} />
-          <button type="button" className={css.tool} title="칸 색 지우기" onClick={() => void applyStyle({ bg: null }, '칸 색 지우기')}>✕</button>
+        <span className={css.group}>
+          <ColorPalette
+            title="글자색"
+            value={focusStyle.fg}
+            noneLabel="자동 (색 지우기)"
+            button={<span className={css.inkBar}><b>가</b><i style={{ background: focusStyle.fg ?? '#000000' }} /></span>}
+            onPick={(c) => void applyStyle({ fg: c }, c ? '글자색' : '글자색 지우기')}
+          />
+          <ColorPalette
+            title="칸 색"
+            value={focusStyle.bg}
+            noneLabel="채우기 없음"
+            button={<span className={css.inkBar}><span aria-hidden="true">🪣</span><i style={{ background: focusStyle.bg ?? '#FFFFFF', border: '1px solid #d0d0d0' }} /></span>}
+            onPick={(c) => void applyStyle({ bg: c }, c ? '칸 색' : '칸 색 지우기')}
+          />
         </span>
         <span className={css.group}>
           <select className={css.toolSelect} title="테두리" value="" onChange={(e) => {
@@ -931,18 +986,9 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
             <option value="thick:tblr">굵은 테두리</option>
             <option value="none">테두리 없음</option>
           </select>
-          <select className={css.toolSelect} title="좌우 정렬" value={focusStyle.align ?? ''} onChange={(e) => void applyStyle({ align: (e.target.value || null) as PmStyle['align'] }, '좌우 정렬')}>
-            <option value="">좌우</option>
-            <option value="left">왼쪽</option>
-            <option value="center">가운데</option>
-            <option value="right">오른쪽</option>
-          </select>
-          <select className={css.toolSelect} title="상하 정렬" value={focusStyle.valign ?? ''} onChange={(e) => void applyStyle({ valign: (e.target.value || null) as PmStyle['valign'] }, '상하 정렬')}>
-            <option value="">상하</option>
-            <option value="top">위</option>
-            <option value="middle">가운데</option>
-            <option value="bottom">아래</option>
-          </select>
+          <IconMenu title="가로 정렬" icons={ALIGN_ICONS} value={focusStyle.align ?? 'left'} onPick={(k) => void applyStyle({ align: k }, '가로 정렬')} />
+          <IconMenu title="세로 정렬" icons={VALIGN_ICONS} value={focusStyle.valign ?? 'middle'} onPick={(k) => void applyStyle({ valign: k }, '세로 정렬')} />
+          <IconMenu title="텍스트 줄바꿈" icons={WRAP_ICONS} value={focusStyle.wrap ?? 'overflow'} onPick={(k) => void applyStyle({ wrap: k === 'overflow' ? null : k }, '텍스트 줄바꿈')} />
           <select className={css.toolSelect} title="소수 자리" value={focusStyle.decimals ?? ''} onChange={(e) => void applyStyle({ decimals: e.target.value === '' ? null : Number(e.target.value) }, '소수 자리')}>
             <option value="">소수</option>
             {[0, 1, 2, 3, 4].map((d) => <option key={d} value={d}>{d === 0 ? '0,000' : `0,000.${'0'.repeat(d)}`}</option>)}
@@ -1019,7 +1065,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           </p>
         ) : null}
         <ReactGrid
-          rows={[headerRow, ...renderRows]}
+          rows={[headerRow, ...sizedRows]}
           columns={gridColumns}
           customCellTemplates={{ sheet: new SheetCellTemplate(), sheetHeader: new SheetHeaderTemplate() }}
           onCellsChanged={onCellsChanged as unknown as (changes: CellChange[]) => void}
@@ -1054,8 +1100,9 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
             setFilters((f) => ({ ...f, [filterPop.key]: vals }))
             setFilterPop(null)
           }}
+          sortable={columnOf(filterPop.key)?.spec.kind !== 'hour'}
           onSort={(dir) => {
-            setSort({ key: filterPop.key, dir })
+            setSort(dir ? { key: filterPop.key, dir } : null)
             setFilterPop(null)
           }}
           onClose={() => setFilterPop(null)}
@@ -1106,6 +1153,76 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
             void savePref('shortcuts', { map })
             setModal(null)
             onNotice('단축키를 저장했습니다.')
+          }}
+        />
+      ) : null}
+      {modal === 'states' ? (
+        <StatesModal
+          states={stateDefs}
+          columns={columns}
+          onClose={() => setModal(null)}
+          onSave={(states) => {
+            void savePref('columns', { ...(prefs.columns ?? {}), states })
+            setModal(null)
+            onNotice('진행 상태 설정을 저장했습니다. (내 시트에만 적용)')
+          }}
+        />
+      ) : null}
+      {colMenu ? (
+        <ColumnMenu
+          x={colMenu.x}
+          y={colMenu.y}
+          label={columnOf(colMenu.key)?.label ?? ''}
+          sortable={columnOf(colMenu.key)?.spec.kind !== 'hour'}
+          sort={sort?.key === colMenu.key ? sort.dir : null}
+          filtered={(filters[colMenu.key]?.length ?? 0) > 0}
+          anyFilter={Object.values(filters).some((v) => v.length > 0)}
+          value={menuValue(colMenu)}
+          onClose={() => setColMenu(null)}
+          onSort={(dir) => {
+            setSort(dir ? { key: colMenu.key, dir } : null)
+            setColMenu(null)
+          }}
+          onFilterDialog={() => {
+            setFilterPop({ key: colMenu.key, x: colMenu.x, y: colMenu.y })
+            setColMenu(null)
+          }}
+          onOnly={(value) => {
+            setFilters((f) => ({ ...f, [colMenu.key]: [value] }))
+            setColMenu(null)
+          }}
+          onExcept={(value) => {
+            const column = columnOf(colMenu.key)
+            if (column) {
+              const all = distinctValues(sheet.rows.filter((r) => !r.mergedInto), column, columns, cells, overrides)
+              const current = filters[colMenu.key]?.length ? filters[colMenu.key]! : all
+              const next = current.filter((v) => v !== value)
+              setFilters((f) => ({ ...f, [colMenu.key]: next.length > 0 ? next : ['\u0000'] }))
+            }
+            setColMenu(null)
+          }}
+          onClearThis={() => {
+            setFilters((f) => ({ ...f, [colMenu.key]: [] }))
+            setColMenu(null)
+          }}
+          onClearAll={() => {
+            setFilters({})
+            setColMenu(null)
+          }}
+        />
+      ) : null}
+      {stateMenu ? (
+        <StateMenu
+          x={stateMenu.x}
+          y={stateMenu.y}
+          defs={stateDefs.filter((d) => !d.hidden)}
+          current={rowById.get(stateMenu.jobId)?.pmState ?? null}
+          onClose={() => setStateMenu(null)}
+          onPick={(name) => {
+            const row = rowById.get(stateMenu.jobId)
+            const column = columnOf('pmState')
+            setStateMenu(null)
+            if (row && column) void applyValues([{ row, column, text: name }])
           }}
         />
       ) : null}
@@ -1183,7 +1300,8 @@ function FilterPopover(props: {
   values: string[]
   selected: string[]
   onApply: (values: string[]) => void
-  onSort: (dir: 'asc' | 'desc') => void
+  sortable: boolean
+  onSort: (dir: 'asc' | 'desc' | null) => void
   onClose: () => void
 }) {
   const [picked, setPicked] = useState<Set<string>>(new Set(props.selected.length > 0 ? props.selected : props.values))
@@ -1194,10 +1312,13 @@ function FilterPopover(props: {
     <div className={css.popover} style={{ left, top: props.y + 4 }} onMouseDown={(e) => e.stopPropagation()}>
       <div className={css.popHead}>
         <b>{props.label}</b>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <button type="button" className={css.tool} onClick={() => props.onSort('asc')}>오름차순 ▲</button>
-          <button type="button" className={css.tool} onClick={() => props.onSort('desc')}>내림차순 ▼</button>
-        </div>
+        {props.sortable ? (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <button type="button" className={css.tool} onClick={() => props.onSort('asc')}>오름차순 ▲</button>
+            <button type="button" className={css.tool} onClick={() => props.onSort('desc')}>내림차순 ▼</button>
+            <button type="button" className={css.tool} onClick={() => props.onSort(null)}>원래대로</button>
+          </div>
+        ) : null}
         <input className={css.toolSelect} placeholder="값 검색" value={search} onChange={(e) => setSearch(e.target.value)} autoFocus />
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" className={css.tool} onClick={() => setPicked(new Set(props.values))}>모두 선택</button>
@@ -1232,6 +1353,114 @@ function FilterPopover(props: {
           적용
         </button>
       </div>
+    </div>
+  )
+}
+
+/** 우클릭 메뉴 — 정렬, 필터, (칸에서 열었으면) 이 값만 보기 / 이 값 빼고 보기. */
+function ColumnMenu(props: {
+  x: number
+  y: number
+  label: string
+  sortable: boolean
+  sort: 'asc' | 'desc' | null
+  filtered: boolean
+  anyFilter: boolean
+  value: string | null
+  onClose: () => void
+  onSort: (dir: 'asc' | 'desc' | null) => void
+  onFilterDialog: () => void
+  onOnly: (value: string) => void
+  onExcept: (value: string) => void
+  onClearThis: () => void
+  onClearAll: () => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const { onClose } = props
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+  const left = Math.min(props.x, window.innerWidth - 240)
+  const top = Math.min(props.y, window.innerHeight - 330)
+  const short = (v: string) => (v.length > 16 ? `${v.slice(0, 16)}…` : v)
+  return (
+    <div ref={box} className={css.ctxMenu} style={{ left, top }} onContextMenu={(e) => e.preventDefault()}>
+      <div className={css.ctxHead}>{props.label}</div>
+      {props.sortable ? (
+        <>
+          <button type="button" className={`${css.ctxItem} ${props.sort === 'asc' ? css.ctxOn : ''}`} onClick={() => props.onSort('asc')}>▲ 오름차순 정렬</button>
+          <button type="button" className={`${css.ctxItem} ${props.sort === 'desc' ? css.ctxOn : ''}`} onClick={() => props.onSort('desc')}>▼ 내림차순 정렬</button>
+          <button type="button" className={css.ctxItem} disabled={!props.sort} onClick={() => props.onSort(null)}>↺ 원래 순서로</button>
+          <div className={css.ctxSep} />
+        </>
+      ) : null}
+      {props.value !== null ? (
+        <>
+          <button type="button" className={css.ctxItem} onClick={() => props.onOnly(props.value!)}>이 값만 보기: <b>{short(props.value)}</b></button>
+          <button type="button" className={css.ctxItem} onClick={() => props.onExcept(props.value!)}>이 값 빼고 보기: <b>{short(props.value)}</b></button>
+        </>
+      ) : null}
+      <button type="button" className={css.ctxItem} onClick={props.onFilterDialog}>필터…</button>
+      <button type="button" className={css.ctxItem} disabled={!props.filtered} onClick={props.onClearThis}>이 열 필터 해제</button>
+      <button type="button" className={css.ctxItem} disabled={!props.anyFilter} onClick={props.onClearAll}>모든 필터 해제</button>
+    </div>
+  )
+}
+
+/** 진행 상태 — 한 번 누르면 펼쳐지는 목록. 상태마다 그 색으로 보인다. */
+function StateMenu(props: {
+  x: number
+  y: number
+  defs: PmStateDef[]
+  current: string | null
+  onPick: (name: string) => void
+  onClose: () => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const { onClose } = props
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+  const top = Math.min(props.y + 2, window.innerHeight - 370)
+  const left = Math.min(props.x, window.innerWidth - 200)
+  return (
+    <div ref={box} className={css.stateMenu} style={{ left, top }}>
+      <button type="button" className={css.stateItem} style={{ background: '#fff', color: '#6b7280' }} onClick={() => props.onPick('')}>
+        (비우기)
+      </button>
+      {props.defs.map((d) => (
+        <button
+          key={d.name}
+          type="button"
+          className={`${css.stateItem} ${d.name === props.current ? css.stateItemOn : ''}`}
+          style={{ background: d.bg ?? '#fff', color: d.fg ?? undefined, fontWeight: d.bold ? 700 : undefined }}
+          onClick={() => props.onPick(d.name)}
+        >
+          {d.name}
+        </button>
+      ))}
     </div>
   )
 }

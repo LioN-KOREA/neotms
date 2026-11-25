@@ -8,7 +8,7 @@ import { useState } from 'react'
 import { useAnswerHandover, usePendingHandovers, type PmHandover, type PmSheetRow } from '@/apis/pmsheet.api'
 import { Modal } from '@/shared/ui/Modal'
 import ui from '@/shared/ui/ui.module.css'
-import { formatHour, formatSheetDate } from './sheetFormat'
+import { asNumber, formatHour, formatNumber, formatSheetDate } from './sheetFormat'
 import { isoToYmd } from './sheetModel'
 import css from './PmSheet.module.css'
 
@@ -23,11 +23,17 @@ const COLS: { key: string; label: string; get: (s: Record<string, unknown>) => s
   { key: 'jobName', label: '작업명', get: (s) => str(s.jobName) },
   { key: 'workCode', label: '업무', get: (s) => str(s.workCode) },
   { key: 'lang', label: '번역어', get: (s) => str(s.lang) },
-  { key: 'jobVolume', label: '분량', get: (s) => str(s.jobVolume) },
+  { key: 'jobVolume', label: '분량', get: (s) => volume(s.jobVolume) },
   { key: 'jobEday', label: '납품일', get: (s) => formatSheetDate(str(s.jobEday)) },
   { key: 'jobEdayTime', label: '시간', get: (s) => formatHour(str(s.jobEdayTime)) },
   { key: 'jobMemo', label: '작업 메모', get: (s) => str(s.jobMemo) },
 ]
+
+/** 분량은 세 자리 쉼표 (12,000). 숫자가 아니면 적힌 그대로. */
+function volume(v: unknown): string {
+  const n = asNumber(str(v))
+  return n === null ? str(v) : formatNumber(n, null)
+}
 
 function str(v: unknown): string {
   return v === null || v === undefined ? '' : String(v)
