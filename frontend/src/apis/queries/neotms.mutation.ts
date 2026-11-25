@@ -33,8 +33,10 @@ import {
   updatePurchaseOrder,
   createAttachmentUpload,
   createRole,
+  forgetHiworksCredential,
   forgetSearch,
   recordSearch,
+  saveHiworksCredential,
   sendPoRequestMail,
   uploadAttachmentBytes,
   deleteRole,
@@ -69,6 +71,7 @@ import type {
   SelfProfileInput,
   AttachmentUploadInput,
   PoRequestMailInput,
+  HiworksCredentialSaveInput,
   RecentSearchForgetInput,
   RecentSearchRecordInput,
   RoleCreateInput,
@@ -322,6 +325,45 @@ export function useForgetSearch() {
   return useMutation({
     mutationFn: (input: RecentSearchForgetInput) => forgetSearch(input),
     onSuccess: () => invalidateAll(qc, [neotmsKeys.recentSearches]),
+  })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 내 정보 — Hiworks 계정                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Hiworks 계정을 저장하거나 바꾼다.
+ *
+ * **오류를 숨기지 않는다.** 최근 검색어 기록과 정반대다 — 저장이 실패했는데 성공처럼 보이면,
+ * 사용자는 다음부터 계정을 묻지 않을 것이라고 믿고 마감 직전에 그렇지 않다는 것을 알게 된다.
+ *
+ * 서버가 저장 전에 Hiworks 로그인을 해 보므로 이 호출은 외부 왕복 한 번만큼 느리다. 화면은 그
+ * 동안 버튼을 잠근다 — 두 번 누르면 로그인 시도가 두 번 간다.
+ *
+ * 성공하면 상태를 다시 읽는다. 응답이 이미 새 상태를 담고 있지만, 이 값을 읽는 곳이 세 군데라서
+ * (내 정보 화면과 메일 대화상자 둘) 캐시를 무효화하는 쪽이 한 곳만 갱신되는 것보다 안전하다.
+ */
+export function useSaveHiworksCredential() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: HiworksCredentialSaveInput) => saveHiworksCredential(input),
+    onSuccess: () => invalidateAll(qc, [neotmsKeys.hiworksCredential]),
+  })
+}
+
+/**
+ * 저장된 계정을 지운다.
+ *
+ * 지운 뒤에는 메일 대화상자가 다시 아이디·비밀번호를 묻는 상태로 돌아가야 하므로, 무효화가
+ * 선택이 아니다 — 하지 않으면 대화상자는 최대 30초 동안 "저장된 계정으로 보냅니다" 를 계속
+ * 보여 주고, 보내기는 400 으로 거절된다.
+ */
+export function useForgetHiworksCredential() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => forgetHiworksCredential(),
+    onSuccess: () => invalidateAll(qc, [neotmsKeys.hiworksCredential]),
   })
 }
 

@@ -104,6 +104,22 @@ export const NeotmsMenuId = {
    * db/006_workspace.sql 이 넣는다.
    */
   WORKSPACE: 'WORKSPACE',
+  /**
+   * 내 정보 — 본인 설정. 지금은 항목이 하나다(Hiworks 계정).
+   *
+   * **권한이 없는 유일한 메뉴다.** 다른 메뉴는 모두 회사 데이터를 보여 주므로 "누가 볼 수
+   * 있는가" 를 누군가 정해야 하지만, 이 화면은 **자기 설정**을 보여 준다. 여기에 권한을 걸면
+   * 뜻이 뒤집힌다 — 자기 비밀번호에 접근할 권리를 빼앗는 장치가 되고, 새로 만든 역할은 이
+   * 화면에 들어갈 수 없는데 그 이유가 어디에도 적히지 않는다.
+   *
+   * 그래서 서버의 라우트는 `anyStaff` 이고(`/me/recent-searches` 와 같은 단), 레일의 항목은
+   * `may()` 가 아니라 명시적인 any-staff 조건으로 보인다 — `NEOTMS_NAV_ANY_STAFF`
+   * (shared/permissions.ts) 참고.
+   *
+   * `sys_menu` 행은 db/002_initial_seeding.sql 과 db/013_hiworks_credentials.sql 이 넣는다.
+   * 다른 메뉴 파일과 달리 재부여 호출이 없다 — 부여한 권한이 없기 때문이다.
+   */
+  MY_INFO: 'MY_INFO',
 } as const
 
 export type NeotmsMenuIdValue = (typeof NeotmsMenuId)[keyof typeof NeotmsMenuId]

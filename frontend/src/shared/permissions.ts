@@ -43,6 +43,25 @@ export type NeotmsNavGroupId =
   | 'admin'
   | 'trn'
   | 'payment'
+  | 'me'
+
+/**
+ * 권한 이름 자리에 쓰는 표식 — "등록된 직원이면 누구나".
+ *
+ * 메뉴 하나가 이것을 쓴다(내 정보). 다른 메뉴는 모두 회사 데이터를 보여 주므로 "누가 볼 수
+ * 있는가" 를 누군가 정해야 하지만, 자기 설정 화면에 권한을 걸면 뜻이 뒤집힌다 — 자기 비밀번호에
+ * 접근할 권리를 빼앗는 장치가 되고, 새로 만든 역할은 그 화면에 들어갈 수 없는데 이유가 어디에도
+ * 적히지 않는다. 서버도 같은 판단을 한다(`anyStaff` 라우트).
+ *
+ * **값이 비어 있지 않은 것이 중요하다.** `readPermission` 을 선택 항목으로 만들면 "게이트가
+ * 아예 없는 항목" 을 표현할 수 있게 되고, 그건 실수로 만들어지는 쪽이다. 이 표식은 게이트가
+ * 없다는 뜻이 아니라 **게이트가 등록 여부**라는 뜻이고, 그 차이가 `readableNav` 에 그대로
+ * 적혀 있다.
+ *
+ * `'*'` 로 시작하므로 어떤 권한 이름과도 겹치지 않는다 — 실제 권한은 모두
+ * `NEOTMS_PERMISSION_…` 이다.
+ */
+export const NEOTMS_NAV_ANY_STAFF = '*anyStaff' as const
 
 /**
  * One sidebar entry. `readPermission` is what the server grants and what decides whether this
@@ -55,8 +74,14 @@ export interface NeotmsNavItem {
    * Permissions are granted by name now, so visibility reads `readPermission` below.
    */
   menuId: NeotmsMenuIdValue
-  /** Holding this is what makes the entry appear. One permission, not a menu plus an action. */
-  readPermission: string
+  /**
+   * Holding this is what makes the entry appear. One permission, not a menu plus an action.
+   *
+   * Or `NEOTMS_NAV_ANY_STAFF`, for the one entry whose gate is "is registered staff" rather than a
+   * grant - see that constant. It is a value in this field rather than a separate optional flag so
+   * that every entry still has to say what its gate is.
+   */
+  readPermission: string | typeof NEOTMS_NAV_ANY_STAFF
   /**
    * Set when the entry is for superusers only, and no permission can stand in for it.
    *
@@ -130,6 +155,18 @@ export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
   { id: 'payment', label: '결제', icon: 'cart' },
   { id: 'insight', label: '리포트', icon: 'chart' },
   { id: 'admin', label: '운영관리', icon: 'gear' },
+  /*
+   * 내 정보가 **맨 끝**인 이유는 자리가 아니라 첫 화면 때문이다.
+   *
+   * 이 묶음은 모든 계정에 보이는 유일한 묶음이다(`NEOTMS_NAV_ANY_STAFF`). `HomeRedirect` 는
+   * `readableNav(profile)[0]` 로 보내므로, 이 항목이 배열 앞에 있으면 **모든 사람의 로그인 직후
+   * 첫 화면이 자기 설정**이 된다 — 아무도 매일 열려고 하지 않는 화면이다. 그래서 `NEOTMS_NAV`
+   * 에서도 맨 끝이고, 두 배열 모두에서 끝이어야 한다(레일 순서는 이 배열, 첫 화면은 그 배열).
+   *
+   * 역설적으로, 권한이 하나도 없는 계정에게는 이것이 첫 화면이 된다. 그 경우에는 그게 맞다 —
+   * 대안은 빈 화면이다.
+   */
+  { id: 'me', label: '내 정보', icon: 'user' },
 ]
 
 /*
@@ -338,6 +375,25 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     hint: '역할별 권한 설정',
     group: 'admin',
   },
+  /*
+   * 내 정보 — **권한이 아니라 등록 여부로 보이는 유일한 항목**이다.
+   *
+   * 이유는 `NEOTMS_NAV_ANY_STAFF` 에 적어 두었다. 요약하면, 이 화면이 보여 주는 것은 회사
+   * 데이터가 아니라 **보는 사람 자신의 설정**이고, 거기에 권한을 걸면 "자기 비밀번호에 접근할
+   * 권리" 를 누군가 부여하는 모양이 된다.
+   *
+   * **배열의 맨 끝이어야 한다.** `readableNav` 는 묶음이 아니라 이 배열의 순서를 따르고,
+   * `HomeRedirect` 는 그 첫 항목으로 보낸다. 모든 계정에 보이는 항목이므로 앞에 두면 모두의 첫
+   * 화면이 자기 설정이 된다. 새 항목을 추가할 때 이 줄 **위에** 넣어야 하는 이유다.
+   */
+  {
+    menuId: NeotmsMenuId.MY_INFO,
+    readPermission: NEOTMS_NAV_ANY_STAFF,
+    path: '/me',
+    label: '내 정보',
+    hint: 'Hiworks 계정 등 내 설정',
+    group: 'me',
+  },
 ]
 
 /**
@@ -373,7 +429,12 @@ export function hasAttribute(
 export function readableNav(profile: ProfileView | undefined): readonly NeotmsNavItem[] {
   return NEOTMS_NAV.filter(
     (item) =>
-      may(profile, item.readPermission) &&
+      // 등록이 끝난 직원이면 누구나 보는 항목(내 정보 하나). `registration === 'active'` 로 보는
+      // 이유는 가입 대기 중인 사람에게는 아직 저장할 staff 행이 없기 때문이다 — 서버의
+      // `anyStaff` 도 같은 것을 본다.
+      (item.readPermission === NEOTMS_NAV_ANY_STAFF
+        ? profile?.registration === 'active'
+        : may(profile, item.readPermission)) &&
       // `superuserOnly` 항목은 권한을 통과해도 속성이 없으면 보이지 않는다. 시스템관리자는
       // 모든 권한 검사를 통과하므로 실제로는 이 조건이 혼자 결정하지만, 두 조건을 모두 보게
       // 두면 `superuserOnly` 를 빼먹은 항목이 권한만으로 열리는 쪽으로 실수하게 된다.

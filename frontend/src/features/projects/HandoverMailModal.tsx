@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useSendHandoverMail } from '@/apis/queries/neotms.mutation'
+import { useHiworksCredential } from '@/apis/queries/neotms.query'
 import {
   HANDOVER_FORMATS,
   HANDOVER_LAYOUTS,
@@ -77,6 +78,30 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
   const [hiworksPassword, setHiworksPassword] = useState('')
 
   /*
+   * 저장된 하이웍스 계정이 있는지. 없으면(혹은 아직 읽는 중이면) 전처럼 두 칸을 묻는다 —
+   * 기다리는 동안 칸을 감추면, 느린 연결에서 칸이 뒤늦게 나타난다.
+   *
+   * `manual` 은 "이번만 다른 계정으로" 다. 대화상자를 닫으면 사라지는 상태인 것이 맞다:
+   * 한 번의 예외가 다음 발송까지 따라가면 그게 더 놀라운 동작이다.
+   */
+  const credential = useHiworksCredential()
+  /*
+   * `registered && vaultConfigured`, not `registered` alone.
+   *
+   * 비생산 배포들은 한 데이터베이스를 공유한다. 그래서 **내 배포가 열 수 없는 행**이 보일 수
+   * 있다 — 다른 배포가 자기 키로 봉인한 행이다. 상태 조회는 KMS 를 전혀 쓰지 않는데(가린
+   * 아이디만 읽는다) 그 장점이 여기서는 함정이 된다: `registered` 만 보고 칸을 감추면, 화면은
+   * "저장된 계정으로 보냅니다" 라고 약속한 뒤 보내기가 400 으로 거절된다.
+   *
+   * 이 배포에 키가 없으면 칸을 보여 주는 쪽이 항상 맞다. 서버도 같은 사실을 알고 있고
+   * (`vaultConfigured`), 그 값을 함께 보는 것이 약속을 지킬 수 있는지 미리 아는 방법이다.
+   */
+  const hasStoredCredential =
+    (credential.data?.registered ?? false) && (credential.data?.vaultConfigured ?? false)
+  const [manual, setManual] = useState(false)
+  const useStored = hasStoredCredential && !manual
+
+  /*
    * The address is checked for shape only. Whether it exists is a question only a mail server can
    * answer, and if it is wrong the bounce goes back to the sender. The server schema takes the same
    * view.
@@ -88,8 +113,8 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
     layouts.length > 0 &&
     recipient.trim().length > 0 &&
     !recipientLooksWrong &&
-    hiworksId.trim().length > 0 &&
-    hiworksPassword.length > 0
+    // 저장된 계정으로 보낼 때는 두 칸이 비어 있는 것이 정상이다.
+    (useStored || (hiworksId.trim().length > 0 && hiworksPassword.length > 0))
 
   const canSend = complete && !sendMail.isPending
 
@@ -102,8 +127,13 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
         layouts,
         recipient: recipient.trim(),
         note: note.trim(),
-        hiworksId: hiworksId.trim(),
-        hiworksPassword,
+        /*
+         * 저장된 계정으로 보낼 때는 **보내지 않는다** — 빈 문자열이 아니라 아예 없는 필드다.
+         * 서버의 규칙이 "입력한 값이 있으면 그것을 쓴다" 이므로 둘은 같은 뜻이지만, 쓰지 않는
+         * 값을 요청 본문에 넣지 않는 쪽이 정직하고, 네트워크 로그에도 남지 않는다.
+         */
+        hiworksId: useStored ? undefined : hiworksId.trim(),
+        hiworksPassword: useStored ? undefined : hiworksPassword,
       },
     })
     onSent(`${sent.recipient} 로 인계메일을 보냈습니다 — 제목 "${sent.subject}"`)
@@ -231,41 +261,83 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
        * The Hiworks credentials. They are kept apart from the other fields and sit under their own
        * note on purpose: a field asking for a password needs the reason beside it, and without one
        * people read it as this system wanting to keep their Hiworks account.
+       *
+       * 저장된 계정이 있으면 두 칸을 **감춘다**. 감추는 것이 비워 두는 것보다 나은 이유는
+       * "비어 있으면 저장된 계정으로 보낸다" 라는 규칙이 화면에 보이지 않기 때문이다 — 빈 칸
+       * 두 개를 보면 사람은 채워야 한다고 읽는다.
+       *
+       * 그래도 '직접 입력' 을 남겨 둔다. 다른 계정으로 한 번 보내야 하는 일은 실제로 있고(팀
+       * 공용 계정, 휴가 중인 동료 대행), 그걸 하려고 저장된 계정을 지웠다 다시 넣게 만들 수는
+       * 없다. 서버도 같은 우선순위를 쓴다 — 입력한 값이 저장된 값을 이긴다.
        */}
       <InfoNotice>
         메일은 <strong>본인의 하이웍스 계정</strong>에서 발송되며, 보낸메일함에도 저장됩니다.
-        입력한 ID 와 비밀번호는 발송에 한 번 쓰이고 저장되지 않습니다.
+        {useStored
+          ? ' 내 정보에 저장한 계정으로 보냅니다.'
+          : ' 입력한 ID 와 비밀번호는 이 발송에 한 번만 쓰이고 저장되지 않습니다.'}
       </InfoNotice>
 
-      <div className={ui.datePair}>
-        <div className={ui.field}>
-          <label className={`${ui.label} ${ui.required}`} htmlFor="hm-id">
-            하이웍스 ID
-          </label>
-          <input
-            id="hm-id"
-            className={ui.input}
-            autoComplete="username"
-            value={hiworksId}
-            onChange={(e) => setHiworksId(e.target.value)}
+      {useStored ? (
+        <div className={ui.filterNote}>
+          저장된 계정: <strong>{credential.data?.hiworksIdHint ?? '-'}</strong>
+          <button
+            type="button"
+            className={ui.btnLink}
+            onClick={() => setManual(true)}
             disabled={sendMail.isPending}
-          />
+          >
+            직접 입력
+          </button>
         </div>
-        <div className={ui.field}>
-          <label className={`${ui.label} ${ui.required}`} htmlFor="hm-pw">
-            하이웍스 비밀번호
-          </label>
-          <input
-            id="hm-pw"
-            className={ui.input}
-            type="password"
-            autoComplete="current-password"
-            value={hiworksPassword}
-            onChange={(e) => setHiworksPassword(e.target.value)}
-            disabled={sendMail.isPending}
-          />
-        </div>
-      </div>
+      ) : (
+        <>
+          <div className={ui.datePair}>
+            <div className={ui.field}>
+              <label className={`${ui.label} ${ui.required}`} htmlFor="hm-id">
+                하이웍스 ID
+              </label>
+              <input
+                id="hm-id"
+                className={ui.input}
+                autoComplete="username"
+                value={hiworksId}
+                onChange={(e) => setHiworksId(e.target.value)}
+                disabled={sendMail.isPending}
+              />
+            </div>
+            <div className={ui.field}>
+              <label className={`${ui.label} ${ui.required}`} htmlFor="hm-pw">
+                하이웍스 비밀번호
+              </label>
+              <input
+                id="hm-pw"
+                className={ui.input}
+                type="password"
+                autoComplete="current-password"
+                value={hiworksPassword}
+                onChange={(e) => setHiworksPassword(e.target.value)}
+                disabled={sendMail.isPending}
+              />
+            </div>
+          </div>
+          {hasStoredCredential ? (
+            <div className={ui.filterNote}>
+              <button
+                type="button"
+                className={ui.btnLink}
+                onClick={() => {
+                  setManual(false)
+                  setHiworksId('')
+                  setHiworksPassword('')
+                }}
+                disabled={sendMail.isPending}
+              >
+                저장된 계정 사용
+              </button>
+            </div>
+          ) : null}
+        </>
+      )}
     </Modal>
   )
 }

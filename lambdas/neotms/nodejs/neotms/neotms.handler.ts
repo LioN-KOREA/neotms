@@ -108,6 +108,7 @@ import {
   WorkspaceLayoutSchema,
   WorkspaceStyleApplySchema,
   AttachmentUploadSchema,
+  HiworksCredentialSaveSchema,
   PoRequestMailSchema,
   RecentSearchForgetSchema,
   RecentSearchRecordSchema,
@@ -221,6 +222,11 @@ import {
   listRecentSearches,
   recordSearch,
 } from "./profile/NeotmsRecentSearchManager.js";
+import {
+  forgetHiworksCredential,
+  getHiworksCredential,
+  saveHiworksCredential,
+} from "./hiworks/NeotmsHiworksManager.js";
 import {
   createRole,
   deleteRole,
@@ -891,6 +897,25 @@ const handleForgetSearch: RRHandler = async (request) => {
 };
 
 /*
+ * The caller's own Hiworks sign-in (db/013).
+ *
+ * No `writeContext` on the save, unlike every other write in this API. `created_by` / `created_ip`
+ * record WHO changed a shared row, and this row has exactly one possible writer - its owner, who
+ * is the primary key. Stamping an IP address would add a fact about somebody's location to the row
+ * that holds their password, which is the opposite of what this table is for.
+ */
+const handleGetHiworksCredential: RRHandler = async (request) =>
+  getHiworksCredential(callerOf(request));
+
+const handleSaveHiworksCredential: RRHandler = async (request) => {
+  const parsed = parseBody(HiworksCredentialSaveSchema, request.body);
+  return parsed.ok ? saveHiworksCredential(callerOf(request), parsed.value) : parsed.response;
+};
+
+const handleForgetHiworksCredential: RRHandler = async (request) =>
+  forgetHiworksCredential(callerOf(request));
+
+/*
  * Role administration - what a role MEANS, and what a person may BE named as.
  *
  * Every one of these is `superuser: true` rather than permission-gated, and the reason is on
@@ -1156,6 +1181,14 @@ const ADMIN_STAFF = "/api/v0/admin/staff";
 const ATTACHMENTS = "/api/v0/attachments";
 const ATTACHMENT_UPLOADS = "/api/v0/attachments/uploads";
 const RECENT_SEARCHES = "/api/v0/me/recent-searches";
+/**
+ * The caller's own Hiworks sign-in. Singular on purpose - a person has one.
+ *
+ * Under `/me/` with the other two first-person resources, and that prefix is doing real work here:
+ * it is why no handler on this path takes a staff id, and therefore why there is no request that
+ * names whose credential to read.
+ */
+const HIWORKS_CREDENTIAL = "/api/v0/me/hiworks-credential";
 const WORKSPACE = "/api/v0/workspace";
 const WORKSPACE_COLUMNS = "/api/v0/workspace/columns";
 const WORKSPACE_CELLS = "/api/v0/workspace/cells";
@@ -1368,6 +1401,29 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: RECENT_SEARCHES, method: "GET", handler: handleListRecentSearches, anyStaff: true },
   { path: RECENT_SEARCHES, method: "POST", handler: handleRecordSearch, anyStaff: true },
   { path: RECENT_SEARCHES, method: "DELETE", handler: handleForgetSearch, anyStaff: true },
+
+  // -- The caller's own Hiworks sign-in (내 정보) ----------------------------
+  //
+  // `anyStaff`, and NOT a permission, which is the one decision on this feature worth stating in
+  // the route table. Every permission in this system answers "may this person see company data";
+  // this row holds one person's own credential, so a grant could only ever be a way to take
+  // somebody's access to their own account away - and a role created next month would silently not
+  // have it. The tier is the one /me/recent-searches and /me/notices already use, for the same
+  // reason: it is the caller's own data, narrowed by identity rather than by scope.
+  //
+  // PUT rather than POST because storing twice is storing once - `staff_id` is the primary key and
+  // the statement upserts, so "register" and "change my password" are the same request.
+  //
+  // One path, three methods, no id in it anywhere. There is no route that names a staff id, which
+  // is what makes reading a colleague's credential unexpressible rather than merely refused.
+  { path: HIWORKS_CREDENTIAL, method: "GET", handler: handleGetHiworksCredential, anyStaff: true },
+  { path: HIWORKS_CREDENTIAL, method: "PUT", handler: handleSaveHiworksCredential, anyStaff: true },
+  {
+    path: HIWORKS_CREDENTIAL,
+    method: "DELETE",
+    handler: handleForgetHiworksCredential,
+    anyStaff: true,
+  },
 
   // -- Role administration (superuser only) ---------------------------------
   //

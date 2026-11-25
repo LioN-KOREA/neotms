@@ -40,6 +40,7 @@ import { notFound, ok, runDb } from "../NeotmsResult.js";
 import { ProjectGetOps } from "../projects/NeotmsProject.dbops.js";
 import type { HandoverMailSend } from "../neotms.schemas.js";
 import { hiworksLogin, hiworksSendEmail } from "./HiworksClient.js";
+import { resolveHiworksCredentials } from "../hiworks/NeotmsHiworksManager.js";
 import { HandoverJobsOps } from "./NeotmsHandover.dbops.js";
 import { composeHandoverMail } from "./NeotmsHandoverMail.js";
 
@@ -72,7 +73,16 @@ export async function sendHandoverMail(
       note: input.note,
     });
 
-    const login = await hiworksLogin(input.hiworksId, input.hiworksPassword);
+    /*
+     * Typed in the dialog, or stored on 내 정보 - one resolver decides, shared with the PO request
+     * mail so the precedence cannot differ between the two screens (neotms/hiworks/). It answers
+     * with the response to send when there is nothing usable, which is a 400 naming what to do
+     * rather than a sign-in attempt with an empty password.
+     */
+    const credentials = await resolveHiworksCredentials(caller, input);
+    if (!credentials.ok) return credentials.response;
+
+    const login = await hiworksLogin(credentials.credentials.id, credentials.credentials.password);
     if (!login.result) {
       /*
        * Two different failures, told apart. Hiworks sometimes answers a wrong password with a 200

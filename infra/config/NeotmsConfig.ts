@@ -165,12 +165,52 @@ export interface NeotmsFxConfig {
   readonly scheduleMinutes: number;
 }
 
+/**
+ * Where the CMK that wraps each person's Hiworks sign-in comes from (db/013).
+ *
+ * Three modes rather than an optional ARN, because an absent ARN would otherwise have to mean two
+ * different things depending on the stage - "make your own" in production and "feature off"
+ * everywhere else - and the construct would have to re-derive the stage policy to tell them apart.
+ * Naming the modes keeps that decision here, and makes `shared` without an ARN unrepresentable.
+ *
+ *   * `own`    - the stack creates and owns the key. Production, and only production.
+ *   * `shared` - the stack imports a key owned by another account and grants its function the two
+ *                actions it needs. Non-production, where several deployments in several accounts
+ *                share one database.
+ *   * `off`    - no key, blank `NEOTMS_HIWORKS_KMS_KEY_ID`, feature disabled. The mail dialogs ask
+ *                for credentials exactly as they did before db/013, so nothing degrades.
+ *
+ * ## Why non-production defaults to `off` rather than to `own`
+ *
+ * Because `own` is the broken configuration there. The non-production deployments share ONE
+ * database, so a per-deployment key means deployment A wraps a data key under its own CMK, writes
+ * the row, and deployment B - reading the same row - cannot decrypt it. B's user re-saves, the row
+ * is re-wrapped under B's key, and now A is broken. That ping-pong is silent: each save breaks
+ * somebody else's stored credential, and the only symptom is being asked to type a password again.
+ *
+ * So the default for a stage that shares a database is to store nothing at all, and sharing is
+ * opt-in by naming the one key every deployment is to use.
+ */
+export type NeotmsHiworksKms =
+  | { readonly mode: "own" }
+  | { readonly mode: "shared"; readonly keyArn: string }
+  | { readonly mode: "off" };
+
 export interface NeotmsStageConfig {
   readonly stage: string;
   /** Prefix for every physical resource name, so two stages can share an account if it comes to that. */
   readonly resourcePrefix: string;
   readonly account?: string;
   readonly region: string;
+  /**
+   * Where the Hiworks credential CMK comes from. See `NeotmsHiworksKms`.
+   *
+   * Stated per stage rather than derived in the construct, so that "production owns its own key and
+   * never takes an override" is visible in this file instead of being a convention in one `if`.
+   * `resolveStageConfig` may upgrade a non-production stage from `off` to `shared`; it never
+   * touches production's.
+   */
+  readonly hiworksKms: NeotmsHiworksKms;
   /**
    * Origins allowed to call the API with credentials. Exact origins only - no wildcards, ever.
    *
@@ -257,6 +297,13 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
     stage: "dev",
     resourcePrefix: "neotms-dev",
     region: SEOUL,
+    /*
+     * Off unless a shared key is named with `-c hiworksEncKeyArn=...`. See `NeotmsHiworksKms` for
+     * why the default is "store nothing" rather than "make your own key": every dev deployment
+     * shares one database, so a per-deployment key makes each save break somebody else's stored
+     * credential.
+     */
+    hiworksKms: { mode: "off" },
     allowedOriginUrls: ["http://localhost:5173"],
     supabase: { ...SUPABASE_COMMON, projectRef: "", poolerHost: "" },
     auth: {
@@ -300,6 +347,14 @@ export const NEOTMS_CONFIGS: Record<string, NeotmsStageConfig> = {
     stage: "prod",
     resourcePrefix: "neotms",
     region: SEOUL,
+    /*
+     * Production owns its own key and never imports one. `resolveStageConfig` does not even READ
+     * the override context for this stage, so there is no command line that points production at
+     * a key in another account - which is the whole point of "definitive for prod". The shared key
+     * exists because several non-production deployments share one database; production is the one
+     * authoritative deployment against one database, so it has nothing to share with.
+     */
+    hiworksKms: { mode: "own" },
     // Filled in once the production hostname is decided. Deliberately left empty rather than
     // defaulted to something permissive: an empty list fails closed, a wildcard fails open.
     allowedOriginUrls: [],
@@ -402,6 +457,8 @@ export const NEOTMS_AUTH_CONTEXT_KEYS = [
 
 export type NeotmsAuthContextKey = (typeof NEOTMS_AUTH_CONTEXT_KEYS)[number];
 
+export type NeotmsHiworksEncAuthContextKey = "hiworksEncKeyArn"
+
 /**
  * The Supabase settings that may be overridden, and the context key each answers to.
  *
@@ -447,7 +504,7 @@ export interface NeotmsContextLookup {
  */
 function readStringOverride(
   context: NeotmsContextLookup | undefined,
-  key: NeotmsAuthContextKey | NeotmsSupabaseContextKey,
+  key: NeotmsAuthContextKey | NeotmsSupabaseContextKey | NeotmsHiworksEncAuthContextKey ,
 ): string | undefined {
   const raw = context?.tryGetContext(key);
   if (raw === undefined || raw === null) return undefined;
@@ -468,6 +525,63 @@ function readStringOverride(
     );
   }
   return trimmed;
+}
+
+/**
+ * A full KMS key or alias ARN in one region.
+ *
+ * `arn:aws:kms:<region>:<12-digit account>:key/<id>` or `.../alias/<name>`. The partition is left
+ * loose (`aws`, `aws-cn`, `aws-us-gov`) because that costs nothing; everything after it is pinned.
+ */
+const KMS_KEY_ARN = /^arn:aws[a-z-]*:kms:([a-z0-9-]+):(\d{12}):(key|alias)\/(.+)$/;
+
+/**
+ * Turn the `hiworksEncKeyArn` override into a mode, or throw.
+ *
+ * ## Why a FULL arn is required, and not a key id or a bare alias
+ *
+ * Because the key is in another account. `GenerateDataKey` and `Decrypt` resolve a bare key id or
+ * `alias/name` against the CALLER's account, so either one would silently look for a key that does
+ * not exist there - and the failure arrives at runtime, as a user being asked to retype their
+ * password, rather than at deploy time where it belongs.
+ *
+ * ## Why the region is checked
+ *
+ * A cross-REGION key is a different failure from a cross-account one, with the same symptom, and
+ * the check is free: the ARN carries its region and the stage config states the stack's. Catching
+ * it here turns a runtime `NotFoundException` into a deploy-time sentence naming both regions.
+ *
+ * The ACCOUNT in the arn is deliberately not checked against anything. Cross-account is the normal
+ * case here, and the deploying account is not known to this module - it comes from the ambient
+ * credentials in NeotmsApp.
+ */
+function resolveHiworksKms(
+  config: NeotmsStageConfig,
+  override: string | undefined,
+): NeotmsHiworksKms {
+  if (override === undefined) return config.hiworksKms;
+
+  const parsed = KMS_KEY_ARN.exec(override);
+  if (!parsed) {
+    throw new Error(
+      `Context "hiworksEncKeyArn" must be a full KMS key or alias ARN, but was "${override}". ` +
+        `Expected arn:aws:kms:${config.region}:<account>:key/<id>. A bare key id or alias resolves ` +
+        `against the DEPLOYING account, which is not where the shared key lives - so it would fail ` +
+        `at runtime rather than here. Omit the flag entirely to leave the Hiworks credential ` +
+        `feature switched off for this deployment.`,
+    );
+  }
+
+  const [, region] = parsed;
+  if (region !== config.region) {
+    throw new Error(
+      `Context "hiworksEncKeyArn" names a key in ${String(region)}, but this stage deploys to ` +
+        `${config.region}. A KMS key cannot be used across regions; create the shared key in ` +
+        `${config.region} or deploy this stage to ${String(region)}.`,
+    );
+  }
+
+  return { mode: "shared", keyArn: override };
 }
 
 /**
@@ -515,5 +629,21 @@ export function resolveStageConfig(
     if (override !== undefined) supabase[field] = override;
   }
 
-  return { ...config, auth, supabase };
+  /*
+   * The Hiworks CMK override, for non-production stages only.
+   *
+   * The stage guard is the enforcement of "definitive for prod": the context is not read at all
+   * when the stage is production, so `cdk deploy -c stage=prod -c hiworksEncKeyArn=...` ignores the
+   * flag rather than honouring it. A test synthesises exactly that command line.
+   *
+   * Omitting the flag leaves the stage default, which for a shared-database stage is `off` - the
+   * feature simply does not appear, and no row is written that another deployment would later fail
+   * to open. Passing a MALFORMED arn throws instead, because the two are different mistakes:
+   * omitting it is a choice, and mistyping it is an operator error that would otherwise present as
+   * "I configured the key and the feature is still off", with nothing anywhere saying why.
+   */
+  const hiworksKms =
+    key === "prod" ? config.hiworksKms : resolveHiworksKms(config, readStringOverride(context, "hiworksEncKeyArn"));
+
+  return { ...config, hiworksKms, auth, supabase };
 }

@@ -18,6 +18,7 @@ import {
   fetchPurchaseOrder,
   fetchPurchaseOrders,
   fetchReportSummary,
+  fetchHiworksCredential,
   fetchRecentSearches,
   fetchRoleGrants,
   fetchRoles,
@@ -174,6 +175,26 @@ export function useRecentSearches(enabled = true) {
     queryFn: ({ signal }) => fetchRecentSearches(signal),
     enabled,
     staleTime: 1000 * 60 * 10,
+  })
+}
+
+/**
+ * 저장된 Hiworks 계정의 상태. 내 정보 화면과, 메일 보내기 대화상자 둘이 읽는다.
+ *
+ * 대화상자가 이것을 읽는 이유가 이 쿼리의 수명을 정한다 — 저장된 계정이 있으면 아이디·비밀번호
+ * 칸을 **감추기** 때문이다. 그래서 `staleTime` 을 길게 두지 않는다: 다른 탭에서 계정을 지운
+ * 사람이 이 탭의 대화상자에서는 여전히 "저장된 계정으로 보냅니다" 를 보고 보내기를 누르면,
+ * 서버가 400 을 주고 그 이유가 화면의 설명과 어긋난다.
+ *
+ * 응답에 비밀번호가 없고 아이디도 가려져 있으므로(`HiworksCredentialView`), 이 값이 캐시에
+ * 남아 있는 것 자체는 위험하지 않다.
+ */
+export function useHiworksCredential(enabled = true) {
+  return useQuery({
+    queryKey: neotmsKeys.hiworksCredential,
+    queryFn: ({ signal }) => fetchHiworksCredential(signal),
+    enabled,
+    staleTime: 1000 * 30,
   })
 }
 

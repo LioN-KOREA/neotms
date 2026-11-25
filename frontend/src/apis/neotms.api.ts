@@ -15,6 +15,8 @@ import type {
   FxRateListView,
   HandoverMailInput,
   HandoverMailSent,
+  HiworksCredentialSaveInput,
+  HiworksCredentialView,
   InvoiceInput,
   InvoiceRow,
   InvoiceUpdate,
@@ -281,6 +283,38 @@ export const forgetSearch = (input: RecentSearchForgetInput) =>
     method: 'DELETE',
     body: input,
   })
+
+/* -------------------------------------------------------------------------- */
+/* 내 정보 — Hiworks 계정 (db/013)                                             */
+/* -------------------------------------------------------------------------- */
+//
+// 세 호출 모두 위의 최근 검색어와 같은 성격이다 — **누구의 것인지를 보내지 않는다.** 서버가
+// 토큰에서 호출자를 정하므로, 남의 계정을 읽는 요청 모양이 아예 없다.
+//
+// 비밀번호는 **보낼 때만** 이 모듈을 지나간다. 응답에는 들어오지 않고(`hiworksIdHint` 는 가린
+// 아이디다), 어디에도 저장하지 않는다 — `localStorage` 도, 쿼리 캐시도 마찬가지다. 캐시에 남는
+// 것은 아래 `HiworksCredentialView` 뿐이다.
+
+/** 저장된 Hiworks 계정이 있는지, 있다면 어느 계정인지(가린 형태). */
+export const fetchHiworksCredential = (signal?: AbortSignal) =>
+  neotmsApi<HiworksCredentialView>('/api/v0/me/hiworks-credential', { signal })
+
+/**
+ * 계정을 저장하거나 바꾼다. PUT 이다 — 두 번 저장하는 것이 한 번 저장하는 것과 같다.
+ *
+ * 서버가 저장 전에 Hiworks 로그인을 한 번 해 본다. 그래서 이 호출은 **느릴 수 있고**(한 번의
+ * 외부 왕복) 비밀번호가 틀리면 400 으로 거절된다 — 틀린 비밀번호가 조용히 저장된 뒤 마감
+ * 직전의 인계메일에서 처음 드러나는 것보다 낫다.
+ */
+export const saveHiworksCredential = (input: HiworksCredentialSaveInput) =>
+  neotmsApi<HiworksCredentialView>('/api/v0/me/hiworks-credential', {
+    method: 'PUT',
+    body: input,
+  })
+
+/** 저장된 계정을 지운다. 지워져 있어도 성공이다 — 요청한 상태가 이미 그것이기 때문이다. */
+export const forgetHiworksCredential = () =>
+  neotmsApi<void>('/api/v0/me/hiworks-credential', { method: 'DELETE' })
 
 /* -------------------------------------------------------------------------- */
 /* 역할 관리 — what a role means, and what a person may be named as            */

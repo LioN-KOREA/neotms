@@ -708,6 +708,37 @@ ON CONFLICT (menu_id) DO NOTHING;
 
 
 -- ---------------------------------------------------------------------
+-- 3f. 내 정보
+-- ---------------------------------------------------------------------
+-- ord_no 13, continuing 12. The caller's own settings -- at present one
+-- item, their Hiworks sign-in (db/013_hiworks_credentials.sql).
+--
+-- THE ONE MENU WITH NO PERMISSION, and the only one that should ever be.
+-- Every other menu in this file gates company data, so a grant is the
+-- right shape: somebody decides who may see it. This screen shows the
+-- caller their own account settings, and a grant there could only mean
+-- taking away somebody's access to their own password -- while a role
+-- created next month would silently not have it, and the person holding
+-- that role would find no way to store a credential and no message
+-- explaining why.
+--
+-- So the routes are `anyStaff` (the tier /me/recent-searches already
+-- uses) and the console shows the entry to every approved staff member
+-- through an explicit any-staff gate rather than through a permission.
+-- Nothing here needs sys_role_grant_all_permissions afterwards, because
+-- nothing was granted.
+--
+-- The row exists anyway for two reasons: sys_menu is what somebody
+-- reading the database sees, and the bootstrap test asserts that every
+-- id in NeotmsMenu appears in this file -- a menu id with no row is the
+-- silent failure 3e and db/006_workspace.sql warn about.
+INSERT INTO sys_menu (menu_id, menu_name, menu_parent, menu_depth, menu_url, ord_no, active)
+VALUES
+  ('MY_INFO', '내 정보', NULL, 1, '/me', 13, true)
+ON CONFLICT (menu_id) DO NOTHING;
+
+
+-- ---------------------------------------------------------------------
 
 
 -- =====================================================================

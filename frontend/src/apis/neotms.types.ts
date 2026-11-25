@@ -393,8 +393,9 @@ export interface PoRequestMailInput {
   /** URL 이 아니라 토큰이다. 링크는 서버가 만든다. */
   attachments: string[]
   recipient: string
-  hiworksId: string
-  hiworksPassword: string
+  /** 선택이다. 비우면 내 정보에 저장한 계정으로 보낸다 — `HandoverMailInput` 의 같은 필드 참고. */
+  hiworksId?: string
+  hiworksPassword?: string
 }
 
 export interface PoRequestMailSent {
@@ -416,6 +417,37 @@ export interface RecentSearchView {
 export interface RecentSearchRecordInput {
   scope: string
   term: string
+}
+
+/* -------------------------------------------------------------------------- */
+/* 내 정보 — Hiworks 계정 (db/013)                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 저장된 Hiworks 계정의 **상태**. 비밀번호도, 전체 아이디도 들어 있지 않다.
+ *
+ * `hiworksIdHint` 는 서버가 저장할 때 만든 가린 아이디(`ab***@lionkorea.co.kr`)다. 전체 아이디를
+ * 돌려주려면 매번 복호화해야 하고, 그러면 설정 화면을 여는 것만으로 KMS 호출이 생긴다 — 어느
+ * 계정인지 알아보는 데는 가린 형태로 충분하다.
+ */
+export interface HiworksCredentialView {
+  /**
+   * 이 시스템에 저장 기능이 설정되어 있는지(KMS 키가 있는지).
+   *
+   * false 는 고장이 아니라 설정이 없는 상태다. 화면은 폼을 보여 주는 대신 그 사실을 적고,
+   * 메일은 전처럼 보낼 때마다 계정을 묻는다.
+   */
+  vaultConfigured: boolean
+  registered: boolean
+  /** 가린 아이디. 저장된 계정이 없으면 null. */
+  hiworksIdHint: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export interface HiworksCredentialSaveInput {
+  hiworksId: string
+  hiworksPassword: string
 }
 
 /** `term` 이 없으면 그 화면의 검색어 **전체**를 지운다. */
@@ -828,12 +860,17 @@ export interface HandoverMailInput {
   /**
    * The caller's OWN Hiworks account. The mail goes out FROM THIS ACCOUNT.
    *
-   * The server signs in once with these and discards them - never stored, never logged. The
-   * screen keeps the same rule: both values live in component state only and never reach
-   * `localStorage`.
+   * OPTIONAL since db/013. Omitted or empty means "use the account I saved on 내 정보"; filled in
+   * means "use this one, for this send only". Both halves must be given together - the server
+   * refuses a half-filled pair rather than quietly falling back, because the success notice names
+   * the recipient and not the sender, so sending from an unintended account would be invisible.
+   *
+   * What has NOT changed: the server signs in and discards them, these values never reach
+   * `localStorage`, and nothing echoes them back. A SAVED credential is a different thing in a
+   * different place - sealed under a KMS data key, and never returned by any endpoint.
    */
-  hiworksId: string
-  hiworksPassword: string
+  hiworksId?: string
+  hiworksPassword?: string
 }
 
 /** What the server reports back after sending. The body does not come back. */

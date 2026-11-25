@@ -150,6 +150,28 @@ export class NeotmsApi extends Construct {
          * must not be read as a half-finished deploy.
          */
         NEOTMS_BOOTSTRAP_AUTHORITY_ID: config.auth.bootstrapAuthorityId,
+        /*
+         * The key ID, which is not a secret - unlike every other credential-adjacent variable
+         * here, this one genuinely belongs in the environment. What it names is a CMK only this
+         * function may use, and naming it is not permission to use it.
+         *
+         * The key ARN, not the alias, because the thing people reach for an alias to survive does
+         * not happen here. AUTOMATIC ROTATION KEEPS THE SAME ARN - it gives the key new backing
+         * material and retains the old for decrypting what was already encrypted - so the ARN is
+         * stable across every rotation this stack performs. Only REPLACING the key with a
+         * different one changes it, and since the key is defined in this stack, that comes with a
+         * deploy regardless.
+         *
+         * Reads do not depend on this value at all: `openSecret` passes the key recorded on the
+         * row (`staff_hiworks_credential.kms_key_id`), so a table whose rows were wrapped under
+         * different keys stays readable while only new writes use this one.
+         *
+         * BLANK when there is no key, which is the default for a stage that shares its database
+         * with other deployments. Blank is a supported mode rather than a missing setting - the
+         * screen says storing is not configured and the mail dialogs ask for credentials, exactly
+         * as they did before db/013. See `NeotmsHiworksKms`.
+         */
+        NEOTMS_HIWORKS_KMS_KEY_ID: storage.hiworksKey?.keyArn ?? "",
         NEOTMS_MG_SECRET_NAME: config.mail.mailgunSecretName,
         NEOTMS_MAIL_FROM_ADDRESS: config.mail.mailFromAddress,
         NEOTMS_MAIL_FROM_NAME: config.mail.mailFromName,
@@ -243,6 +265,27 @@ export class NeotmsApi extends Construct {
     // both writes it and presigns a read of it. No KMS grant: with the Data API's 1 MiB cap gone,
     // nothing inside PostgreSQL writes here, so the bucket no longer needs SSE-KMS.
     storage.exportBucket.grantReadWrite(this.fn);
+
+    /*
+     * Two KMS actions, named rather than taken from `grantEncryptDecrypt`.
+     *
+     * `grantEncryptDecrypt` would also hand over `kms:Encrypt` and `kms:ReEncrypt*`, and neither is
+     * used: this application never encrypts directly under the CMK (it wraps a data key, which is
+     * `GenerateDataKey`) and never re-encrypts. Granting them would widen what a compromised
+     * function could do with other people's credentials, and - more usefully day to day - it would
+     * blur the CloudTrail record. With exactly these two actions, every entry is either "a stored
+     * credential was written" or "a stored credential was read", and there is no third thing it
+     * could have been.
+     *
+     * No key means no grant, and that is the whole of what "feature off" costs: the function has no
+     * KMS permissions at all, so there is nothing to misuse and nothing to audit.
+     *
+     * On an IMPORTED key (the shared non-production one) this writes only the function's identity
+     * policy. That is correct rather than a limitation: the other half is the key policy in the
+     * owning account, which delegates these two actions to this account, and a stack here has no
+     * business editing a resource it does not own.
+     */
+    storage.hiworksKey?.grant(this.fn, "kms:Decrypt", "kms:GenerateDataKey");
 
     /*
      * CORS is NOT configured on the HTTP API.

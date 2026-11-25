@@ -139,6 +139,27 @@ export const NeotmsMenu = {
    * is a silent failure rather than an error.
    */
   WORKSPACE: "WORKSPACE",
+  /**
+   * 내 정보 - the caller's own settings. One item so far: their Hiworks sign-in.
+   *
+   * ## The only menu with no permission behind it
+   *
+   * Every other id in this object has a matching `NEOTMS_PERMISSION_*_READ`, because every other
+   * menu shows company data and somebody has to decide who may see it. This one shows the caller
+   * their OWN settings, where a grant inverts into something nobody wants: a way to take away a
+   * person's access to their own stored password, and a newly created role that silently cannot
+   * reach the screen at all.
+   *
+   * So its routes are `anyStaff` - the tier `/me/recent-searches` and `/me/notices` already use -
+   * and the console shows the entry through an explicit any-staff gate instead of `may()`. See
+   * NEOTMS_NAV in frontend/src/shared/permissions.ts, and the 3f block in
+   * db/002_initial_seeding.sql for the same argument from the schema's side.
+   *
+   * It is seeded by db/002_initial_seeding.sql and, for a database that already has data, by
+   * db/013_hiworks_credentials.sql. Unlike every previous menu file, neither re-grants anything -
+   * there is no permission to re-grant.
+   */
+  MY_INFO: "MY_INFO",
 } as const;
 
 export type NeotmsMenuId = (typeof NeotmsMenu)[keyof typeof NeotmsMenu];

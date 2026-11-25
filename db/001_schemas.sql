@@ -1035,13 +1035,85 @@ CREATE TABLE staff_recent_search (
 );
 
 COMMENT ON TABLE  staff_recent_search IS
-  'The last few search terms each person used on each list screen, offered back to them as suggestions. Convenience data, and the only table in this schema that is private to one person: every row is read and written through /api/v0/me/recent-searches, scoped to the caller''s own staff id, and nothing else joins it. Five rows per person per scope are kept -- the write prunes the rest, so this table does not grow with use. Safe to truncate: the consequence is an empty suggestion list.';
+  'The last few search terms each person used on each list screen, offered back to them as suggestions. Convenience data, and one of the three tables in this schema that are private to one person rather than scoped company data -- the others being workspace_column and staff_hiworks_credential: every row is read and written through /api/v0/me/recent-searches, scoped to the caller''s own staff id, and nothing else joins it. Five rows per person per scope are kept -- the write prunes the rest, so this table does not grow with use. Safe to truncate: the consequence is an empty suggestion list.';
 COMMENT ON COLUMN staff_recent_search.scope IS
   'Which list the term was typed on, named by that screen''s route path (''projects'', ''payment/invoices''). The permitted values are the CHECK above.';
 COMMENT ON COLUMN staff_recent_search.term IS
   'The search term as typed, trimmed. UNIQUE per person and scope, so re-running the same search moves it to the top (used_at is bumped) rather than filling the list with one term.';
 COMMENT ON COLUMN staff_recent_search.used_at IS
   'When it was last searched. The suggestion order, and what the five-row prune keeps.';
+
+-- ---------------------------------------------------------------------
+-- staff_hiworks_credential  (NEOTMS only -- no legacy table)
+-- ---------------------------------------------------------------------
+-- One person's own Hiworks sign-in, so that sending a 인계메일 or a
+-- PO 발주 요청 does not ask for it every time. OPTIONAL per person: no
+-- row means the send dialog asks, which is how the feature worked before
+-- this table existed, and nobody is required to opt in.
+--
+-- `staff_id` IS the primary key. One person has one Hiworks account, and
+-- that is a key constraint rather than a convention -- with a surrogate
+-- id and staff_id merely indexed, a bug can leave two rows behind, after
+-- which every read is "the most recent one, probably" and a mail can go
+-- out from an account the person thought they had replaced.
+--
+-- ON DELETE CASCADE, following staff_recent_search rather than the
+-- RESTRICT used for company data: a departed employee's own credential
+-- is not company history, and it is the row in this database that should
+-- outlive them least.
+--
+-- No audit columns. There is exactly one possible writer -- the owner,
+-- who is the primary key -- so there is no second actor to distinguish,
+-- and recording the IP a password was typed from would add a fact about
+-- somebody's location to the row that holds their password.
+--
+-- The encryption is explained at length in
+-- db/013_hiworks_credentials.sql, which is also the file that adds this
+-- table to a database that already has data. In short: KMS mints a
+-- single-use 256-bit data key, the application AES-256-GCM encrypts
+-- {id, password} with it, and only the KMS-wrapped form of the key is
+-- stored. The data key is bound to its owner through the KMS encryption
+-- context, so a row moved to another staff_id cannot be opened.
+CREATE TABLE IF NOT EXISTS staff_hiworks_credential (
+  staff_id          bigint PRIMARY KEY REFERENCES staff (id) ON DELETE CASCADE,
+  hiworks_id_hint   text NOT NULL,
+  secret_ciphertext bytea NOT NULL,
+  secret_iv         bytea NOT NULL,
+  secret_tag        bytea NOT NULL,
+  wrapped_data_key  bytea NOT NULL,
+  kms_key_id        text NOT NULL,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  -- The two fixed widths AES-256-GCM uses. A row that does not match
+  -- them was written by something other than this scheme, and it is
+  -- better refused at the INSERT than discovered at the Decrypt.
+  CONSTRAINT ck_hiworks_iv_len CHECK (octet_length(secret_iv) = 12),
+  CONSTRAINT ck_hiworks_tag_len CHECK (octet_length(secret_tag) = 16),
+  -- A row's EXISTENCE is what "this person registered a Hiworks
+  -- account" means, so an empty ciphertext would be a third state --
+  -- registered but unusable -- that no screen could explain.
+  CONSTRAINT ck_hiworks_not_empty CHECK (
+    octet_length(secret_ciphertext) > 0
+    AND octet_length(wrapped_data_key) > 0
+    AND length(btrim(hiworks_id_hint)) > 0
+    AND length(btrim(kms_key_id)) > 0
+  )
+);
+
+COMMENT ON TABLE  staff_hiworks_credential IS
+  'One person''s own Hiworks sign-in, so that sending a 인계메일 or a PO 발주 요청 does not ask for it every time. OPTIONAL per person -- no row means the send dialog asks, which is how the feature worked before this table existed. NEOTMS only; no legacy counterpart. Private to its staff_id: the only routes that touch it are under /api/v0/me/, scoped to the caller, and no administrative screen reads it. Envelope-encrypted -- see db/013_hiworks_credentials.sql.';
+COMMENT ON COLUMN staff_hiworks_credential.hiworks_id_hint IS
+  'A MASKED form of the Hiworks id, e.g. ''ab***@lionkorea.co.kr'', written by the application at save time so the 내 정보 screen can say which account is stored without a KMS call. The only part of the credential outside the ciphertext, deliberately partial, and never to be widened into the whole address.';
+COMMENT ON COLUMN staff_hiworks_credential.secret_ciphertext IS
+  'AES-256-GCM over the JSON {"id","password"}, under the data key in wrapped_data_key. Both halves of the credential are in here; nothing else is.';
+COMMENT ON COLUMN staff_hiworks_credential.secret_iv IS
+  'The 12-byte GCM nonce. Fresh on every write -- a reused nonce under the same key breaks GCM outright, which is why a save mints a new data key rather than re-using the stored one.';
+COMMENT ON COLUMN staff_hiworks_credential.secret_tag IS
+  'The 16-byte GCM authentication tag. Its verification is what makes a tampered ciphertext fail instead of decrypting to rubbish that is then typed into a Hiworks login form.';
+COMMENT ON COLUMN staff_hiworks_credential.wrapped_data_key IS
+  'The data key as KMS returns it (CiphertextBlob) -- the plaintext key exists only inside one request and is never written anywhere. Unwrapping it requires the same KMS encryption context the wrap used (app, purpose, staff id), so this blob is useless on another person''s row.';
+COMMENT ON COLUMN staff_hiworks_credential.kms_key_id IS
+  'Which CMK wrapped wrapped_data_key, as KMS reported it at the time. Recorded so a key rotation or replacement can find the rows it has not re-wrapped yet; the application does not choose a key from this column, it reads NEOTMS_HIWORKS_KMS_KEY_ID.';
 
 -- cat_tool  (legacy SY_CATTOOL -- de-repeating-grouped)
 

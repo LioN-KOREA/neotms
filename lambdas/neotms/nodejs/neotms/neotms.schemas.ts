@@ -659,8 +659,13 @@ export const REPORT_TOP_N_MAX = 30;
  * authority on them. Hiworks is, and it answers in one round trip. A regex here could only ever
  * refuse a password that would have worked.
  *
- * They are never stored, logged, or echoed. `parseBody` reports field NAMES on a validation failure
- * and deliberately not values, which is what keeps a mistyped password out of CloudWatch.
+ * They are never logged or echoed. `parseBody` reports field NAMES on a validation failure and
+ * deliberately not values, which is what keeps a mistyped password out of CloudWatch.
+ *
+ * They are no longer never STORED, and that is the one line of this comment that db/013 changed. A
+ * person may opt in on 내 정보, in which case the pair is sealed under a KMS data key and these two
+ * fields are left empty on the send (neotms/hiworks/). Nobody is required to: with no stored
+ * credential the dialog asks, exactly as it did before.
  */
 export const HandoverMailSchema = v.object({
   /** Editing format. At least one of WORD / HWP / PPT / EXCEL. */
@@ -685,9 +690,22 @@ export const HandoverMailSchema = v.object({
    * document through this endpoint.
    */
   note: v.optional(v.pipe(v.string(), v.maxLength(2000)), ""),
-  hiworksId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
+  /**
+   * The caller's own Hiworks sign-in - OPTIONAL since db/013_hiworks_credentials.sql.
+   *
+   * Empty, which is also what absent becomes, means "use the account I stored on 내 정보".
+   * Non-empty means "use this one for this send only, and leave what is stored alone" - a shared
+   * team account, or somebody covering for a colleague, without having to replace a saved
+   * credential to do it once.
+   *
+   * `minLength(1)` is gone from both, and the floor moved rather than disappeared: "both empty" is
+   * now the normal case, so the schema cannot be the thing that rejects a half-filled pair.
+   * `resolveHiworksCredentials` does that, and it is the ONLY place the precedence is decided -
+   * the rule must not be able to differ between the two mail screens.
+   */
+  hiworksId: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(300)), ""),
   /** NOT trimmed. A leading or trailing space may be part of a password, and only Hiworks knows. */
-  hiworksPassword: v.pipe(v.string(), v.minLength(1), v.maxLength(300)),
+  hiworksPassword: v.optional(v.pipe(v.string(), v.maxLength(300)), ""),
 });
 
 /**
@@ -932,6 +950,44 @@ export const PoRequestMailSchema = v.object({
    * translator may ask for a different one - the same reasoning as the handover mail's recipient.
    */
   recipient: v.pipe(v.string(), v.trim(), v.email("must be an email address"), v.maxLength(300)),
+  /**
+   * The caller's own Hiworks sign-in - OPTIONAL since db/013_hiworks_credentials.sql.
+   *
+   * Empty, which is also what absent becomes, means "use the account I stored on 내 정보".
+   * Non-empty means "use this one for this send only, and leave what is stored alone" - a shared
+   * team account, or somebody covering for a colleague, without having to replace a saved
+   * credential to do it once.
+   *
+   * `minLength(1)` is gone from both, and the floor moved rather than disappeared: "both empty" is
+   * now the normal case, so the schema cannot be the thing that rejects a half-filled pair.
+   * `resolveHiworksCredentials` does that, and it is the ONLY place the precedence is decided -
+   * the rule must not be able to differ between the two mail screens.
+   */
+  hiworksId: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(300)), ""),
+  /** NOT trimmed. A leading or trailing space may be part of a password, and only Hiworks knows. */
+  hiworksPassword: v.optional(v.pipe(v.string(), v.maxLength(300)), ""),
+});
+
+/* -------------------------------------------------------------------------- */
+/* The caller's own Hiworks sign-in (db/013)                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Storing a Hiworks account on 내 정보.
+ *
+ * Both fields are REQUIRED here, which is the opposite of the two mail schemas above and is the
+ * right way round in each case. On a send, empty means "use what I stored"; on this endpoint there
+ * is nothing to fall back to - an empty id would store a credential that cannot sign in, and the
+ * manager verifies the pair against Hiworks before writing it precisely so that cannot happen.
+ *
+ * Length-checked and nothing more, for the reason the send schemas give: Hiworks is the authority
+ * on what a valid sign-in looks like, and a pattern here could only refuse a password that works.
+ *
+ * There is no `hiworksIdHint` field. The mask is computed on the server (`maskHiworksId`), because
+ * a client-supplied hint is a client-supplied claim about what is inside the ciphertext - and the
+ * one thing the hint must never become is the whole id.
+ */
+export const HiworksCredentialSaveSchema = v.object({
   hiworksId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)),
   /** NOT trimmed. A leading or trailing space may be part of a password, and only Hiworks knows. */
   hiworksPassword: v.pipe(v.string(), v.minLength(1), v.maxLength(300)),
@@ -1287,3 +1343,4 @@ export type WorkspaceColumnOrder = v.InferOutput<typeof WorkspaceColumnOrderSche
 export type WorkspaceCellWrite = v.InferOutput<typeof WorkspaceCellSchema>;
 export type WorkspaceLayoutInput = v.InferOutput<typeof WorkspaceLayoutSchema>;
 export type WorkspaceStyleInput = v.InferOutput<typeof WorkspaceStyleApplySchema>;
+export type HiworksCredentialSave = v.InferOutput<typeof HiworksCredentialSaveSchema>;

@@ -333,7 +333,7 @@ because Supavisor routes on the tenant encoded in the username.
 | File | Contents |
 |---|---|
 | `001_schemas.sql` | **the whole structure.** Extensions, the five code sequences plus the invoice-code one, all 32 tables with their table and column comments, the constraints that cannot be written inline, the three functions the application calls by name, `fx_rate_latest`, and all 82 indexes |
-| `002_initial_seeding.sql` | **the rows the application will not run without.** The `sys_code` domains (분야, 세부 분야, 작업 종류, 단가 단위, 언어, 사용 프로그램, 업무 구분, 업무 분류), the eight currencies, the eleven `sys_menu` rows, and the 시스템관리자 role granted over all of them |
+| `002_initial_seeding.sql` | **the rows the application will not run without.** The `sys_code` domains (분야, 세부 분야, 작업 종류, 단가 단위, 언어, 사용 프로그램, 업무 구분, 업무 분류), the eight currencies, the thirteen `sys_menu` rows, and the 시스템관리자 role granted over all of them |
 | `003_access_control.sql` | **only for a database that already has data.** Moves it from the legacy menu × action matrix (`sys_role_auth`) to named permissions (`sys_role_permission`), and derives who may be named as a 담당영업 or 담당PM (`staff_attribute`). A database built from `001` has the new shape already and must **not** be given this file. See §6.3 |
 | *(no SQL for the PO request mail)* | the PO request mail stores nothing in Postgres — its attachment tokens live in DynamoDB, created by CDK. See §6.4 |
 | `004_recent_searches.sql` | **only for a database that already has data.** Adds `staff_recent_search`, the five most recent search terms per person per list screen. Additive and re-runnable; apply it **before** the deploy, because the screens read it as soon as they load. A database built from `001` has the table already |
@@ -341,7 +341,8 @@ because Supavisor routes on the tenant encoded in the username.
 | `006_workspace.sql` | **only for a database that already has data.** Adds `workspace_column` and `workspace_cell` — the custom columns of 나의 업무 and the values in them — plus `NEOTMS_PERMISSION_WORKSPACE_READ` to the permission CHECK, the sidebar row, and a re-grant of the superuser. Additive and re-runnable; apply it **before** the deploy. A database built from `001` + `002` has all of it already. See §6.7 |
 | `007_workspace_styles.sql` | **only for a database that already has data.** Gives every column of 나의 업무 a row — including the fourteen the application ships — so position, width and colour can be stored per person, and adds `workspace_row_style`. Additive and re-runnable; apply it **before** the deploy, because the sheet selects the new columns on every read. See §6.7 |
 | `008_workspace_text.sql` | **only for a database that already has data.** Italic, underline, strikethrough and alignment on the three 나의 업무 style tables. Additive and re-runnable; apply it **before** the deploy, for the same reason as `007`. See §6.7 |
-| `009_attributes_and_scope.sql` | **only for a database that already has data.** Adds 경영지원부 / IMC 매니저 / MICE 매니저 to the attribute CHECK, and restates two comments now that row-level scope is not enforced. Touches no data. Additive and re-runnable |
+| `010_attributes_and_scope.sql` | **only for a database that already has data.** Adds 경영지원부 / IMC 매니저 / MICE 매니저 to the attribute CHECK, and restates two comments now that row-level scope is not enforced. Touches no data. Additive and re-runnable |
+| `013_hiworks_credentials.sql` | **only for a database that already has data.** Adds `staff_hiworks_credential` — one person's own Hiworks sign-in, envelope-encrypted under a KMS CMK — and the 내 정보 sidebar row. **Adds no permission and ends with no re-grant**, unlike every other menu file: the screen shows the caller their own settings, so its routes are `anyStaff`. Additive and re-runnable; apply it **before** the deploy. A database built from `001` + `002` has all of it already. Needs a CMK for storing to be offered at all — production creates its own, and non-production must be given the shared one with `-c hiworksEncKeyArn=<arn>`. With no key the feature is simply absent and the mail dialogs keep asking for credentials, exactly as they did before. See §6.8 |
 | `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
 
 These two replace the sixteen numbered migrations that used to build the schema a step
@@ -553,7 +554,8 @@ of the symptom points away from the cause.
 | `006_workspace.sql` | **on an existing database only** — the two 나의 업무 tables and its permission | 나의 업무 is missing from the sidebar for everybody (nobody can hold a permission the CHECK refuses) and `GET /api/v0/workspace` answers 500 with `42P01`. Nothing else changes — no other screen reads either table — so unlike `005` the blast radius is exactly the feature |
 | `007_workspace_styles.sql` | **on an existing database only** — layout and style columns | 나의 업무 answers 500 with `42703` on every read, so the screen is an error page. Same blast radius as `006`: nothing else reads these tables |
 | `008_workspace_text.sql` | **on an existing database only** — the four text-style columns | the same `42703`, same blast radius |
-| `009_attributes_and_scope.sql` | **on an existing database only** — the three new attributes in the CHECK | granting 경영지원부, IMC 매니저 or MICE 매니저 on 사용자 관리 fails with `23514` and the screen reports a constraint name. Everything else works: an attribute nobody holds affects nothing |
+| `010_attributes_and_scope.sql` | **on an existing database only** — the three new attributes in the CHECK | granting 경영지원부, IMC 매니저 or MICE 매니저 on 사용자 관리 fails with `23514` and the screen reports a constraint name. Everything else works: an attribute nobody holds affects nothing |
+| `013_hiworks_credentials.sql` | **on an existing database only** — `staff_hiworks_credential` and the 내 정보 menu row | 내 정보 answers 500 with `42P01` the moment it is opened, so the screen is an error page. **Nothing else breaks, and that is the point of the design**: both mail endpoints fall back to credentials typed in the dialog, which is how they worked before this file existed. The same is true with the table present but `NEOTMS_HIWORKS_KMS_KEY_ID` unset — the screen then says storing is not configured instead of offering a form |
 
 Both install files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
 applying `002` to a database that already has some of these rows adds only what is missing.
@@ -1033,7 +1035,7 @@ offline against a throwaway database:
 docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
-for f in 001_schemas 002_initial_seeding 005_project_acceptance 006_workspace 007_workspace_styles 008_workspace_text 009_attributes_and_scope; do
+for f in 001_schemas 002_initial_seeding 005_project_acceptance 006_workspace 007_workspace_styles 008_workspace_text 009_pm_sheet 010_attributes_and_scope 011_job_target_pricing 012_pm_sheet_seen 013_hiworks_credentials; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
@@ -1601,6 +1603,81 @@ option is picked, carrying both the new `selectedValue` and `isOpen` going true 
 either/or, the open/close branch swallows every selection — the list closes, the cell keeps its old
 value, nothing errors, and the screen reads as "the dropdown does not work". A test now pins the
 shape of that handler.
+
+### 6.8 The Hiworks credential vault — one key in production, one shared key everywhere else
+
+A person may store their own Hiworks sign-in so that sending a 인계메일 or a PO 발주 요청 stops
+asking for it every time. It is **optional per person**: with no stored credential the dialog asks,
+which is exactly how the feature worked before `013`. Both halves are sealed under a single-use
+256-bit data key from KMS, and only the KMS-wrapped form of that key is stored (`db/013` documents
+the scheme at length).
+
+**The key is not the same kind of thing in the two stages, and that is the whole of the
+configuration.**
+
+Production owns its key: the stack creates it, and `resolveStageConfig` does not even read the
+override context for that stage, so no command line can point production's stored credentials at a
+key in another account.
+
+Non-production is different because **several test deployments, in several AWS accounts, share one
+database**. A per-deployment key there is not merely wasteful, it is incorrect:
+
+> Deployment A wraps a data key under CMK-A and writes the row. Deployment B reads the same row,
+> calls `Decrypt` with that ARN, and gets `AccessDenied` — the key is in another account. B's user
+> re-saves, the row is re-wrapped under CMK-B, and now **A** is broken. Every save silently breaks
+> somebody else's stored credential, and the only symptom is being asked to type a password again.
+
+So the default for a shared-database stage is **off** — no key, no stored rows, dialogs ask — and
+sharing is opt-in by naming the one key every deployment is to use:
+
+```bash
+cdk deploy -c hiworksEncKeyArn=arn:aws:kms:ap-northeast-2:<owner-account>:key/<id>
+```
+
+A malformed or cross-region ARN **fails the synth** rather than quietly disabling the feature;
+omitting the flag is a choice and is silent. The two are different mistakes.
+
+**The shared key is created outside this app.** No non-production stack creates one, by design: the
+key must outlive every stack, and a `RETAIN`ed key orphaned by a `cdk destroy` is worse than one
+that was never stack-owned. Create it once in the authoritative account:
+
+```bash
+aws kms create-key --description "NEOTMS non-prod: Hiworks credential vault" --key-usage ENCRYPT_DECRYPT
+```
+
+Then enable rotation, give it an alias, and add a statement delegating the two actions to each
+consuming account:
+
+```json
+{
+  "Sid": "DelegateToNonProdDeployments",
+  "Effect": "Allow",
+  "Principal": { "AWS": ["arn:aws:iam::<acct-B>:root", "arn:aws:iam::<acct-C>:root"] },
+  "Action": ["kms:Decrypt", "kms:GenerateDataKey"],
+  "Resource": "*",
+  "Condition": {
+    "StringEquals": {
+      "kms:EncryptionContext:app": "neotms",
+      "kms:EncryptionContext:purpose": "hiworks"
+    }
+  }
+}
+```
+
+Account root as the principal, not the Lambda role: the role name is CDK-generated, and root
+delegates to each consuming account's own IAM, where `grant()` already narrows it to the one
+function. The encryption-context condition costs nothing — the application always sends those two
+pairs — and means a delegated account can only use the key for this one purpose. Do **not** condition
+on `staffId`; it varies per row, and KMS enforces a match at `Decrypt` anyway.
+
+**Diagnosing it.** Every failure logs one line tagged `[hiworks]` naming the cause, and the KMS layer
+logs the operation, the key and the AWS error underneath it — so "was it the key or was it Hiworks?"
+is a grep rather than a deduction. An unusable key and a damaged row are reported differently on
+purpose. There is deliberately **no** deploy-time check that the key is reachable: a synth-time probe
+would need credentials and network (breaking `cdk synth` and the test suite), `DescribeKey`
+succeeding would not prove `Decrypt` will, and the deploying principal is not the Lambda role. The
+only principal and action that answer the question are the real ones, at runtime, where the failure
+is already handled — the credential is treated as unusable and the dialog asks.
 
 ### 6.3 `003_access_control.sql` — moving a live database to named permissions
 

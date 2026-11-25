@@ -11,6 +11,11 @@
 //     where the presigned download points. Short-lived by design.
 //   * Sessions - DynamoDB, not the database. See the table below for why.
 //
+// Plus one key, which is not a store but belongs with them: the CMK that wraps each person's own
+// Hiworks sign-in (`hiworksKey`, db/013). It is the only thing in this construct that protects a
+// secret belonging to a PERSON rather than to the application, which is why it is customer-managed
+// and why it is RETAINed even in dev - see its comment in the constructor.
+//
 // Gone from the Aurora variant: the SSE-KMS `exportKey`. It existed only because
 // `aws_s3.query_export_to_s3` refuses to write to a bucket that is not SSE-KMS, and that function
 // existed only because the RDS Data API capped a result set at 1 MiB. Over a plain socket the
@@ -19,6 +24,7 @@
 
 import * as cdk from "aws-cdk-lib/core";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as kms from "aws-cdk-lib/aws-kms";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { NeotmsStageConfig } from "../config/NeotmsConfig.js";
@@ -51,6 +57,15 @@ export class NeotmsStorage extends Construct {
   public readonly sessionTable: dynamodb.TableV2;
   public readonly attachmentTable: dynamodb.TableV2;
   public readonly logArchiveBucket: s3.Bucket;
+  /**
+   * The CMK behind each person's stored Hiworks sign-in, or `undefined` when the feature is off.
+   *
+   * `IKey` rather than `Key`, because this is created here in production and IMPORTED from another
+   * account in the shared non-production arrangement. `undefined` is the third case and the default
+   * for a stage that shares a database - see `NeotmsHiworksKms` for why that is the safe default
+   * rather than a missing setting.
+   */
+  public readonly hiworksKey?: kms.IKey;
 
   constructor(scope: Construct, id: string, props: NeotmsStorageProps) {
     super(scope, id);
@@ -263,6 +278,78 @@ export class NeotmsStorage extends Construct {
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: retain },
       removalPolicy: retain ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     });
+
+    /*
+     * The CMK that wraps each person's stored Hiworks sign-in (db/013).
+     *
+     * ## Not the key this file used to have
+     *
+     * The header above describes deleting `exportKey`, and that deletion still stands. That key was
+     * there to satisfy a precondition of `aws_s3.query_export_to_s3` - a bucket setting, protecting
+     * nothing anybody cared about, which is why it went. This one holds the only secret in the
+     * system that belongs to a PERSON rather than to the application: a colleague's own Hiworks
+     * password, which also opens their mail.
+     *
+     * ## Customer-managed, not the AWS-managed key
+     *
+     * `aws/kms` would encrypt just as well and cost nothing. Three things it cannot do:
+     *
+     *   * A key policy of its own. This key is usable by this function and nobody else - not by an
+     *     administrator in the console, not by another Lambda in the account. With the AWS-managed
+     *     key, "may call Decrypt" collapses into "has IAM permissions in this account".
+     *   * Rotation on a schedule we choose, below.
+     *   * A grant narrow enough to be worth auditing. The function gets Decrypt and
+     *     GenerateDataKey, and that pair in CloudTrail is a complete record of every time a stored
+     *     credential was read or written.
+     *
+     * ## Rotation is safe here BECAUSE the scheme is envelope encryption
+     *
+     * Automatic rotation gives the key new backing material and keeps the old material for
+     * decrypting what was encrypted under it. So rotation never strands a stored credential: old
+     * rows keep opening, new rows are wrapped under the new material, and
+     * `staff_hiworks_credential.kms_key_id` records which is which. Nothing needs a migration, and
+     * nothing needs to be re-encrypted on a schedule.
+     *
+     * ## RETAIN in every stage, including dev, which is NOT the house rule
+     *
+     * Every other store here follows `config.protectData`. This one does not, and the asymmetry is
+     * deliberate: destroying a bucket loses files that exist elsewhere, while scheduling this key
+     * for deletion makes every stored credential permanently unreadable - there is no backup of a
+     * KMS key, by design. The cost of being wrong in the other direction is a $1/month key left in
+     * a torn-down dev account, and `pendingWindow` means even an intentional deletion has to be
+     * waited out rather than confirmed in a dialog.
+     *
+     * ## Three modes, and only production creates one
+     *
+     * `config.hiworksKms` decides (see `NeotmsHiworksKms`). Production owns its key. The
+     * non-production deployments share ONE database across several accounts, so they import ONE key
+     * owned by an authoritative account - a per-deployment key there would mean every save breaks
+     * somebody else's stored credential, silently. And a non-production deployment that has not
+     * been given the shared key creates nothing and stores nothing.
+     *
+     * The imported key is NOT created, renamed or deleted by this stack; `grant()` on it writes
+     * only the consuming function's identity policy, which is exactly right across an account
+     * boundary - the key policy in the owning account is the other half, and it is not CDK's to
+     * edit from here.
+     */
+    if (config.hiworksKms.mode === "own") {
+      this.hiworksKey = new kms.Key(this, "HiworksCredentialKey", {
+        alias: `${config.resourcePrefix}-hiworks`,
+        description:
+          "NEOTMS: wraps the data keys that encrypt each staff member's own Hiworks sign-in " +
+          "(staff_hiworks_credential). Used only by the NEOTMS API function.",
+        enableKeyRotation: true,
+        rotationPeriod: cdk.Duration.days(365),
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+        pendingWindow: cdk.Duration.days(30),
+      });
+    } else if (config.hiworksKms.mode === "shared") {
+      this.hiworksKey = kms.Key.fromKeyArn(
+        this,
+        "HiworksCredentialKey",
+        config.hiworksKms.keyArn,
+      );
+    }
   }
 
   /**

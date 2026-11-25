@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { useSendPoRequestMail, useUploadAttachment } from '@/apis/queries/neotms.mutation'
+import { useHiworksCredential } from '@/apis/queries/neotms.query'
 import {
   PO_FORMAT_LABELS,
   PO_ORIGINAL_FORMATS,
@@ -77,6 +78,23 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
   const [attached, setAttached] = useState<Attached[]>([])
   const [hiworksId, setHiworksId] = useState('')
   const [hiworksPassword, setHiworksPassword] = useState('')
+
+  /*
+   * 저장된 하이웍스 계정이 있으면 두 칸을 감춘다 — 인계메일 대화상자와 같은 규칙이고, 같은
+   * 이유다(HandoverMailModal 의 주석). 아직 읽는 중이면 전처럼 묻는다.
+   */
+  const credential = useHiworksCredential()
+  /*
+   * `registered && vaultConfigured`, not `registered` alone.
+   *
+   * 비생산 배포들이 한 데이터베이스를 공유하므로, 내 배포가 열 수 없는 행이 보일 수 있다 —
+   * 자세한 이유는 HandoverMailModal 의 같은 자리에 적어 두었다. 요약하면, `registered` 만 보고
+   * 칸을 감추면 지킬 수 없는 약속을 하게 된다.
+   */
+  const hasStoredCredential =
+    (credential.data?.registered ?? false) && (credential.data?.vaultConfigured ?? false)
+  const [manual, setManual] = useState(false)
+  const useStored = hasStoredCredential && !manual
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   /*
@@ -136,8 +154,8 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
     !pending &&
     originalFormats.length > 0 &&
     recipient.trim().length > 0 &&
-    hiworksId.trim().length > 0 &&
-    hiworksPassword.length > 0
+    // 저장된 계정으로 보낼 때는 두 칸이 비어 있는 것이 정상이다.
+    (useStored || (hiworksId.trim().length > 0 && hiworksPassword.length > 0))
 
   const onSubmit = async () => {
     if (!canSend) return
@@ -149,8 +167,9 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
         note: note.trim(),
         attachments: attached.map((a) => a.token),
         recipient: recipient.trim(),
-        hiworksId: hiworksId.trim(),
-        hiworksPassword,
+        // 쓰지 않는 값은 본문에 넣지 않는다 — HandoverMailModal 의 같은 자리 참고.
+        hiworksId: useStored ? undefined : hiworksId.trim(),
+        hiworksPassword: useStored ? undefined : hiworksPassword,
       },
     })
     onSent(
@@ -186,8 +205,9 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
       {uploadError ? <ErrorNotice error={new Error(uploadError)} /> : null}
 
       <InfoNotice>
-        언어·분량·납품일정은 이 PO 에 저장된 값으로 서버가 채웁니다. 메일은 아래에 입력하신
-        Hiworks 계정에서 발송되며, 보낸편지함에도 저장됩니다.
+        언어·분량·납품일정은 이 PO 에 저장된 값으로 서버가 채웁니다. 메일은
+        <strong>본인의 Hiworks 계정</strong>에서 발송되며, 보낸편지함에도 저장됩니다.
+        {useStored ? ' 내 정보에 저장한 계정으로 보냅니다.' : ''}
       </InfoNotice>
 
       <div className={ui.formGrid}>
@@ -343,34 +363,72 @@ export function PoRequestMailModal({ po, onClose, onSent }: Props) {
           </span>
         </div>
 
-        <div className={ui.field}>
-          <label className={`${ui.label} ${ui.required}`} htmlFor="po-mail-id">
-            하이웍스 ID
-          </label>
-          <input
-            id="po-mail-id"
-            className={ui.input}
-            value={hiworksId}
-            onChange={(e) => setHiworksId(e.target.value)}
-            autoComplete="username"
-            disabled={pending}
-          />
-        </div>
+        {useStored ? (
+          <div className={ui.fieldWide}>
+            <span className={ui.label}>보내는 계정</span>
+            <div className={ui.filterNote}>
+              저장된 계정: <strong>{credential.data?.hiworksIdHint ?? '-'}</strong>
+              <button
+                type="button"
+                className={ui.btnLink}
+                onClick={() => setManual(true)}
+                disabled={pending}
+              >
+                직접 입력
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className={ui.field}>
+              <label className={`${ui.label} ${ui.required}`} htmlFor="po-mail-id">
+                하이웍스 ID
+              </label>
+              <input
+                id="po-mail-id"
+                className={ui.input}
+                value={hiworksId}
+                onChange={(e) => setHiworksId(e.target.value)}
+                autoComplete="username"
+                disabled={pending}
+              />
+            </div>
 
-        <div className={ui.field}>
-          <label className={`${ui.label} ${ui.required}`} htmlFor="po-mail-pw">
-            하이웍스 비밀번호
-          </label>
-          <input
-            id="po-mail-pw"
-            className={ui.input}
-            type="password"
-            value={hiworksPassword}
-            onChange={(e) => setHiworksPassword(e.target.value)}
-            autoComplete="current-password"
-            disabled={pending}
-          />
-        </div>
+            <div className={ui.field}>
+              <label className={`${ui.label} ${ui.required}`} htmlFor="po-mail-pw">
+                하이웍스 비밀번호
+              </label>
+              <input
+                id="po-mail-pw"
+                className={ui.input}
+                type="password"
+                value={hiworksPassword}
+                onChange={(e) => setHiworksPassword(e.target.value)}
+                autoComplete="current-password"
+                disabled={pending}
+              />
+            </div>
+
+            {hasStoredCredential ? (
+              <div className={ui.fieldWide}>
+                <div className={ui.filterNote}>
+                  <button
+                    type="button"
+                    className={ui.btnLink}
+                    onClick={() => {
+                      setManual(false)
+                      setHiworksId('')
+                      setHiworksPassword('')
+                    }}
+                    disabled={pending}
+                  >
+                    저장된 계정 사용
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
       </div>
     </Modal>
   )

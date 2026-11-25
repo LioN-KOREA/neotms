@@ -187,6 +187,41 @@ const EnvSchema = v.object({
   NEOTMS_MAIL_FROM_ADDRESS: v.fallback(v.string(), ""),
   NEOTMS_MAIL_FROM_NAME: v.fallback(v.string(), "라이온코리아 TMS"),
 
+  // -------- Hiworks credential vault (db/013) ------------------------------
+  /**
+   * The CMK that wraps each person's stored Hiworks sign-in - an ARN or an alias.
+   *
+   * The KEY ID, not key material, so unlike the secrets above this one genuinely belongs in the
+   * environment: there is nothing secret about it. What it names is a KMS customer-managed key that
+   * only this function may use, and the credential it protects can only be read by calling KMS with
+   * the right encryption context (utils/KmsEnvelopeUtils.ts).
+   *
+   * BLANK TURNS STORING OFF, and that is a supported mode rather than a misconfiguration - the same
+   * standing as `NEOTMS_FX_SECRET_NAME`. With no key, `isHiworksVaultConfigured()` is false, the
+   * 내 정보 screen says so instead of offering a form, and both mail endpoints keep asking for the
+   * id and password in the dialog, exactly as they did before this feature existed. So it is
+   * deliberately NOT part of any `is*ConfigComplete()` check: a stack with no key must still serve
+   * every other screen.
+   *
+   * Which key this is depends on the stage, and the two cases are not the same kind of thing (see
+   * `NeotmsHiworksKms` in infra/config/NeotmsConfig.ts):
+   *
+   *   * **Production** owns its key. The stack creates it, nothing else can use it, and no command
+   *     line can point production at somebody else's key.
+   *   * **Non-production** deployments share ONE database across several AWS accounts, so they
+   *     share ONE key owned by an authoritative account - passed in as
+   *     `-c hiworksEncKeyArn=<arn>`. A per-deployment key there would be actively wrong rather than
+   *     merely wasteful: deployment A wraps a data key under its own CMK and writes the row,
+   *     deployment B reads the same row and cannot decrypt it, B's user re-saves, and now A is
+   *     broken. Each save silently breaks somebody else's stored credential.
+   *
+   * Reads do not depend on this value at all. `openSecret` passes the key recorded on the row
+   * (`staff_hiworks_credential.kms_key_id`), so a table whose rows were wrapped under different
+   * keys stays readable while only new writes use this one - which is also what makes a key
+   * rotation or a half-finished migration a readable state rather than a broken one.
+   */
+  NEOTMS_HIWORKS_KMS_KEY_ID: v.fallback(v.string(), ""),
+
   // -------- Tunables -------------------------------------------------------
   /** How long a presigned upload URL stays valid. Short, because the browser uploads immediately. */
   NEOTMS_UPLOAD_URL_TTL_SEC: v.fallback(v.string(), "120"),
@@ -267,6 +302,17 @@ export function isAuthConfigComplete(): boolean {
  * `NEOTMS_DB_CA_CERT` is excluded too: empty is a supported mode (TLS without verification), not a
  * missing setting.
  */
+/**
+ * Whether a person may store their Hiworks sign-in at all.
+ *
+ * One setting, checked in one place, so the answer is the same on the screen that offers the form
+ * and in the handler that would write the row. Without it the feature is simply absent rather than
+ * broken: the mail dialogs ask for credentials the way they always did.
+ */
+export function isHiworksVaultConfigured(): boolean {
+  return NeotmsEnv.NEOTMS_HIWORKS_KMS_KEY_ID.length > 0;
+}
+
 export function isDatabaseConfigComplete(): boolean {
   return (
     NeotmsEnv.NEOTMS_DB_HOST.length > 0 &&

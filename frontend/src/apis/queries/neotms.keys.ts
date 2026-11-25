@@ -48,6 +48,8 @@ export const neotmsKeys = {
    * 프로젝트를 하나 고쳤다고 내 검색어를 다시 읽을 이유가 없고, 그 반대도 마찬가지다.
    */
   recentSearches: ['recent-searches'] as const,
+  /** 내 정보의 Hiworks 계정 상태. 비밀번호는 응답에 없으므로 캐시에도 없다. */
+  hiworksCredential: ['hiworks-credential'] as const,
 
   staff: ['staff'] as const,
   roles: ['roles'] as const,

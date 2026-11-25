@@ -25,6 +25,7 @@ import { DashboardView } from '@/features/dashboard/DashboardView'
 import { PmSheetView } from '@/features/pmsheet/PmSheetView'
 import { JobsView } from '@/features/jobs/JobsView'
 import { MaintenanceView } from '@/features/maintenance/MaintenanceView'
+import { MyInfoView } from '@/features/me/MyInfoView'
 import { InvoicePaymentView } from '@/features/payment/InvoicePaymentView'
 import { PoPaymentView } from '@/features/payment/PoPaymentView'
 import { ProjectDetailView } from '@/features/projects/ProjectDetailView'
@@ -351,6 +352,21 @@ export const neotmsRouter = createBrowserRouter([
             <RolesView />
           </RequireSuperuser>
         ),
+      },
+      {
+        /*
+         * 내 정보 — **`RequireMenu` 가 없는 유일한 화면**이다.
+         *
+         * 감싸지 않은 것이 실수가 아니다. `RequireMenu` 는 "이 메뉴를 볼 권한이 있는가" 를 묻고,
+         * 이 화면에는 그런 권한이 없다 — 자기 설정을 보는 데 필요한 권한은 없기 때문이다
+         * (shared/permissions.ts 의 `NEOTMS_NAV_ANY_STAFF`). 서버의 세 라우트도 같은 이유로
+         * `anyStaff` 다.
+         *
+         * 등록되지 않은 계정은 셸(`NeotmsApp`)이 이미 가입 화면으로 보내므로, 여기까지 오는
+         * 사람은 모두 staff 행을 가진 사람이다.
+         */
+        path: 'me',
+        element: <MyInfoView />,
       },
       { path: '*', element: <NotFoundView /> },
     ],

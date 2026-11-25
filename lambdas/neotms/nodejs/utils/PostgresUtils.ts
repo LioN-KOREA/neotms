@@ -89,6 +89,12 @@ export type SqlRow = Record<string, unknown>;
  *     002_tables.sql is `timestamptz` (51 of them, no exceptions), and casting a parameter to
  *     `timestamp` to compare against a `timestamptz` column reintroduces the server's time zone as
  *     a silent factor in the comparison.
+ *   * `"bytea"` is the one kind whose value is NOT a string. Ciphertext is bytes, and the two
+ *     round trips a text column would add - base64 on the way in, decode on the way out - are two
+ *     more places for an encoding mistake to turn a stored credential into one that cannot be
+ *     opened. node-postgres binds a `Buffer` to `bytea` natively, so the value travels as bytes and
+ *     `octet_length` in a CHECK constraint means what it says. Used by
+ *     `staff_hiworks_credential` (db/013); see neotms/hiworks/.
  *   * `"idArray"` and `"textArray"` exist for `= ANY(:names)`, which is how this codebase writes a
  *     variable-length `IN` list. The alternative - interpolating `IN (:id_0, :id_1, ...)` - makes
  *     the statement TEXT depend on the length of the list, so a PO batch of 3 and a batch of 40 are
@@ -107,6 +113,7 @@ export type SqlParamKind =
   | "timestamp"
   | "json"
   | "uuid"
+  | "bytea"
   | "idArray"
   | "textArray";
 
@@ -125,7 +132,7 @@ export interface SqlParameter {
    * The array members are strings even for `"idArray"`, for the reason `"id"` is a string: an id
    * above 2^53 survives as text and does not survive float64.
    */
-  readonly value: string | number | boolean | null | readonly string[];
+  readonly value: string | number | boolean | null | readonly string[] | Uint8Array;
   readonly kind: SqlParamKind;
 }
 
@@ -173,6 +180,7 @@ const CASTS: Record<SqlParamKind, string> = {
   timestamp: "::timestamptz",
   json: "::jsonb",
   uuid: "::uuid",
+  bytea: "::bytea",
   idArray: "::bigint[]",
   textArray: "::text[]",
 };
@@ -191,6 +199,12 @@ export function param(name: string, value: unknown, kind: SqlParamKind = "text")
       return { name, value: Boolean(value), kind };
     case "json":
       return { name, value: JSON.stringify(value), kind };
+    // Passed through untouched, which is the whole point. Falling through to `default` would hand
+    // `String(buffer)` - the bytes decoded as UTF-8, with every invalid sequence replaced by U+FFFD
+    // - to a `::bytea` cast. That is lossy and it is not an error: the row stores, and the failure
+    // surfaces later as a credential that will not decrypt.
+    case "bytea":
+      return { name, value: value as Uint8Array, kind };
     // Each member stringified individually. Falling through to `default` would hand `String([1,2])`
     // = "1,2" to a `::bigint[]` cast, which is not an error - it is a cast failure at runtime on
     // some inputs and a one-element array on others.
@@ -411,6 +425,23 @@ export function readText(row: SqlRow, column: string): string | null {
   const raw = row[column];
   if (raw === null || raw === undefined) return null;
   return String(raw);
+}
+
+/**
+ * A `bytea` column as bytes.
+ *
+ * `pg` already hands `bytea` back as a `Buffer` - OID 17 is deliberately NOT in the `OID` map
+ * above, so no text parser is registered for it and the default binary decode stands. This helper
+ * exists to say that out loud at the call site and to refuse anything else: a column that arrives
+ * as a string here means somebody added 17 to that map, and the symptom without this check would
+ * be `Buffer.from("\\x6ab3...")` - 10 bytes of the literal text `\x6ab3`, silently, forever.
+ */
+export function readBytes(row: SqlRow, column: string): Buffer | null {
+  const raw = row[column];
+  if (raw === null || raw === undefined) return null;
+  if (Buffer.isBuffer(raw)) return raw;
+  console.error(`readBytes(${column}): expected a Buffer, got ${typeof raw}.`);
+  return null;
 }
 
 export function readInt(row: SqlRow, column: string): number | null {

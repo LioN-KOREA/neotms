@@ -29,6 +29,7 @@ import type { ResponseData } from "../../reqres/RequestResponse.js";
 import { badRequest, notFound, ok, runDb } from "../NeotmsResult.js";
 import type { PoRequestMailSend } from "../neotms.schemas.js";
 import { hiworksLogin, hiworksSendEmail } from "../handover/HiworksClient.js";
+import { resolveHiworksCredentials } from "../hiworks/NeotmsHiworksManager.js";
 import { AttachmentGetOps } from "../attachments/NeotmsAttachment.dbops.js";
 import { PoGetOps, type PurchaseOrderRow } from "./NeotmsPurchaseOrder.dbops.js";
 import {
@@ -191,7 +192,14 @@ export async function sendPoRequestMail(
     attachments: resolved.links,
   });
 
-  const signedIn = await hiworksLogin(input.hiworksId, input.hiworksPassword);
+  /*
+   * Typed in the dialog, or stored on 내 정보. The same resolver the handover mail uses, so a
+   * person who stored an account has it work on both screens or neither (neotms/hiworks/).
+   */
+  const credentials = await resolveHiworksCredentials(caller, input);
+  if (!credentials.ok) return credentials.response;
+
+  const signedIn = await hiworksLogin(credentials.credentials.id, credentials.credentials.password);
   if (!signedIn.result) {
     return {
       status: 502,

@@ -384,7 +384,7 @@ describe("Korean full-text search", () => {
 });
 
 describe("report exports", () => {
-  test("the export bucket is SSE-S3 and the stack has no KMS key", () => {
+  test("the export bucket is SSE-S3, and the only KMS key is the Hiworks one", () => {
     /*
      * This assertion was the other way round on the Aurora variant, and the reason is worth
      * keeping: `aws_s3.query_export_to_s3` refuses to write to a bucket that is not SSE-KMS, and
@@ -392,6 +392,13 @@ describe("report exports", () => {
      * socket PostgreSQL is not involved in an export at all - the Lambda renders the XLSX and
      * writes it - so the customer-managed key, its alias, its rotation and the two grants that
      * referenced it are all deleted. SSE-S3 is free; the key was ~$1/month plus request charges.
+     *
+     * The count is ONE rather than ZERO since db/013, and the two keys are not the same kind of
+     * thing - which is why this test keeps counting rather than dropping the assertion. The deleted
+     * key satisfied a bucket precondition and protected nothing anybody cared about. The one key
+     * allowed here protects the only secret in this system that belongs to a PERSON: a colleague's
+     * own Hiworks password. A SECOND key appearing in this stack means somebody reached for
+     * SSE-KMS again, which is the thing this test exists to catch.
      */
     const template = synth();
     template.hasResourceProperties("AWS::S3::Bucket", {
@@ -404,7 +411,144 @@ describe("report exports", () => {
         ]),
       }),
     });
+    /*
+     * ONE in production, which is the stage `synth()` defaults to. Non-production synthesises ZERO
+     * - see the stage-aware test below - because those deployments share one database and therefore
+     * import one key or store nothing at all.
+     */
+    template.resourceCountIs("AWS::KMS::Key", 1);
+    /*
+     * And it is the credential key, with rotation on and RETAIN set. RETAIN is asserted because it
+     * is the one place in this stack that deliberately ignores `config.protectData`: scheduling
+     * this key for deletion makes every stored credential permanently unreadable, and there is no
+     * backup of a KMS key by design.
+     */
+    template.hasResource("AWS::KMS::Key", {
+      Properties: Match.objectLike({
+        EnableKeyRotation: true,
+        Description: Match.stringLikeRegexp("Hiworks"),
+      }),
+      DeletionPolicy: "Retain",
+    });
+  });
+
+  test("the API function may unwrap credentials and nothing more", () => {
+    /*
+     * Two KMS actions, named rather than taken from `grantEncryptDecrypt` - which would also hand
+     * over `kms:Encrypt` and `kms:ReEncrypt*`. Neither is used: the application wraps a data key
+     * (`GenerateDataKey`) and never encrypts directly under the CMK.
+     *
+     * The narrowness buys something day to day as well as in a breach. With exactly these two
+     * actions, every CloudTrail entry against this key is either "a stored credential was written"
+     * or "a stored credential was read", and there is no third thing it could have been.
+     */
+    const template = synth();
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: ["kms:Decrypt", "kms:GenerateDataKey"],
+            Effect: "Allow",
+          }),
+        ]),
+      }),
+    });
+
+    /*
+     * And the function is told which key. The ARN rather than the alias, because automatic rotation
+     * keeps the same ARN - only replacing the key outright changes it, and that comes with a deploy
+     * since the key is defined in this stack.
+     */
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({ NEOTMS_HIWORKS_KMS_KEY_ID: Match.anyValue() }),
+      }),
+    });
+  });
+
+  test("a non-production stage creates no key and stores nothing by default", () => {
+    /*
+     * The default that keeps the shared non-production database usable.
+     *
+     * Several test deployments in several accounts share ONE database. A per-deployment CMK there
+     * is not merely wasteful, it is incorrect: deployment A wraps a data key under its own key and
+     * writes the row; deployment B reads the same row and cannot decrypt it; B's user re-saves and
+     * now A is broken. Each save silently breaks somebody else's stored credential, and the only
+     * symptom is being asked to type a password again.
+     *
+     * So the default for dev is to create no key and store nothing - the mail dialogs ask for
+     * credentials exactly as they did before db/013 - and sharing is opt-in by naming the one key
+     * every deployment is to use (`-c hiworksEncKeyArn=...`).
+     */
+    const dev = synth("dev");
+    dev.resourceCountIs("AWS::KMS::Key", 0);
+    dev.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({ NEOTMS_HIWORKS_KMS_KEY_ID: "" }),
+      }),
+    });
+    /*
+     * And with no key there is no grant at all - not a narrower one. A function that cannot call
+     * KMS has nothing to misuse, which is the correct shape for "this feature is off" rather than
+     * "this feature is on and will fail".
+     */
+    const policies = Object.values(dev.findResources("AWS::IAM::Policy"));
+    const statements = policies.flatMap(
+      (policy) => (policy.Properties?.PolicyDocument?.Statement ?? []) as { Action?: unknown }[],
+    );
+    const kmsActions = statements.flatMap((statement) =>
+      (Array.isArray(statement.Action) ? statement.Action : [statement.Action])
+        .filter((action): action is string => typeof action === "string")
+        .filter((action) => action.startsWith("kms:")),
+    );
+    expect(kmsActions).toEqual([]);
+  });
+
+  test("a shared Hiworks key is imported, never created, and granted to the function", () => {
+    /*
+     * The arrangement the shared key exists for: several non-production deployments, in several
+     * accounts, against ONE database. They all wrap and unwrap under one CMK owned by an
+     * authoritative account, so a row written by any of them opens in all of them.
+     *
+     * Its own stack rather than `synth("dev")`, because the mode arrives from a `-c` override and
+     * the cached templates are built from the committed configs.
+     *
+     * Three things asserted, and the first is the one that would be easy to get wrong: the
+     * consuming stack must CREATE NOTHING. A `kms.Key` here would mean each deployment minting its
+     * own key again, which is the bug the shared key is for.
+     */
+    const keyArn = "arn:aws:kms:ap-northeast-2:999999999999:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const app = new cdk.App();
+    const stack = new NeotmsStack(app, "SharedKeyStack", {
+      config: { ...NEOTMS_CONFIGS.dev, hiworksKms: { mode: "shared", keyArn } },
+      env: { account: "123456789012", region: "ap-northeast-2" },
+    });
+    const template = Template.fromStack(stack);
+
     template.resourceCountIs("AWS::KMS::Key", 0);
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({ NEOTMS_HIWORKS_KMS_KEY_ID: keyArn }),
+      }),
+    });
+
+    /*
+     * And the identity half of the cross-account grant, on that exact ARN. The other half is the
+     * key policy in the owning account, which no stack here can write - which is why the ARN being
+     * literal in this policy matters: it is the only thing on this side that says which key.
+     */
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: ["kms:Decrypt", "kms:GenerateDataKey"],
+            Effect: "Allow",
+            Resource: keyArn,
+          }),
+        ]),
+      }),
+    });
   });
 
   test("exports expire, so stale financial snapshots do not accumulate", () => {
@@ -4149,6 +4293,59 @@ describe("context overrides", () => {
     expect(NEOTMS_CONFIGS.dev.auth.authClientId).toBe("QP6B8rMvAnw8fOWXHP3A3qTGz");
   });
 
+  test("the Hiworks key override is honoured for dev and IGNORED for prod", () => {
+    /*
+     * "Definitive for prod" as an assertion rather than an intention.
+     *
+     * `resolveStageConfig` does not read the override context at all when the stage is production,
+     * so the command line below - which is a plausible copy-paste of the dev one - cannot point
+     * production's stored credentials at a key in another account. If that guard is ever reduced to
+     * a convention, this is what fails.
+     */
+    const arn = `arn:aws:kms:ap-northeast-2:123456789012:key/11111111-2222-3333-4444-555555555555`;
+
+    const dev = resolveStageConfig("dev", ctx({ hiworksEncKeyArn: arn }));
+    expect(dev.hiworksKms).toEqual({ mode: "shared", keyArn: arn });
+
+    const prod = resolveStageConfig("prod", ctx({ hiworksEncKeyArn: arn }));
+    expect(prod.hiworksKms).toEqual({ mode: "own" });
+  });
+
+  test("omitting the Hiworks key leaves a shared-database stage with the feature off", () => {
+    /*
+     * Absence is a CHOICE and is silent; a malformed value is an operator ERROR and throws. The two
+     * are different mistakes: forgetting the flag means "I am not using this feature here", while
+     * mistyping the ARN would otherwise present as "I configured the key and the feature is still
+     * off", with nothing anywhere saying why.
+     *
+     * `off` rather than `own` is the load-bearing part - see NeotmsHiworksKms. A per-deployment key
+     * against a shared database makes every save break somebody else's stored credential.
+     */
+    expect(resolveStageConfig("dev", ctx({})).hiworksKms).toEqual({ mode: "off" });
+
+    // A bare key id or alias resolves against the DEPLOYING account, which is not where the shared
+    // key lives - so it must be refused here rather than at runtime.
+    for (const bad of [
+      "11111111-2222-3333-4444-555555555555",
+      "alias/neotms-hiworks",
+      "arn:aws:kms:ap-northeast-2:12345:key/short-account",
+      "not-an-arn-at-all",
+    ]) {
+      expect(() => resolveStageConfig("dev", ctx({ hiworksEncKeyArn: bad }))).toThrow(
+        /must be a full KMS key or alias ARN/,
+      );
+    }
+
+    // A cross-REGION key fails the same way a cross-account one would at runtime, so it is caught
+    // here for free: the ARN carries its region and the stage config states the stack's.
+    expect(() =>
+      resolveStageConfig(
+        "dev",
+        ctx({ hiworksEncKeyArn: "arn:aws:kms:us-east-1:123456789012:key/abc" }),
+      ),
+    ).toThrow(/cannot be used across regions/);
+  });
+
   test("a non-string context value is refused", () => {
     // The realistic source is cdk.json's `context` block, which is a wall of feature flags all set
     // to `true` - a key added there by analogy with its neighbours gets a boolean. Written into the
@@ -6159,19 +6356,33 @@ describe("the handover mail", () => {
     expect(block).not.toContain("writeContext");
   });
 
-  test("the Hiworks credentials are never stored, logged or echoed", () => {
+  test("the Hiworks credentials are never logged or echoed, and reach Hiworks or the vault only", () => {
     /*
      * The one thing in this feature that would be unforgivable to get wrong. Somebody types their
-     * own Hiworks password into a form; it may reach Hiworks and nowhere else.
+     * own Hiworks password into a form; it may reach Hiworks, and - only if they asked for it to be
+     * remembered - the sealed column in staff_hiworks_credential. Nowhere else.
      *
-     * Four places it could leak, each asserted rather than trusted: the manager must not log it or
-     * put it in a response body, the response must carry only the subject and the recipient, the
-     * console must not persist it, and the composer must never see it at all - `composeHandoverMail`
-     * takes the two option arrays and nothing else, so the credentials cannot reach the HTML even
-     * by accident.
+     * ## This test used to say "never stored", and db/013 changed that deliberately
+     *
+     * It was the right assertion while there was nowhere safe to put a password. There is now: the
+     * pair is sealed under a single-use KMS data key bound to its owner's staff id, OPTIONALLY and
+     * per person. What has NOT changed is everything else this test checks, and the parts that
+     * still hold are the parts worth keeping:
+     *
+     *   * the manager does not log it and does not put it in a response body,
+     *   * the response carries only the subject and the recipient,
+     *   * the console does not persist it in browser storage,
+     *   * and the composer never sees it at all - `composeHandoverMail` takes the two option
+     *     arrays and nothing else, so the credentials cannot reach the HTML even by accident.
+     *
+     * The send no longer reads `input.hiworksId` directly: it goes through
+     * `resolveHiworksCredentials`, which is the single place that decides between a typed pair and
+     * a stored one. That indirection is asserted, because it is what keeps the two mail screens
+     * from drifting into different precedence rules.
      */
     const manager = tsCode("handover/NeotmsHandoverManager.ts");
-    expect(manager).toContain("hiworksLogin(input.hiworksId, input.hiworksPassword)");
+    expect(manager).toContain("resolveHiworksCredentials(caller, input)");
+    expect(manager).toContain("hiworksLogin(credentials.credentials.id");
     expect(manager).not.toMatch(/console\.(log|error|warn|info)/);
     expect(manager).not.toMatch(/body:[^\n]*hiworks(Id|Password)/);
     expect(manager).toContain("ok({ subject: mail.subject, recipient: input.recipient })");
