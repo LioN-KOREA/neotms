@@ -93,10 +93,11 @@ export function StaffAttributesModal({ staff, isSelf, onClose, onSaved }: Props)
       <ErrorNotice error={setAttributes.error} />
 
       <div className={`${ui.alert} ${ui.alertInfo}`}>
-        속성은 <b>무엇을 할 수 있는지</b>가 아니라 <b>무엇으로 지명될 수 있는지</b>를 정합니다.
-        화면이 더 열리지는 않습니다 — 그건 <b>역할</b>이 정하고, 역할은 '권한 변경' 에서 바꿉니다.
+        사용자의 역할을 지정합니다.<br />
+        예로, <b>영업담당</b>은 프로젝트의 영업담당자로 지정될 수 있고, <b>PM</b>은 프로젝트의 PM으로 지정될 수 있습니다.<br />
+        접근권한 (화면 접근 및 항목 조회/수정 등)의 경우, <b>권한 변경</b> 메뉴에서 설정 부탁드립니다.
       </div>
-
+      <br />
       <div className={ui.checkGrid}>
         {ATTRIBUTE_LABELS.map((attribute) => {
           const isSuperuser = attribute.name === NEOTMS_USER_ATTRIBUTE_SUPERUSER

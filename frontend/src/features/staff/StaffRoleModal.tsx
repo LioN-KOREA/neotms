@@ -110,16 +110,15 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
 
       {isSelf ? (
         <div className={`${ui.alert} ${ui.alertWarn}`} role="alert">
-          본인 계정입니다. 자신의 역할을 '역할 없음' 으로 바꾸거나 자신을 사용 중지할 수는
-          없습니다 — 그렇게 하면 되돌릴 화면에 스스로 접근할 수 없게 되기 때문입니다. 필요하다면
-          다른 관리자에게 요청해 주십시오.
+          내 계정입니다. 자신의 계정을 비활성화하거나 역할을 박탈하는 것은 허용되지 않습니다.
         </div>
       ) : null}
 
       {staff.roleId === null ? (
         <div className={`${ui.alert} ${ui.alertInfo}`} role="alert">
-          아직 역할이 배정되지 않은 가입 요청입니다. 이 분은 지금 로그인은 되지만 어떤 메뉴도 쓸
-          수 없고, 승인을 기다리는 안내 화면을 보고 있습니다.
+          승인 및 역할 배정이 필요한 사용자입니다.
+          해당 사용자는 현재 가입요청을 신청하셨으나, 아직 승인이 이뤄지지 않아 시스템을 사용할 수 없습니다.
+          해당 요청을 검토 후, 조치 진행 부탁드립니다.
         </div>
       ) : null}
 
@@ -138,7 +137,7 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
             }}
             disabled={rolesQuery.isLoading}
           >
-            <option value="">(역할 없음 — 로그인만 되고 아무것도 할 수 없습니다)</option>
+            <option value="">(역할없음 : 가입 후, 승인 및 역할배정 대기 상태입니다.)</option>
             {roles.map((role) => (
               <option key={role.id} value={role.id}>
                 {/*

@@ -68,8 +68,7 @@ export function StaffView() {
       {/* 제목은 셸의 경로 표시줄이 들고 있다 — NeotmsApp.module.css 의 `.crumb` 주석. */}
       <div className={ui.pageBar}>
         <p className={ui.pageNote}>
-          <b>역할</b>이 메뉴별 조회·등록·수정·삭제 권한을 결정합니다. 화면을 열 수 있는
-          사람은 그 화면의 모든 행을 봅니다 — 행 단위 열람 제한은 쓰지 않습니다.
+          해당 사용자가 어떤 메뉴에 접근할 수 있는지, 그리고 해당 메뉴에서 어떤 활동을 할 수 있는지를 결정합니다.
         </p>
       </div>
 
@@ -84,8 +83,7 @@ export function StaffView() {
       {pendingCount > 0 ? (
         <div className={`${ui.alert} ${ui.alertWarn}`} role="alert">
           승인을 기다리는 가입 요청이 {pendingCount}건 있습니다. 아래 목록 맨 위에 있습니다 — 역할을
-          배정해 주시면 그때부터 서비스를 쓸 수 있습니다. 요청한 분에게는 알림이 가지 않으므로,
-          이 화면이 유일한 확인 경로입니다.
+          배정해 주시면 그때부터 서비스를 쓸 수 있습니다.
         </div>
       ) : null}
 
