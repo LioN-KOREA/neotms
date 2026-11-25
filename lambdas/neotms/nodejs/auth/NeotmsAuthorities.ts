@@ -230,8 +230,28 @@ export function isNeotmsPermission(value: string): value is NeotmsPermission {
  */
 export const NEOTMS_USER_ATTRIBUTE_SALES_MANAGER = "NEOTMS_USER_ATTRIBUTE_SALES_MANAGER";
 
-/** May be named as the 담당PM of a project or a job. The PM half of the pair above. */
+/** May be named as the PM of a project or a job. The PM half of the pair above. */
 export const NEOTMS_USER_ATTRIBUTE_PM = "NEOTMS_USER_ATTRIBUTE_PM";
+
+/**
+ * 경영지원부, IMC 매니저, MICE 매니저 - what part of the business somebody belongs to.
+ *
+ * ## These three are NOT in `NEOTMS_ASSIGNABLE_ATTRIBUTES`, and that is the decision
+ *
+ * The two above gate a COLUMN: `prj_mgr_id` and `prj_pm_id` refuse an id whose holder lacks the
+ * matching attribute, and the project form's pickers list exactly the holders. There is no such
+ * column for these three - no table has an "IMC manager" field - so adding them to the assignable
+ * list would put them in a picker that writes `prj_pm_id`, which is how an IMC manager ends up
+ * recorded as a project's PM.
+ *
+ * So for now they are what an attribute is in its plainest form: a fact about a person, recorded
+ * on 사용자 관리, readable from `profile.attributes`, and gating nothing. When a screen needs to
+ * ask "is this person MICE", it is already answerable; when a COLUMN needs one of them, that
+ * column's write check is where the refusal belongs, next to the two that already have one.
+ */
+export const NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT = "NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT";
+export const NEOTMS_USER_ATTRIBUTE_IMC = "NEOTMS_USER_ATTRIBUTE_IMC";
+export const NEOTMS_USER_ATTRIBUTE_MICE = "NEOTMS_USER_ATTRIBUTE_MICE";
 
 /**
  * Overrides every permission check in this file.
@@ -250,12 +270,21 @@ export const NEOTMS_USER_ATTRIBUTE_SUPERUSER = "NEOTMS_USER_ATTRIBUTE_SUPERUSER"
 export const NEOTMS_USER_ATTRIBUTES = [
   NEOTMS_USER_ATTRIBUTE_SALES_MANAGER,
   NEOTMS_USER_ATTRIBUTE_PM,
+  NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT,
+  NEOTMS_USER_ATTRIBUTE_IMC,
+  NEOTMS_USER_ATTRIBUTE_MICE,
   NEOTMS_USER_ATTRIBUTE_SUPERUSER,
 ] as const;
 
 export type NeotmsUserAttribute = (typeof NEOTMS_USER_ATTRIBUTES)[number];
 
-/** The two that can be assigned to a project. The superuser flag is not one of them. */
+/**
+ * The two that can be assigned to a project.
+ *
+ * Neither the superuser flag nor the three departmental attributes are here - see their comments.
+ * This list is what `GET /api/v0/staff/assignable` validates against, so anything added to it
+ * becomes a picker on the project form and must have a column to be written into.
+ */
 export const NEOTMS_ASSIGNABLE_ATTRIBUTES = [
   NEOTMS_USER_ATTRIBUTE_SALES_MANAGER,
   NEOTMS_USER_ATTRIBUTE_PM,

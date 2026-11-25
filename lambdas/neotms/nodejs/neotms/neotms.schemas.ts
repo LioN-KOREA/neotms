@@ -285,11 +285,11 @@ export const JobCreateSchema = v.object({
    */
   jobCategory: settable(CodeSchema),
   jobVolume: settable(VolumeSchema),
-  /** The counted volume before the basis divides it (db/010). `jobVolume` stays the billable one. */
+  /** The counted volume before the basis divides it (db/011). `jobVolume` stays the billable one. */
   jobRawVolume: settable(VolumeSchema),
-  /** Units per billable unit - 250 words, 800 characters, 1 (db/010). */
+  /** Units per billable unit - 250 words, 800 characters, 1 (db/011). */
   jobBasis: settable(VolumeSchema),
-  /** unit | fixed | free - how the total was derived (db/010). */
+  /** unit | fixed | free - how the total was derived (db/011). */
   jobPriceMode: settable(v.picklist(["unit", "fixed", "free"])),
   unitCode: settable(CodeSchema),
   /** How the price was arrived at (rate card vs manual override). Value set unconfirmed. */
@@ -809,14 +809,13 @@ export const CodeUpdateSchema = v.partial(v.omit(CodeCreateSchema, ["code"]));
 export const StaffAdminUpdateSchema = v.partial(
   v.object({
     roleId: v.nullable(IdSchema),
-    /**
-     * `Y` = sees every row, `N` = sees only their own.
-     *
-     * A picklist of two, though `VIEW_SCOPE_ALL` in NeotmsAuthGuard also accepts the legacy 'ALL'
-     * and 'A'. The guard has to read what the ETL loads; this screen only ever writes the canonical
-     * pair, so the value set does not keep growing from the new system's side.
+    /*
+     * `viewScope` was here and is gone. Row-level scope is not enforced (see NeotmsAuthGuard), so
+     * the field would have accepted a value, stored it, and changed nothing - and a stored 'N'
+     * reads to the next administrator as "this person is restricted". A request still carrying it
+     * now fails validation rather than being quietly ignored, which is the difference between
+     * finding out and not.
      */
-    viewScope: v.picklist(["Y", "N"]),
     /** False removes the sign-in without deleting the history attributed to this `mgr_id`. */
     active: v.boolean(),
   }),

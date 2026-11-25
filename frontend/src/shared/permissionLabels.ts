@@ -37,6 +37,9 @@ import {
   NEOTMS_PERMISSION_TRANSLATOR_READ,
   NEOTMS_PERMISSION_TRANSLATOR_UPDATE,
   NEOTMS_USER_ATTRIBUTE_PM,
+  NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT,
+  NEOTMS_USER_ATTRIBUTE_IMC,
+  NEOTMS_USER_ATTRIBUTE_MICE,
   NEOTMS_USER_ATTRIBUTE_SALES_MANAGER,
   NEOTMS_USER_ATTRIBUTE_SUPERUSER,
 } from '@/apis/neotms.authorities'
@@ -199,7 +202,7 @@ export const PERMISSION_GROUPS: readonly PermissionGroup[] = [
       {
         name: NEOTMS_PERMISSION_DASHBOARD_SALES_READ,
         label: '대시보드(영업)',
-        hint: '영업 담당자용 요약 화면. 보통 담당영업에게만 준다.',
+        hint: '영업 담당자용 요약 화면. 보통 영업담당에게만 준다.',
       },
       {
         name: NEOTMS_PERMISSION_WORKSPACE_READ,
@@ -265,18 +268,41 @@ export interface AttributeLabel {
  *
  * Deliberately worded as "may be named as", not "can do". Nothing here opens a screen, and that is
  * the distinction the 사용자 관리 screen has to make legible: somebody can hold the PM role and not
- * the PM attribute, which means they do PM work but cannot be recorded as a project's 담당PM.
+ * the PM attribute, which means they do PM work but cannot be recorded as a project's PM.
  */
 export const ATTRIBUTE_LABELS: readonly AttributeLabel[] = [
   {
     name: NEOTMS_USER_ATTRIBUTE_SALES_MANAGER,
-    label: '담당영업',
-    hint: '프로젝트의 담당영업으로 지정될 수 있다. 프로젝트 폼의 담당영업 피커가 이 속성을 가진 사람만 보여 준다.',
+    label: '영업담당',
+    hint: '프로젝트의 영업담당으로 지정될 수 있다. 프로젝트 폼의 영업담당 피커가 이 속성을 가진 사람만 보여 준다.',
   },
   {
     name: NEOTMS_USER_ATTRIBUTE_PM,
-    label: '담당PM',
-    hint: '프로젝트와 작업의 담당PM 으로 지정될 수 있다. 담당영업과 함께 가질 수 있다 — 두 역할을 겸하는 사람이 자기를 PM 으로 둔 프로젝트를 만드는 것은 정상이다.',
+    label: 'PM',
+    hint: '프로젝트와 작업의 PM 으로 지정될 수 있다. 영업담당과 함께 가질 수 있다 — 두 역할을 겸하는 사람이 자기를 PM 으로 둔 프로젝트를 만드는 것은 정상이다.',
+  },
+  /*
+   * 아래 셋은 **지정 대상이 아니다.**
+   *
+   * 위 둘은 칸을 지킨다 — 프로젝트의 영업담당·PM 칸에 이 속성이 없는 사람을 적으면 서버가
+   * 거절한다. 이 셋에는 대응하는 칸이 없으므로(어느 표에도 'IMC 매니저' 칸은 없다) 지금은
+   * **사람에 대한 사실**일 뿐이고, 그래서 설명도 "~로 지정될 수 있다" 가 아니라 소속을 적는
+   * 말로 쓴다. 서버의 `NEOTMS_ASSIGNABLE_ATTRIBUTES` 에 들어 있지 않은 것이 그 차이다.
+   */
+  {
+    name: NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT,
+    label: '경영지원부',
+    hint: '경영지원부 소속임을 나타낸다. 지금은 화면이나 권한을 열지 않는다 — 역할이 그 일을 한다.',
+  },
+  {
+    name: NEOTMS_USER_ATTRIBUTE_IMC,
+    label: 'IMC 매니저',
+    hint: 'IMC 업무를 맡는 사람임을 나타낸다. 업무 구분이 IMC 인 프로젝트와는 별개의 값이다 — 이쪽은 사람, 그쪽은 일이다.',
+  },
+  {
+    name: NEOTMS_USER_ATTRIBUTE_MICE,
+    label: 'MICE 매니저',
+    hint: 'MICE 업무를 맡는 사람임을 나타낸다. IMC 매니저와 함께 가질 수 있다.',
   },
   {
     name: NEOTMS_USER_ATTRIBUTE_SUPERUSER,

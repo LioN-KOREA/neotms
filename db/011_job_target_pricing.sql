@@ -1,5 +1,5 @@
 -- =====================================================================
--- 010_job_target_pricing.sql — 작업 등록의 언어별 설정 (2026-11-25, 팀장님 요청)
+-- 011_job_target_pricing.sql — 작업 등록의 언어별 설정 (2026-11-25, 팀장님 요청)
 --
 -- 작업 등록 창은 도착어마다 물량 · 기준 · 단가 · 액면 물량을 따로 받고, 도착어마다 작업을
 -- 하나씩 만든다. 청구 물량(액면 물량)은 지금까지처럼 job_volume 에 들어가고, 그것을 만든
@@ -23,7 +23,7 @@ ALTER TABLE job_detail_linguistic
 
 COMMENT ON COLUMN job_detail_linguistic.job_raw_volume IS
   'The volume as counted (e.g. 12,000 words), before dividing by job_basis. job_volume holds the '
-  'billable (face) volume that the price multiplies. NULL on jobs entered before db/010.';
+  'billable (face) volume that the price multiplies. NULL on jobs entered before db/011.';
 COMMENT ON COLUMN job_detail_linguistic.job_basis IS
   'Units per billable unit: 250 or 200 words, 800/700/600/400 characters, otherwise 1. '
   'job_volume = round(job_raw_volume / job_basis, 1) unless the PM typed the face volume by hand.';

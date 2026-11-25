@@ -341,6 +341,7 @@ because Supavisor routes on the tenant encoded in the username.
 | `006_workspace.sql` | **only for a database that already has data.** Adds `workspace_column` and `workspace_cell` — the custom columns of 나의 업무 and the values in them — plus `NEOTMS_PERMISSION_WORKSPACE_READ` to the permission CHECK, the sidebar row, and a re-grant of the superuser. Additive and re-runnable; apply it **before** the deploy. A database built from `001` + `002` has all of it already. See §6.7 |
 | `007_workspace_styles.sql` | **only for a database that already has data.** Gives every column of 나의 업무 a row — including the fourteen the application ships — so position, width and colour can be stored per person, and adds `workspace_row_style`. Additive and re-runnable; apply it **before** the deploy, because the sheet selects the new columns on every read. See §6.7 |
 | `008_workspace_text.sql` | **only for a database that already has data.** Italic, underline, strikethrough and alignment on the three 나의 업무 style tables. Additive and re-runnable; apply it **before** the deploy, for the same reason as `007`. See §6.7 |
+| `009_attributes_and_scope.sql` | **only for a database that already has data.** Adds 경영지원부 / IMC 매니저 / MICE 매니저 to the attribute CHECK, and restates two comments now that row-level scope is not enforced. Touches no data. Additive and re-runnable |
 | `verify_search.sql` | **asserts the search plan and fails loudly** — not part of the install, run it afterwards. See below |
 
 These two replace the sixteen numbered migrations that used to build the schema a step
@@ -552,6 +553,7 @@ of the symptom points away from the cause.
 | `006_workspace.sql` | **on an existing database only** — the two 나의 업무 tables and its permission | 나의 업무 is missing from the sidebar for everybody (nobody can hold a permission the CHECK refuses) and `GET /api/v0/workspace` answers 500 with `42P01`. Nothing else changes — no other screen reads either table — so unlike `005` the blast radius is exactly the feature |
 | `007_workspace_styles.sql` | **on an existing database only** — layout and style columns | 나의 업무 answers 500 with `42703` on every read, so the screen is an error page. Same blast radius as `006`: nothing else reads these tables |
 | `008_workspace_text.sql` | **on an existing database only** — the four text-style columns | the same `42703`, same blast radius |
+| `009_attributes_and_scope.sql` | **on an existing database only** — the three new attributes in the CHECK | granting 경영지원부, IMC 매니저 or MICE 매니저 on 사용자 관리 fails with `23514` and the screen reports a constraint name. Everything else works: an attribute nobody holds affects nothing |
 
 Both install files are `ON CONFLICT DO NOTHING` throughout, so re-applying either is harmless and
 applying `002` to a database that already has some of these rows adds only what is missing.
@@ -1031,7 +1033,7 @@ offline against a throwaway database:
 docker run -d --name neotms-sqlcheck -e POSTGRES_PASSWORD=pw -p 55432:5432 \
   groonga/pgroonga:latest-alpine-17
 docker cp db neotms-sqlcheck:/db
-for f in 001_schemas 002_initial_seeding 005_project_acceptance 006_workspace 007_workspace_styles 008_workspace_text; do
+for f in 001_schemas 002_initial_seeding 005_project_acceptance 006_workspace 007_workspace_styles 008_workspace_text 009_attributes_and_scope; do
   docker exec -e PGPASSWORD=pw neotms-sqlcheck \
     psql -U postgres -d postgres -q -v ON_ERROR_STOP=1 -f /db/$f.sql || echo "FAILED: $f"
 done
@@ -1374,6 +1376,32 @@ Two things the acceptance deliberately does **not** do: it gates nothing (a reje
 still have jobs and POs created under it, because nobody said the work stops), and nothing notifies
 the PM that they have been assigned something. Both are decisions to revisit, not oversights.
 
+#### Row-level visibility is **not** enforced
+
+`staff.view_scope` is still loaded, still read onto the caller and still logged, but
+`NeotmsAuthGuard` reports `seesEveryRow` unconditionally — so `scopeClause()` adds nothing to any
+statement and whoever may open a screen sees every row on it. Access is decided by the permission
+on the screen, not by who owns the row. The control is gone from 사용자 관리 and the field is gone
+from the update schema, so a stored "본인 담당분만" cannot be created or mistaken for one.
+
+Three things were deliberately **not** done, and each would have been worse:
+
+- **The column was not dropped or backfilled.** It holds the legacy `MGR_VIEW` value, which is the
+  only surviving record of who used to be restricted. Overwriting it with `'Y'` would destroy that
+  and gain nothing, since nothing reads it.
+- **`staff_self_register` still writes `'N'`.** It is now meaningless rather than wrong, and
+  rewriting a PL/pgSQL function to change a value nobody reads is churn. Note what this means if
+  the feature ever returns: **every self-registered account is marked restricted**, so turning
+  enforcement back on without a backfill would lock out everyone who signed up in the meantime.
+- **The scope machinery stayed.** `JOB_SCOPE_COLUMNS` and its siblings, and every `scopeClause()`
+  call, are untouched. Re-enabling is one line in `NeotmsAuthGuard` plus restoring the control —
+  not re-deriving which column means "mine" across six tables.
+
+The direction of the risk changed, and that is the thing to weigh: the old rule failed *closed*, so
+a mistake showed up as somebody seeing too little and saying so the same day. This one fails *open*
+by construction. Adding a screen now means asking who may open it, because there is no second
+filter underneath.
+
 #### Who may be named — the attributes are now enforced
 
 The project form has pickers for **PM** and **영업담당**, and each lists only the people carrying the
@@ -1408,6 +1436,21 @@ rather than a permission, like `/api/v0/codes`, because the project form cannot 
 it. It answers an id, a name and the legacy `mgr_id` — less than the project list already shows about
 the same people — and it refuses `NEOTMS_USER_ATTRIBUTE_SUPERUSER`, which would otherwise make it
 "who are the administrators" for every staff member in the company.
+
+#### The attributes that gate nothing
+
+**경영지원부** (`HR_MANAGEMENT`), **IMC 매니저** (`IMC`) and **MICE 매니저** (`MICE`) record which
+part of the business somebody belongs to. They are granted on 사용자 관리 beside the other two and
+read from `profile.attributes` — and they are deliberately **not** in
+`NEOTMS_ASSIGNABLE_ATTRIBUTES`.
+
+That list is not a catalogue of attributes; it is what `GET /api/v0/staff/assignable` validates and
+what the project form's two pickers are built from. Everything in it ends up in a picker that writes
+`prj_mgr_id` or `prj_pm_id`, and no column asks who the IMC manager is — so adding them there would
+offer an IMC manager in a picker that records them as the project's PM. When a column finally wants
+one of them, the refusal belongs beside that column, where the other two already have theirs.
+
+The labels for the original pair are now **영업담당** and **PM** (previously 담당영업 and 담당PM).
 
 ### 6.6 The job's own PM — separate from the project's
 

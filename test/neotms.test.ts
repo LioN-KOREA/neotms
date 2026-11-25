@@ -39,6 +39,9 @@ import { NeotmsMenu } from "../lambdas/neotms/nodejs/neotms/NeotmsMenus.js";
  */
 import {
   NEOTMS_PERMISSIONS,
+  NEOTMS_ASSIGNABLE_ATTRIBUTES,
+  NEOTMS_USER_ATTRIBUTE_PM,
+  NEOTMS_USER_ATTRIBUTE_SALES_MANAGER,
   NEOTMS_USER_ATTRIBUTES,
 } from "../lambdas/neotms/nodejs/auth/NeotmsAuthorities.js";
 // Likewise importable for free - a frozen list of seven strings with no imports of its own. It is
@@ -1393,6 +1396,7 @@ describe("the empty-database bootstrap", () => {
       "006_workspace.sql",
       "007_workspace_styles.sql",
       "008_workspace_text.sql",
+      "010_attributes_and_scope.sql",
     ];
     for (const file of editorFiles) {
       const code = sqlCode(file);
@@ -1593,11 +1597,11 @@ describe("사용자 관리 route gating", () => {
 
     expect(methods).not.toContain("POST");
     expect(methods).not.toContain("DELETE");
-    // GET the directory, PATCH a person's role/scope/active, PATCH their attribute set.
+    // GET the directory, PATCH a person's role/active, PATCH their attribute set.
     expect(methods).toEqual(["GET", "PATCH", "PATCH"]);
   });
 
-  test("the admin-writable staff columns are exactly role, scope and active", () => {
+  test("the admin-writable staff columns are exactly role and active", () => {
     /*
      * `STAFF_ADMIN_FIELDS` IS the security boundary - `updateFragments` builds the SET clause from
      * it and from nothing else, so a column added to that array is a column the 사용자 관리 screen
@@ -1608,6 +1612,12 @@ describe("사용자 관리 route gating", () => {
      * every `created_by` pointing at it. Name, email and phone are absent for a milder reason - the
      * person maintains those themselves - so they are not asserted against here, only the three
      * that would be an escalation.
+     *
+     * `view_scope` was the third writable column and is now asserted ABSENT. Row-level scope is
+     * not enforced (`NeotmsAuthGuard` reports `seesEveryRow` unconditionally), so a screen that
+     * still wrote the column would store a choice that changes nothing - and a stored 'N' reads
+     * to the next administrator as "this person is restricted". Putting it back here means
+     * putting the enforcement back with it.
      */
     const fields = lambdaSource("staff/NeotmsStaffAdmin.dbops.ts");
     const block = /STAFF_ADMIN_FIELDS[\s\S]*?\n\];/.exec(fields)?.[0] ?? "";
@@ -1615,9 +1625,8 @@ describe("사용자 관리 route gating", () => {
     expect([...block.matchAll(/column: "(\w+)"/g)].map((m) => m[1]).sort()).toEqual([
       "active",
       "role_id",
-      "view_scope",
     ]);
-    for (const forbidden of ["mgr_id", "lpx_sub", "corp_code"]) {
+    for (const forbidden of ["mgr_id", "lpx_sub", "corp_code", "view_scope"]) {
       expect(block).not.toContain(forbidden);
     }
   });
@@ -6470,5 +6479,125 @@ describe("Mailgun (system mail)", () => {
       }
     }
     expect(Object.keys(NEOTMS_CONFIGS.dev.mail)).not.toContain("mailgunEmailDomain");
+  });
+});
+
+describe("attributes, row scope and the navigation rail", () => {
+  const frontend = (...segments: string[]): string =>
+    readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "frontend", "src", ...segments),
+      "utf8",
+    );
+
+  test("the three departmental attributes are not assignable to a project", () => {
+    /*
+     * `NEOTMS_ASSIGNABLE_ATTRIBUTES` is what `GET /api/v0/staff/assignable` validates against and
+     * what the project form's two pickers are built from. Anything in it becomes a picker that
+     * writes `prj_mgr_id` or `prj_pm_id` - and there is no column asking who the IMC manager is,
+     * so an IMC manager added to that list would be offered in a picker that records them as the
+     * project's PM.
+     *
+     * The three exist to be READ - from `profile.attributes`, on the staff screen - and gate
+     * nothing. When a column finally wants one, the refusal belongs beside that column.
+     */
+    expect([...NEOTMS_ASSIGNABLE_ATTRIBUTES]).toEqual([
+      NEOTMS_USER_ATTRIBUTE_SALES_MANAGER,
+      NEOTMS_USER_ATTRIBUTE_PM,
+    ]);
+    for (const attribute of NEOTMS_USER_ATTRIBUTES) {
+      if (attribute === NEOTMS_USER_ATTRIBUTE_SALES_MANAGER) continue;
+      if (attribute === NEOTMS_USER_ATTRIBUTE_PM) continue;
+      expect([...NEOTMS_ASSIGNABLE_ATTRIBUTES]).not.toContain(attribute);
+    }
+  });
+
+  test("the database accepts exactly the attributes this build knows", () => {
+    /*
+     * The CHECK and the TypeScript list are two copies of one vocabulary. A name in the code but
+     * not the CHECK fails at 23514 when an administrator grants it - on the 사용자 관리 screen,
+     * naming a constraint. A name in the CHECK but not the code is a value nothing can produce
+     * and nothing can label.
+     */
+    for (const file of ["001_schemas.sql", "010_attributes_and_scope.sql"]) {
+      const check = /CHECK \(attribute IN \(([\s\S]*?)\)\)/.exec(sql(file));
+      expect(check).not.toBeNull();
+      const listed = [...check![1]!.matchAll(/'(NEOTMS_USER_ATTRIBUTE_[A-Z_]+)'/g)].map((m) => m[1]!);
+      expect(listed.sort()).toEqual([...NEOTMS_USER_ATTRIBUTES].sort());
+    }
+  });
+
+  test("row-level scope is off, and off in one place", () => {
+    /*
+     * `seesEveryRow` is unconditional, so `scopeClause()` narrows nothing and whoever may open a
+     * screen sees every row on it. Asserted because the alternative - leaving the derivation in
+     * place and removing only the control - would have left self-registered users restricted
+     * forever: `staff_self_register` writes 'N', deliberately, and nothing could change it again.
+     *
+     * The machinery stays. The scope column lists and the `scopeClause()` calls are untouched, so
+     * turning this back on is this one line plus restoring the control - not re-deriving which
+     * column means "mine" on six tables.
+     */
+    const guard = tsCode("../auth/NeotmsAuthGuard.ts");
+    expect(guard).toContain("seesEveryRow: true");
+    expect(guard).not.toMatch(/seesEveryRow:\s*staff\.viewScope/);
+    // Still read, still logged - it is the legacy intent and the way back.
+    expect(guard).toContain("viewScope: staff.viewScope");
+    expect(guard).toContain("VIEW_SCOPE_ALL");
+
+    // And the predicates are still built, so the switch has something to switch on.
+    const query = tsCode("NeotmsQuery.ts");
+    expect(query).toContain("export function scopeClause");
+    expect(tsCode("jobs/NeotmsJob.dbops.ts")).toContain("JOB_SCOPE_COLUMNS");
+  });
+
+  test("the scope control cannot be reached from the console or the API", () => {
+    /*
+     * Three places had to agree, and a half-done removal is worse than none: a control that saves
+     * a value the server ignores, or a server field nothing sends, both leave a stored 'N' that
+     * the next administrator reads as "this person is restricted".
+     */
+    expect(tsCode("neotms.schemas.ts")).not.toContain("viewScope");
+
+    /*
+     * The admin module still SELECTs the column - the value is the legacy intent and the staff
+     * row still carries it - so the assertion is on the writable block, not the file. What must
+     * be unsayable is writing it, and `STAFF_ADMIN_FIELDS` is where that is decided.
+     */
+    const adminFields =
+      /STAFF_ADMIN_FIELDS[\s\S]*?\n\];/.exec(tsCode("staff/NeotmsStaffAdmin.dbops.ts"))?.[0] ?? "";
+    expect(adminFields).not.toBe("");
+    expect(adminFields).not.toContain("view_scope");
+
+    const modal = frontend("features", "staff", "StaffRoleModal.tsx")
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\/\/[^\n]*/g, " ");
+    expect(modal).not.toContain("viewScope");
+    expect(modal).not.toContain("scopeAll");
+  });
+
+  test("every rail group has somewhere to go", () => {
+    /*
+     * A group with no items is a rail entry that cannot be opened: `NeotmsApp` builds each one's
+     * link from `group.items[0]`, so an empty group is a crash rather than an empty panel -
+     * `readableNavGroups` only builds groups that have items, which is what keeps it from being
+     * one. This asserts the other half: that every group DECLARED here is reachable at all.
+     *
+     * It matters now because 업무 워크시트 was added as a group of one, ahead of the other sheets
+     * that will join it. A group created early and left empty would have been exactly this bug.
+     */
+    const perms = frontend("shared", "permissions.ts");
+    const groupBlock = /NEOTMS_NAV_GROUPS[\s\S]*?\n\]/.exec(perms);
+    expect(groupBlock).not.toBeNull();
+    const groups = [...groupBlock![0].matchAll(/\{ id: '([a-z]+)'/g)].map((m) => m[1]!);
+    expect(groups.length).toBeGreaterThan(0);
+
+    const navBlock = /NEOTMS_NAV: readonly NeotmsNavItem\[\] = \[[\s\S]*$/.exec(perms);
+    expect(navBlock).not.toBeNull();
+    const used = new Set([...navBlock![0].matchAll(/group: '([a-z]+)'/g)].map((m) => m[1]!));
+    for (const group of groups) {
+      expect([...used]).toContain(group);
+    }
+    // And the sheet group is its own, with the spreadsheet icon.
+    expect(groupBlock![0]).toContain("{ id: 'sheet', label: '업무 워크시트', icon: 'table' }");
   });
 });

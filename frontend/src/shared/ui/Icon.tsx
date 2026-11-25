@@ -27,6 +27,7 @@ import type { SVGProps } from 'react'
 /** 아이콘 이름. 여기에 없는 이름은 타입 오류가 된다 — 오타가 빈 사각형으로 나타나지 않도록. */
 export type IconName =
   | 'grid'
+  | 'table'
   | 'folder'
   | 'doc'
   | 'cart'
@@ -63,6 +64,17 @@ export type IconName =
  */
 const PATHS: Record<IconName, readonly string[]> = {
   grid: ['M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'],
+  /*
+   * 시트. `grid` 와 구별되어야 해서 **머리글 줄이 있다** — 네 칸짜리 `grid` 는 대시보드의
+   * 타일을 뜻하고, 이쪽은 표다. 바깥 테두리 + 가로줄 하나 + 세로줄 둘이면 16px 에서도
+   * 표로 읽히고, 그보다 선을 더 넣으면 그 크기에서 뭉친다.
+   */
+  table: [
+    'M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z',
+    'M4 9h16',
+    'M10 9v11',
+    'M15 9v11',
+  ],
   folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
   doc: ['M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z', 'M14 3v5h5', 'M8 13h8M8 17h5'],
   cart: ['M3 5h2l2.2 10.2a1 1 0 0 0 1 .8h8.4a1 1 0 0 0 1-.8L19.5 8H6', 'M9 20a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM17 20a1 1 0 1 0 0-2 1 1 0 0 0 0 2z'],

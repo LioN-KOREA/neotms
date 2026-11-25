@@ -141,7 +141,7 @@ export function HandoverMailModal({ project, onClose, onSent }: Props) {
 
       <p className={ui.hint}>
         <strong>{project.prjCode}</strong> {project.prjName || '(이름 없음)'} — 회사 인계 양식으로
-        거래처·담당영업·담당PM·프로젝트코드·언어·납품요청일이 나가고, <strong>경로</strong> 칸에는
+        거래처·영업담당·PM·프로젝트코드·언어·납품요청일이 나가고, <strong>경로</strong> 칸에는
         프로젝트 <strong>비고</strong>가 들어갑니다. 거래처 담당자 칸은 비워 둔 채로 보냅니다.
       </p>
 

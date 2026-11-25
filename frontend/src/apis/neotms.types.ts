@@ -508,7 +508,10 @@ export interface StaffAttributesInput {
  */
 export interface StaffUpdateInput {
   roleId?: string | null
-  viewScope?: 'Y' | 'N'
+  /*
+   * `viewScope` 는 여기 없다. 행 단위 열람 제한을 쓰지 않으므로(서버의 `NeotmsAuthGuard`)
+   * 서버 스키마에서도 빠졌고, 보내면 400 이다 — 조용히 무시되는 것보다 낫다.
+   */
   active?: boolean
 }
 
@@ -982,7 +985,7 @@ export interface JobRow {
   jobCategory: string | null
   /** 물량. 10진 문자열. */
   jobVolume: string | null
-  /** db/010 — 원래 물량 · 기준 · 가격 방식 (액면 물량은 jobVolume). */
+  /** db/011 — 원래 물량 · 기준 · 가격 방식 (액면 물량은 jobVolume). */
   jobRawVolume?: string | null
   jobBasis?: string | null
   jobPriceMode?: string | null

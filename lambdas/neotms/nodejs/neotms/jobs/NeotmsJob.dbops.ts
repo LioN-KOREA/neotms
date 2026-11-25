@@ -116,7 +116,7 @@ export type JobRow = {
    * so it has no volume and no unit price; what it has is the total below, entered directly.
    */
   jobVolume: string | null;
-  /** db/010: counted volume, basis and price mode behind `jobVolume` / the total. */
+  /** db/011: counted volume, basis and price mode behind `jobVolume` / the total. */
   jobRawVolume: string | null;
   jobBasis: string | null;
   jobPriceMode: string | null;

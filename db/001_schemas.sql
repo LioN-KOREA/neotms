@@ -945,7 +945,7 @@ COMMENT ON COLUMN staff.mgr_position IS
 COMMENT ON COLUMN staff.role_id IS
   'Legacy MGR_AUTH_CODE (which held SY_ROLE.ROLE_ID), now an FK to sys_role. LOAD-BEARING SECURITY COLUMN: menu and action permissions are resolved server-side from this column only. In the legacy system the role was read from an unsigned cookie and was therefore trivially forgeable -- that is the defect being closed. Never accept a role from the client.';
 COMMENT ON COLUMN staff.view_scope IS
-  'Legacy MGR_VIEW, nvarchar(3). LOAD-BEARING SECURITY COLUMN: row-level visibility (whether this user sees only their own projects/jobs or the whole company''s) is derived from this value server-side, never from a client-supplied parameter. EXACT SEMANTICS UNCONFIRMED: the nvarchar(3) width suggests a Y/N flag ("see everything" vs "see own only"), but it has not been verified against the ASP source, so it is kept as unconstrained text with no CHECK and no boolean conversion. Confirm the distinct values before writing the authorisation predicate.';
+  'Legacy MGR_VIEW, nvarchar(3). NOT ENFORCED AT PRESENT. The value is still loaded, still read onto the caller and still logged, but NeotmsAuthGuard reports seesEveryRow = true for everybody, so the scope clauses narrow nothing: anyone who may open a screen sees every row on it. That is a deliberate decision, not a defect -- row-level visibility is not wanted for now, and the 사용자 관리 screen no longer offers it. The column is kept rather than dropped because it carries the legacy intent, which is the only record of who used to be restricted; re-enabling is one line in NeotmsAuthGuard plus putting the control back.';
 COMMENT ON COLUMN staff.mgr_tran IS
   'Legacy MGR_TRAN. Links a staff member to their own translator record, for in-house staff who also take translation work. FK to translator(tran_code) with ON DELETE SET NULL -- removing the translator record must not remove the employee.';
 COMMENT ON COLUMN staff.mgr_tran_name IS
@@ -990,12 +990,15 @@ CREATE TABLE staff_attribute (
   CONSTRAINT ck_staff_attribute CHECK (attribute IN (
     'NEOTMS_USER_ATTRIBUTE_SALES_MANAGER',
     'NEOTMS_USER_ATTRIBUTE_PM',
+    'NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT',
+    'NEOTMS_USER_ATTRIBUTE_IMC',
+    'NEOTMS_USER_ATTRIBUTE_MICE',
     'NEOTMS_USER_ATTRIBUTE_SUPERUSER'
   ))
 );
 
 COMMENT ON TABLE  staff_attribute IS
-  'What a person may be named as, and whether they override the permission system. Not legacy -- NEOTMS only. SALES_MANAGER and PM gate who may appear in a project''s 담당영업 / 담당PM pickers and who the server will accept in prj_mgr_id / prj_pm_id. SUPERUSER overrides every permission check and must only be held by accounts carrying lpx.admin.access. It does NOT widen row scope: which rows a person sees is staff.view_scope, a separate question.';
+  'What a person may be named as, what part of the business they belong to, and whether they override the permission system. Not legacy -- NEOTMS only. SALES_MANAGER and PM gate who may appear in a project''s 영업담당 / PM pickers and who the server will accept in prj_mgr_id / prj_pm_id. HR_MANAGEMENT, IMC and MICE gate nothing today -- they record which part of the business somebody belongs to, and no column asks for them yet; see NEOTMS_ASSIGNABLE_ATTRIBUTES in NeotmsAuthorities.ts for why they are deliberately not assignable. SUPERUSER overrides every permission check and must only be held by accounts carrying lpx.admin.access.';
 COMMENT ON COLUMN staff_attribute.attribute IS
   'One NEOTMS_USER_ATTRIBUTE_* name, from NEOTMS_USER_ATTRIBUTES in NeotmsAuthorities.ts. Held or not held -- there is no active flag, for the reason sys_role_permission gives.';
 -- ---------------------------------------------------------------------
