@@ -4681,9 +4681,7 @@ describe("the 분야 / 세부 분야 split", () => {
 
     const po = frontendFile("features", "purchaseorders", "PurchaseOrderFormModal.tsx");
     expect(po).toContain("unsetPlaceholder(isEdit, form.poWorkCode)");
-    expect(po).toContain("unsetPlaceholder(isEdit, form.poState)");
-    expect(po).toContain("unsetPlaceholder(isEdit, form.poSlang)");
-    expect(po).toContain("unsetPlaceholder(isEdit, form.poElang)");
+    // 2026-11-25: 진행 상태 is hidden on the PO form and the languages use LanguagePickers.
     expect(po).toContain("unsetPlaceholder(isEdit, form.poCoinCode)");
     expect(po).toContain("unsetPlaceholder(isEdit, form.poMoneyState)");
     expect(po).not.toContain('<option value="">선택 없음</option>');
@@ -5363,10 +5361,12 @@ describe("date defaults, bulk operations and in-place editing", () => {
       ["projects", "ProjectDetailView.tsx"],
     ] as const) {
       const view = frontendCode("features", feature, file);
-      expect(view).toContain("jobTypeSummary(");
+      // 2026-11-25: 프로젝트 상세 shows the plain language pair (+ a 작업 종류 column) instead.
+      if (feature === "jobs") expect(view).toContain("jobTypeSummary(");
+      else expect(view).toContain("{[job.jobSlang, job.jobElang].filter(Boolean).join(' → ') || '-'}");
       expect(view).toContain("<JobTypeSwapModal");
       // The cell only OPENS; the dialog owns the mutation. `InlinePickerCell` is that contract.
-      expect(view).toContain('title="두 번 눌러 업무 구분 변경"');
+      expect(view).toMatch(/title="두 번 눌러 업무 구분(·언어)? 변경"/);
       expect(view).not.toMatch(/isLinguistic\((row|job)\.jobType\)/);
     }
   });
@@ -5577,8 +5577,8 @@ describe("date defaults, bulk operations and in-place editing", () => {
      * own columns" below - this is the local statement of the two numbers, worth having because
      * these are the two tables that keep gaining columns.
      */
-    // 2026-11-25: the job table gained 인계 여부, so twelve.
-    expect(view.match(/colSpan=\{12\}/g)).toHaveLength(1);
+    // 2026-11-25: the job table gained 인계 여부 and 작업 종류, so thirteen.
+    expect(view.match(/colSpan=\{13\}/g)).toHaveLength(1);
     expect(view.match(/colSpan=\{10\}/g)).toHaveLength(1);
     // `indeterminate` is a DOM property with no HTML attribute, so it can only be set through a ref.
     // Without it a partial selection renders as an empty box, and the header reads "nothing selected"

@@ -65,7 +65,7 @@ import { latestHandoverByJob, tidyNumber } from './handoverState'
 import { JobHandoverFlow } from './JobHandoverFlow'
 import { ProjectAcceptanceModal } from './ProjectAcceptanceModal'
 import { JobPmName, JobPmSwapModal } from '@/features/jobs/JobPmSwapModal'
-import { JobTypeSwapModal, jobTypeSummary } from '@/features/jobs/JobTypeSwapModal'
+import { JobTypeSwapModal } from '@/features/jobs/JobTypeSwapModal'
 import { PoDocButtons, type PoPrintRequest } from '@/features/payment/print/PoDocButtons'
 import { PoPrintModal } from '@/features/payment/print/PoPrintModal'
 import { duplicatePurchaseOrderInput } from '@/features/purchaseorders/poDuplicate'
@@ -137,8 +137,7 @@ export function ProjectDetailView() {
   const updateJob = useUpdateJob()
   const updatePo = useUpdatePurchaseOrder()
 
-  /** 업무 분류 코드를 이름으로. 작업 표에서 쓴다 — 작업 목록 화면과 같은 처리다. */
-  const categoryName = useCodeNames(CODE_DOMAIN.JOBCAT)
+  const workName = useCodeNames(CODE_DOMAIN.WORK)
   /*
    * 분야 두 칸도 코드가 아니라 이름으로 읽는다. **도메인이 서로 다르다** — 분야(`prjField`)는
    * `PRJCAT`(큰 분류 일곱 개), 세부 분야(`prjField2`)는 `FIELD`(열여덟 개)에서 고른다. 한
@@ -823,7 +822,9 @@ export function ProjectDetailView() {
                     {/* 작업 목록 화면과 같은 열이다 — `JobPmName` 머리말 참고. */}
                     <th>담당 PM</th>
                     {/* 작업 목록 화면과 같은 한 열이다 — JobsView 의 같은 열 주석 참고. */}
-                    <th>언어 페어 · 업무 분류</th>
+                    {/* 언어 페어 — 업무 구분과 상관없이 출발어 → 도착어 (팀장님 2026-11-25). 작업 종류는 오른쪽 열. */}
+                    <th>언어 페어</th>
+                    <th>작업 종류</th>
                     <th>물량 · 단가</th>
                     <th>매출(원화)</th>
                     <th>PO</th>
@@ -841,7 +842,7 @@ export function ProjectDetailView() {
                     error={jobsQuery.error}
                     isEmpty={jobs.length === 0}
                     emptyText="이 프로젝트에는 작업이 없습니다. 작업을 추가하면 매출이 잡힙니다."
-                    colSpan={12}
+                    colSpan={13}
                   />
                   {jobs.map((job) => {
                     const poCount = poCountByJob.get(job.id) ?? 0
@@ -890,12 +891,13 @@ export function ProjectDetailView() {
                          */}
                         <InlinePickerCell
                           editable={mayUpdateJob && !jobBusy}
-                          title="두 번 눌러 업무 구분 변경"
+                          title="두 번 눌러 업무 구분·언어 변경"
                           className={ui.cellMuted}
                           onOpen={() => setSwappingType(job)}
                         >
-                          {jobTypeSummary(job, categoryName)}
+                          {[job.jobSlang, job.jobElang].filter(Boolean).join(' → ') || '-'}
                         </InlinePickerCell>
+                        <td>{workName(job.workCode) || '-'}</td>
                         {/*
                          * 비언어 작업에서는 두 줄 모두 `-` 가 된다 — 의도한 모습이고, JobsView 의
                          * 같은 칸에 이유가 적혀 있다. 네 값 모두 언어 상세 테이블의 컬럼이므로

@@ -609,6 +609,8 @@ export interface TranslatorRow {
   active: boolean
   createdAt: string | null
   updatedAt: string | null
+  /** 단가표의 언어쌍 코드 — `출발>도착` 을 쉼표로 (PO 번역가 추천에 보인다). */
+  tranLangs?: string | null
 }
 
 export interface TranslatorInput {
@@ -1085,6 +1087,8 @@ export interface PurchaseOrderRow {
   poCatWord: string | null
   poCatMid: string | null
   poCatStotal: string | null
+  /** CAT 분량 표 (db/013) — 일곱 구간 단어 수와 적용 가중치(%). */
+  poCatDetail?: { words: (number | null)[]; weights: number[] } | null
   poPmId: string | null
   poPmName: string | null
   translatorId: string | null
@@ -1199,6 +1203,7 @@ export interface PurchaseOrderInput {
   poCatWord?: string | null
   poCatMid?: string | null
   poCatStotal?: string | null
+  poCatDetail?: { words: (number | null)[]; weights: number[] } | null
   poPmId?: string | null
   translatorId?: string | null
   /** 업무 구분. 등록할 때 생략하면 서버가 **작업의 업무 구분**을 따른다. 그 뒤로는 따로 고친다. */

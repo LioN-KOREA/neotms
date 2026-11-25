@@ -69,6 +69,8 @@ export type TranslatorRow = {
   active: boolean;
   createdAt: string | null;
   updatedAt: string | null;
+  /** 단가표(translator_rate)의 언어쌍 — `출발>도착` 을 쉼표로 이은 코드. PO 의 번역가 추천에 보인다. */
+  tranLangs: string | null;
 };
 
 const translatorColumns = (q: string): string => `
@@ -94,7 +96,10 @@ const translatorColumns = (q: string): string => `
   ${q}.tran_reg_day  AS tran_reg_day,
   ${q}.active        AS tran_active,
   ${q}.created_at    AS created_at,
-  ${q}.updated_at    AS updated_at
+  ${q}.updated_at    AS updated_at,
+  (SELECT string_agg(DISTINCT concat_ws('>', r.tran_la_slang, r.tran_la_elang), ',')
+     FROM translator_rate r
+    WHERE r.translator_id = ${q}.id AND r.active AND (r.tran_la_slang IS NOT NULL OR r.tran_la_elang IS NOT NULL)) AS tran_langs
 `;
 
 export const toTranslatorRow = (row: SqlRow): TranslatorRow => ({
@@ -121,6 +126,7 @@ export const toTranslatorRow = (row: SqlRow): TranslatorRow => ({
   active: readBool(row, "tran_active") ?? false,
   createdAt: readText(row, "created_at"),
   updatedAt: readText(row, "updated_at"),
+  tranLangs: readText(row, "tran_langs"),
 });
 
 /* -------------------------------------------------------------------------- */

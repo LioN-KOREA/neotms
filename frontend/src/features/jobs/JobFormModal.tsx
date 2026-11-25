@@ -735,54 +735,75 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           )}
         </div>
 
-        <div className={ui.fieldWide}>
-          <label className={`${ui.label} ${ui.required}`} htmlFor="job-name">
-            작업명
-          </label>
-          <input
-            id="job-name"
-            className={ui.input}
-            value={form.jobName}
-            onChange={(e) => set('jobName', e.target.value)}
-            required
-          />
-        </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-work">
-            작업 종류
-          </label>
-          {/*
-           * `sys_code` 에서 온다. 전에는 이 파일에 하드코딩된 `WORK_CODES` 를 썼고, 그 목록이
-           * DB 의 코드 테이블과 어긋나면 고를 수는 있지만 저장은 23503 으로 거절되는 선택지가
-           * 되었다 — `job.work_code` 가 `sys_code (code)` 를 참조하는 외래키다.
-           */}
-          <CodeSelect
-            id="job-work"
-            domain={CODE_DOMAIN.WORK}
-            value={form.workCode}
-            onChange={(v) => set('workCode', v)}
-            placeholder={unsetWork}
-          />
-        </div>
 
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-state">
-            진행 상태
-          </label>
-          <select
-            id="job-state"
-            className={ui.select}
-            value={form.jobState}
-            onChange={(e) => set('jobState', e.target.value)}
-          >
-            {unsetState ? <option value="">{unsetState}</option> : null}
-            {codeOptions(JOB_STATES, form.jobState).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+
+        {/* 작업명(절반) · 작업 종류 · 진행 상태 · 업무 구분 — 한 줄 (팀장님 2026-11-25). */}
+        <div className={ui.formRow} style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr' }}>
+          <div className={ui.field}>
+            <label className={`${ui.label} ${ui.required}`} htmlFor="job-name">
+              작업명
+            </label>
+            <input
+              id="job-name"
+              className={ui.input}
+              value={form.jobName}
+              onChange={(e) => set('jobName', e.target.value)}
+              required
+            />
+          </div>
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-work">
+              작업 종류
+            </label>
+            {/*
+             * `sys_code` 에서 온다. 전에는 이 파일에 하드코딩된 `WORK_CODES` 를 썼고, 그 목록이
+             * DB 의 코드 테이블과 어긋나면 고를 수는 있지만 저장은 23503 으로 거절되는 선택지가
+             * 되었다 — `job.work_code` 가 `sys_code (code)` 를 참조하는 외래키다.
+             */}
+            <CodeSelect
+              id="job-work"
+              domain={CODE_DOMAIN.WORK}
+              value={form.workCode}
+              onChange={(v) => set('workCode', v)}
+              placeholder={unsetWork}
+            />
+          </div>
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-state">
+              진행 상태
+            </label>
+            <select
+              id="job-state"
+              className={ui.select}
+              value={form.jobState}
+              onChange={(e) => set('jobState', e.target.value)}
+            >
+              {unsetState ? <option value="">{unsetState}</option> : null}
+              {codeOptions(JOB_STATES, form.jobState).map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-type">
+              업무 구분
+            </label>
+            {/*
+             * 여기만 `unsetPlaceholder` 를 쓰지 않고 바로 `null` 이다. `job.job_type` 은
+             * NOT NULL DEFAULT 'LINGUISTICS' 이므로(db/011_job_types.sql) 레거시 행에도 빈 값이
+             * 있을 수 없고, 보존해야 할 '지정 없음' 이 애초에 존재하지 않는다.
+             */}
+            <CodeSelect
+              id="job-type"
+              domain={CODE_DOMAIN.JOBTYPE}
+              value={form.jobType}
+              onChange={(v) => set('jobType', v)}
+              placeholder={null}
+            />
+          </div>
         </div>
 
         {/*
@@ -815,21 +836,33 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
          * MICE 작업을 출발어·도착어를 비워 둔 번역 작업으로 기록하던 것이 이 변경 전의 방식이었고,
          * 그렇게 들어간 행은 '담당자가 언어를 안 적은 번역 작업' 과 구별되지 않았다.
          */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="job-type">
-            업무 구분
-          </label>
-          {/*
-           * 여기만 `unsetPlaceholder` 를 쓰지 않고 바로 `null` 이다. `job.job_type` 은
-           * NOT NULL DEFAULT 'LINGUISTICS' 이므로(db/011_job_types.sql) 레거시 행에도 빈 값이
-           * 있을 수 없고, 보존해야 할 '지정 없음' 이 애초에 존재하지 않는다.
-           */}
-          <CodeSelect
-            id="job-type"
-            domain={CODE_DOMAIN.JOBTYPE}
-            value={form.jobType}
-            onChange={(v) => set('jobType', v)}
-            placeholder={null}
+
+        {/* 시작일 · 납기 — 언어 칸 위로 (팀장님 2026-11-25). */}
+        <div className={ui.datePair}>
+          <DateField
+            id="job-sday"
+            label="시작일"
+            value={form.jobSday}
+            onChange={(v) => setPeriod(v, form.jobEday, 'start')}
+            disabled={pending}
+            time={{
+              value: form.jobSdayTime,
+              onChange: (v) => set('jobSdayTime', v),
+              ariaLabel: '시작 시각',
+            }}
+          />
+
+          <DateField
+            id="job-eday"
+            label="납기"
+            value={form.jobEday}
+            onChange={(v) => setPeriod(form.jobSday, v, 'end')}
+            disabled={pending}
+            time={{
+              value: form.jobEdayTime,
+              onChange: (v) => set('jobEdayTime', v),
+              ariaLabel: '납기 시각',
+            }}
           />
         </div>
 
@@ -882,18 +915,22 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
          * 적어 넣었고, 그 행은 "1 단어 번역" 과 생긴 것이 같아졌다. 칸을 없애는 것이 그 관행을
          * 없애는 유일한 방법이다 — 비워 두라고 안내하는 것으로는 안 된다.
          */}
-        {/* 언어별 설정 표 + 할인 · 총 합산 (팀장님 2026-11-25). */}
+        {/* 언어별 설정 표 (팀장님 2026-11-25). 할인·총 합산은 아래 금액 줄로. */}
         {linguistic ? (
-          <>
-            <TargetTable
-              lines={targets}
-              onChange={updateTargets}
-              coin={form.coinCode}
-              editMode={isEdit}
-              langPlaceholder={unsetPlaceholder(isEdit, form.jobElang)}
-              disabled={pending}
-            />
-            <div className={ui.formRow} style={{ gridTemplateColumns: '1fr 1fr' }}>
+          <TargetTable
+            lines={targets}
+            onChange={updateTargets}
+            coin={form.coinCode}
+            editMode={isEdit}
+            langPlaceholder={unsetPlaceholder(isEdit, form.jobElang)}
+            disabled={pending}
+          />
+        ) : null}
+
+        {/* 할인금액 · 총 합산 · 통화 · 환율 · 원화 환산 합계 — 한 줄 (팀장님 2026-11-25). 환율은 보기 전용. */}
+        <div className={ui.formRow} style={{ gridTemplateColumns: linguistic ? '1fr 1fr 0.8fr 1.4fr 1fr' : '1fr 0.8fr 1.4fr 1fr' }}>
+          {linguistic ? (
+            <>
               <div className={ui.field}>
                 <label className={ui.label} htmlFor="job-dis">
                   할인금액 ({form.coinCode || 'KRW'})
@@ -917,32 +954,28 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
                   언어별 합산 {formatMoney(targetsSubtotal)} − 할인 {formatMoney(toDecimalInput(form.jobPriceDis) ?? '0')}
                 </span>
               </div>
+            </>
+          ) : (
+            <div className={ui.field}>
+              <label className={ui.label} htmlFor="job-sum">
+                합계 ({form.coinCode || '외화'})
+              </label>
+              <NumberInput
+                id="job-sum"
+                readOnly={form.jobType === JOB_TYPE_LINGUISTIC}
+                value={form.jobPriceSum}
+                onValueChange={(v) => {
+                  if (linguistic) setSumEdited(true)
+                  set('jobPriceSum', v)
+                }}
+              />
+              {linguistic ? null : (
+                <span className={ui.hint}>
+                  물량·단가 없이 전체 금액을 직접 넣습니다. 원화 환산 합계는 환율을 곱해 따라옵니다.
+                </span>
+              )}
             </div>
-          </>
-        ) : (
-          <div className={ui.field}>
-            <label className={ui.label} htmlFor="job-sum">
-              합계 ({form.coinCode || '외화'})
-            </label>
-            <NumberInput
-              id="job-sum"
-              readOnly={form.jobType === JOB_TYPE_LINGUISTIC}
-              value={form.jobPriceSum}
-              onValueChange={(v) => {
-                if (linguistic) setSumEdited(true)
-                set('jobPriceSum', v)
-              }}
-            />
-            {linguistic ? null : (
-              <span className={ui.hint}>
-                물량·단가 없이 전체 금액을 직접 넣습니다. 원화 환산 합계는 환율을 곱해 따라옵니다.
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* 통화 / 환율 / 원화 환산 합계 — 한 줄. 환율은 보기 전용(정산 때 정해진다). */}
-        <div className={ui.formRow} style={{ gridTemplateColumns: '1fr 1.3fr 1fr' }}>
+          )}
           <div className={ui.field}>
             <label className={ui.label} htmlFor="job-coin">
               통화
@@ -1031,33 +1064,6 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
           </div>
         </div>
 
-        <div className={ui.datePair}>
-          <DateField
-            id="job-sday"
-            label="시작일"
-            value={form.jobSday}
-            onChange={(v) => setPeriod(v, form.jobEday, 'start')}
-            disabled={pending}
-            time={{
-              value: form.jobSdayTime,
-              onChange: (v) => set('jobSdayTime', v),
-              ariaLabel: '시작 시각',
-            }}
-          />
-
-          <DateField
-            id="job-eday"
-            label="납기"
-            value={form.jobEday}
-            onChange={(v) => setPeriod(form.jobSday, v, 'end')}
-            disabled={pending}
-            time={{
-              value: form.jobEdayTime,
-              onChange: (v) => set('jobEdayTime', v),
-              ariaLabel: '납기 시각',
-            }}
-          />
-        </div>
 
         <div className={ui.fieldWide}>
           <label className={ui.label} htmlFor="job-memo">

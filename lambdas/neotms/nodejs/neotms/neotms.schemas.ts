@@ -361,6 +361,15 @@ export const PurchaseOrderCreateSchema = v.object({
   poCatWord: settable(VolumeSchema),
   poCatMid: settable(VolumeSchema),
   poCatStotal: settable(VolumeSchema),
+  /** CAT 분량 표 (db/013) — 일곱 구간 단어 수(빈 칸 null)와 적용 가중치(%). */
+  poCatDetail: v.optional(
+    v.nullable(
+      v.object({
+        words: v.pipe(v.array(v.nullable(v.pipe(v.number(), v.minValue(0), v.maxValue(100_000_000)))), v.length(7)),
+        weights: v.pipe(v.array(v.pipe(v.number(), v.minValue(0), v.maxValue(100))), v.length(7)),
+      }),
+    ),
+  ),
   poPmId: settable(IdSchema),
   /** The vendor being paid. */
   translatorId: settable(IdSchema),

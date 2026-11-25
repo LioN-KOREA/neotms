@@ -112,6 +112,8 @@ export type PurchaseOrderRow = {
   poCatWord: string | null;
   poCatMid: string | null;
   poCatStotal: string | null;
+  /** CAT 분량 표 — 일곱 구간 단어 수와 적용 가중치(db/013). 없으면 null. */
+  poCatDetail: { words: (number | null)[]; weights: number[] } | null;
   poPmId: string | null;
   poPmName: string | null;
   translatorId: string | null;
@@ -245,6 +247,7 @@ const poColumns = (q: string): string => `
   ${q}.po_cat_word      AS po_cat_word,
   ${q}.po_cat_mid       AS po_cat_mid,
   ${q}.po_cat_stotal    AS po_cat_stotal,
+  ${q}.po_cat_detail    AS po_cat_detail,
   ${q}.po_pm_id         AS po_pm_id,
   ${q}.po_pm_name       AS po_pm_name,
   ${q}.translator_id    AS translator_id,
@@ -356,6 +359,7 @@ export const toPurchaseOrderRow = (row: SqlRow): PurchaseOrderRow => ({
   poCatWord: readMoney(row, "po_cat_word"),
   poCatMid: readMoney(row, "po_cat_mid"),
   poCatStotal: readMoney(row, "po_cat_stotal"),
+  poCatDetail: readCatDetail(row["po_cat_detail"]),
   poPmId: readId(row, "po_pm_id"),
   poPmName: readText(row, "po_pm_name"),
   translatorId: readId(row, "translator_id"),
@@ -648,6 +652,25 @@ export const PoGetOps: (caller: NeotmsCaller, id: string) => SqlOps<PurchaseOrde
 /* Writes                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/** jsonb → CAT 표. 모양이 틀리면 null (표를 비운 것으로). */
+function readCatDetail(raw: unknown): PurchaseOrderRow["poCatDetail"] {
+  let v: unknown = raw;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return null;
+    }
+  }
+  if (!v || typeof v !== "object") return null;
+  const o = v as { words?: unknown; weights?: unknown };
+  if (!Array.isArray(o.words) || !Array.isArray(o.weights)) return null;
+  return {
+    words: o.words.map((n) => (typeof n === "number" && Number.isFinite(n) ? n : null)),
+    weights: o.weights.map((n) => (typeof n === "number" && Number.isFinite(n) ? n : 0)),
+  };
+}
+
 /**
  * The writable columns.
  *
@@ -670,6 +693,7 @@ const PO_FIELDS: readonly FieldSpec<PurchaseOrderUpdate & { jobId?: string }>[] 
   { column: "po_cat_word", kind: "money", read: (i) => i.poCatWord },
   { column: "po_cat_mid", kind: "money", read: (i) => i.poCatMid },
   { column: "po_cat_stotal", kind: "money", read: (i) => i.poCatStotal },
+  { column: "po_cat_detail", kind: "json", read: (i) => i.poCatDetail },
   { column: "po_pm_id", kind: "id", read: (i) => i.poPmId },
   { column: "translator_id", kind: "id", read: (i) => i.translatorId },
   /**

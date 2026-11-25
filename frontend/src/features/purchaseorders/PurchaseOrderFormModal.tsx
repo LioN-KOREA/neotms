@@ -3,7 +3,9 @@ import {
   useCreatePurchaseOrder,
   useUpdatePurchaseOrder,
 } from '@/apis/queries/neotms.mutation'
-import { useFxRate, useJob } from '@/apis/queries/neotms.query'
+import { useFxRate, useJob, useProfile } from '@/apis/queries/neotms.query'
+import { NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT, NEOTMS_USER_ATTRIBUTE_SUPERUSER } from '@/apis/neotms.authorities'
+import { hasAttribute } from '@/shared/permissions'
 import {
   CODE_DOMAIN,
   codeOptions,
@@ -13,7 +15,6 @@ import {
   MONEY_STATE_UNPAID,
   MONEY_STATES,
   PO_STATE_UNAPPROVED,
-  PO_STATES,
   unsetPlaceholder,
 } from '@/apis/neotms.codes'
 import type {
@@ -35,8 +36,10 @@ import {
   toDecimalInput,
 } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
-import { JobPicker } from '@/features/jobs/JobPicker'
-import { TranslatorPicker } from '@/features/translators/TranslatorPicker'
+import { LanguagePickers } from '@/features/jobs/TargetLanguages'
+import { CatTable } from './CatTable'
+import { catDetail, catWeightsFor, CAT_BANDS, DEFAULT_CAT_WEIGHTS } from './catMath'
+import { PoJobPicker, PoTranslatorPicker } from './PoPickers'
 
 /**
  * 금액을 바꾸는 칸. 바뀌면 저장된 원화 금액은 더 이상 그 금액에 대한 사실이 아니다 —
@@ -166,6 +169,11 @@ export function PurchaseOrderFormModal({
     poMoneyDay: toDateInputValue(po?.poMoneyDay),
     poMoneyPrice: po?.poMoneyPrice ?? '',
     poContent: po?.poContent ?? '',
+    /** CAT 분량 표의 단어 일곱 칸 (db/013). */
+    catWords: CAT_BANDS.map((_, i) => {
+      const n = po?.poCatDetail?.words[i]
+      return n === null || n === undefined ? '' : String(n)
+    }),
   })
   const [dirty, setDirty] = useState(false)
 
@@ -210,7 +218,6 @@ export function PurchaseOrderFormModal({
    * 대신 들어가므로(`poType`), '지정 없음' 으로 남을 상태가 존재하지 않는다.
    */
   const unsetWork = unsetPlaceholder(isEdit, form.poWorkCode)
-  const unsetState = unsetPlaceholder(isEdit, form.poState)
   const unsetCoin = unsetPlaceholder(isEdit, form.poCoinCode)
   const unsetMoney = unsetPlaceholder(isEdit, form.poMoneyState)
 
@@ -293,6 +300,30 @@ export function PurchaseOrderFormModal({
     setDirty(true)
     setForm((prev) => ({ ...prev, poSday: next.start, poEday: next.end }))
   }
+
+  /* CAT 분량 표 — 가중치는 번역가로 정해지고(고칠 수 없다), 합계가 물량이 된다. */
+  const weights = catWeightsFor(translator?.title)
+  const catInfo = catDetail(form.catWords, weights)
+  const withCat = (prev: typeof form, words: string[], w: readonly number[]): typeof form => {
+    const info = catDetail(words, w)
+    const next = { ...prev, catWords: words }
+    if (info) {
+      next.poVolume = String(info.total)
+      next.poUnitCode = '단어'
+      if (!sumEdited) next.poPriceSum = computeSum(next, true) ?? ''
+    }
+    return next
+  }
+  const setCatWords = (words: string[]) => {
+    setDirty(true)
+    setMoneyTouched(true)
+    setForm((prev) => withCat(prev, words, weights))
+  }
+
+  /** 세금·지급 칸은 경영지원부와 시스템관리자에게만 (팀장님 2026-11-25). */
+  const { data: profile } = useProfile()
+  const mayFinance =
+    hasAttribute(profile, NEOTMS_USER_ATTRIBUTE_HR_MANAGEMENT) || hasAttribute(profile, NEOTMS_USER_ATTRIBUTE_SUPERUSER)
 
   const applySuggestion = () => {
     setDirty(true)
@@ -416,16 +447,21 @@ export function PurchaseOrderFormModal({
        */
       poName: null,
       poWorkCode: form.poWorkCode.trim() || null,
-      poCatUse: form.poCatUse,
       /*
-       * CAT 칸은 사용 여부를 끄면 비워서 보낸다.
-       *
-       * 끈 상태로 값이 남아 있으면, 나중에 "CAT 안 쓴 발주인데 분석 단어수가 있다" 가 되고
-       * 그 숫자가 어디서 왔는지 알 방법이 없다.
+       * CAT 칸은 CAT 분량 표에서 채운다 (팀장님 2026-11-25). 표가 비었으면 비운다 — 다만 표가 생기기
+       * 전에 저장된 PO(표 값 없이 옛 칸만 있는 것)는 옛 값을 그대로 둔다.
        */
-      poCatWord: form.poCatUse ? toDecimalInput(form.poCatWord) : null,
-      poCatMid: form.poCatUse ? toDecimalInput(form.poCatMid) : null,
-      poCatStotal: form.poCatUse ? toDecimalInput(form.poCatStotal) : null,
+      ...(catInfo
+        ? {
+            poCatUse: true,
+            poCatWord: String(catInfo.newWords),
+            poCatMid: String(catInfo.midWords),
+            poCatStotal: String(catInfo.total),
+            poCatDetail: catInfo.detail,
+          }
+        : po && !po.poCatDetail
+          ? {}
+          : { poCatUse: false, poCatWord: null, poCatMid: null, poCatStotal: null, poCatDetail: null }),
       translatorId: translator?.id ?? null,
       ...typed,
       ...detail,
@@ -528,39 +564,33 @@ export function PurchaseOrderFormModal({
               </div>
             </div>
           ) : (
-            <JobPicker
+            <PoJobPicker
               value={job}
-              onChange={(option) => {
+              projectId={jobScopeProjectId}
+              disabled={pending}
+              onChange={(option, row) => {
                 setDirty(true)
                 setJob(option)
+                // 고른 작업의 언어를 미리 채운다 — 고칠 수 있다 (팀장님 2026-11-25).
+                if (row && (row.jobSlang || row.jobElang)) {
+                  setForm((prev) => ({ ...prev, poSlang: row.jobSlang ?? prev.poSlang, poElang: row.jobElang ?? prev.poElang }))
+                }
               }}
-              required
-              disabled={pending}
-              projectId={jobScopeProjectId}
             />
           )}
         </div>
 
-        {/*
-         * 번역가는 필수가 아니다.
-         *
-         * 발주서를 먼저 만들고 사람을 나중에 정하는 순서가 실제로 있다(단가 협의 중). 다만
-         * 번역가가 비어 있으면 누구에게 지급해야 하는지 알 수 없으므로 안내를 붙인다.
-         */}
         <div className={ui.fieldWide}>
-          <TranslatorPicker
+          <PoTranslatorPicker
             value={translator}
+            disabled={pending}
             onChange={(option) => {
               setDirty(true)
               setTranslator(option)
+              // 번역가에 따라 CAT 가중치가 바뀐다 — 물량도 다시 계산.
+              setForm((prev) => withCat(prev, prev.catWords, catWeightsFor(option?.title)))
             }}
-            disabled={pending}
           />
-          {!translator ? (
-            <span className={ui.hint}>
-              비워 둘 수 있습니다. 다만 번역가가 없으면 지급 대상이 정해지지 않습니다.
-            </span>
-          ) : null}
         </div>
 
         <div className={ui.field}>
@@ -574,26 +604,6 @@ export function PurchaseOrderFormModal({
             onChange={(v) => set('poWorkCode', v)}
             placeholder={unsetWork}
           />
-        </div>
-
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-state">
-            진행 상태
-          </label>
-          <select
-            id="po-state"
-            className={ui.select}
-            value={form.poState}
-            onChange={(e) => set('poState', e.target.value)}
-          >
-            {/* '선택 없음' 이 없다 — 기본값은 `미승인` 이다. `unsetWork` 주석 참고. */}
-            {unsetState ? <option value="">{unsetState}</option> : null}
-            {codeOptions(PO_STATES, form.poState).map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
         </div>
 
         {/*
@@ -622,51 +632,16 @@ export function PurchaseOrderFormModal({
           ) : null}
         </div>
 
-        {/*
-         * 언어쌍과 업무 분류는 둘 중 하나만 받는다 — JobFormModal 의 같은 자리 주석 참고.
-         *
-         * 언어쌍 두 칸은 자유 입력이었다. `po_slang`·`po_elang` 도 `sys_code (code)` 참조이므로
-         * 작업 쪽과 같은 이유로 드롭다운이어야 한다.
-         *
-         * 발주의 언어쌍은 보통 작업의 언어쌍과 같지만 자동으로 채우지 않는다 — 한 작업을 두
-         * 언어로 쪼개어 발주하는 경우가 있고, 그때 자동 입력된 값은 **맞아 보이기 때문에**
-         * 아무도 고치지 않는다. (업무 구분은 반대다. 그쪽은 둘 중 어느 칸을 보여 줄지를
-         * 결정하므로 비워 둘 수가 없다.)
-         *
-         * DB 쪽에서는 어느 쪽도 필수가 아니다. 언어쌍이 비어 있는 발주가 이미 수천 건 있다.
-         *
-         * 그 사실과 '선택 없음' 을 없앤 것은 어긋나지 않는다. 화면이 거절하는 것이 아니라 **신규
-         * 등록의 기본값을 빈 값에서 첫 언어로 옮긴 것**이고, 이미 비어 있는 행을 열면 '지정 없음'
-         * 으로 남는다 — JobFormModal 의 같은 자리와 같은 처방이다.
-         */}
+        {/* 출발어 · 도착어 — 그 둘만 한 줄, 한 쌍만 (작업 등록 창과 같은 입력 방식, 팀장님 2026-11-25). */}
         {linguistic ? (
-          <>
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="po-slang">
-                출발어
-              </label>
-              <CodeSelect
-                id="po-slang"
-                domain={CODE_DOMAIN.LANG}
-                value={form.poSlang}
-                onChange={(v) => set('poSlang', v)}
-                placeholder={unsetPlaceholder(isEdit, form.poSlang)}
-              />
-            </div>
-
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="po-elang">
-                도착어
-              </label>
-              <CodeSelect
-                id="po-elang"
-                domain={CODE_DOMAIN.LANG}
-                value={form.poElang}
-                onChange={(v) => set('poElang', v)}
-                placeholder={unsetPlaceholder(isEdit, form.poElang)}
-              />
-            </div>
-          </>
+          <LanguagePickers
+            source={form.poSlang}
+            onSource={(v) => set('poSlang', v)}
+            target={form.poElang}
+            onTarget={(v) => set('poElang', v)}
+            sourcePlaceholder="출발어 고르기"
+            disabled={pending}
+          />
         ) : (
           <div className={ui.field}>
             <label className={ui.label} htmlFor="po-category">
@@ -681,12 +656,9 @@ export function PurchaseOrderFormModal({
           </div>
         )}
 
-        {/*
-         * 물량·단위·단가 — **언어 발주에만 그린다.** 세 칸 모두 `po_detail_linguistic` 의
-         * 컬럼이고(db/012_job_pricing.sql), 비언어 발주는 아래 합계에 금액을 직접 넣는다.
-         */}
+        {/* 물량 + CAT 분량 표. 표에 단어를 넣으면 합계가 물량이 되고 단위는 '단어' 로 고정된다. */}
         {linguistic ? (
-          <>
+          <div className={ui.formRow} style={{ gridTemplateColumns: 'minmax(170px, 210px) 1fr' }}>
             <div className={ui.field}>
               <label className={ui.label} htmlFor="po-volume">
                 물량
@@ -704,12 +676,24 @@ export function PurchaseOrderFormModal({
                   domain={CODE_DOMAIN.UNIT}
                   value={form.poUnitCode}
                   onChange={(v) => set('poUnitCode', v)}
-                  placeholder="단위"
+                  placeholder={null}
+                  disabled={catInfo !== null}
                   silent
                 />
               </div>
             </div>
+            <div className={ui.field}>
+              <span className={ui.label}>
+                CAT 분량 <span className={ui.hint}>(단어만 입력 · 시트에서 여러 칸 붙여넣기 가능{weights === DEFAULT_CAT_WEIGHTS ? '' : ' · 이 번역가 전용 가중치'})</span>
+              </span>
+              <CatTable words={form.catWords} weights={weights} onChange={setCatWords} disabled={pending} />
+            </div>
+          </div>
+        ) : null}
 
+        {/* 단가 · 통화 · 환율 · 합계 — 한 줄 (팀장님 2026-11-25). 원화 환산 합계 칸은 숨긴다(저장은 그대로). */}
+        <div className={ui.formRow} style={{ gridTemplateColumns: linguistic ? '1fr 0.9fr 1.5fr 1fr' : '0.9fr 1.5fr 1fr' }}>
+          {linguistic ? (
             <div className={ui.field}>
               <label className={ui.label} htmlFor="po-price">
                 단가
@@ -722,9 +706,7 @@ export function PurchaseOrderFormModal({
                 onChange={(e) => set('poPrice', e.target.value)}
               />
             </div>
-          </>
-        ) : null}
-
+          ) : null}
         <div className={ui.field}>
           <label className={ui.label} htmlFor="po-coin">
             통화
@@ -813,28 +795,6 @@ export function PurchaseOrderFormModal({
             </span>
           )}
         </div>
-
-        {/* 원화 환산 합계. **읽기 전용 파생값이다** — `JobFormModal` 의 같은 자리 주석 참고. */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-ksum">
-            원화 환산 합계 = 원가
-          </label>
-          <input
-            id="po-ksum"
-            className={`${ui.input} ${ui.inputNum}`}
-            value={formatMoney(ksum)}
-            readOnly
-          />
-          <span className={ui.hint}>
-            리포트의 원가는 이 값의 합입니다.
-            {settled ? null : effectiveRate === null ? null : (
-              <>
-                {' '}
-                합계 × {formatMoney(effectiveRate)}
-                {fx.effectiveDate ? ` (${formatDate(fx.effectiveDate)} 기준)` : ''}
-              </>
-            )}
-          </span>
         </div>
 
         {/* 기간의 두 끝은 한 줄에 묶는다 — 프로젝트 서식과 같은 이유(그쪽 `.datePair` 주석). */}
@@ -868,6 +828,9 @@ export function PurchaseOrderFormModal({
           </DateField>
         </div>
 
+        {/* 세금 · 지급 — 경영지원부(와 시스템관리자)에게만 보인다 (팀장님 2026-11-25). 숨겨도 값은 그대로 저장된다. */}
+        {mayFinance ? (
+          <>
         {/*
          * 세금 세 칸은 레거시 컬럼을 그대로 둔 것이다.
          *
@@ -967,63 +930,6 @@ export function PurchaseOrderFormModal({
           />
           <span className={ui.hint}>실제 지급한 금액입니다. 원가와 다를 수 있습니다.</span>
         </div>
-
-        <div className={ui.fieldWide}>
-          <label className={ui.check}>
-            <input
-              type="checkbox"
-              checked={form.poCatUse}
-              onChange={(e) => set('poCatUse', e.target.checked)}
-            />
-            <span className={ui.checkText}>
-              <span className={ui.checkLabel}>CAT 분석 사용</span>
-              <span className={ui.checkDesc}>
-                켜면 아래에 CAT 분석값 칸이 나타납니다. 끄면 입력한 분석값은 저장되지 않습니다.
-              </span>
-            </span>
-          </label>
-        </div>
-
-        {form.poCatUse ? (
-          <>
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="po-cat-word">
-                신규 단어수
-              </label>
-              <input
-                id="po-cat-word"
-                className={`${ui.input} ${ui.inputNum}`}
-                inputMode="decimal"
-                value={form.poCatWord}
-                onChange={(e) => set('poCatWord', e.target.value)}
-              />
-            </div>
-
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="po-cat-mid">
-                부분 일치
-              </label>
-              <input
-                id="po-cat-mid"
-                className={`${ui.input} ${ui.inputNum}`}
-                inputMode="decimal"
-                value={form.poCatMid}
-                onChange={(e) => set('poCatMid', e.target.value)}
-              />
-            </div>
-
-            <div className={ui.field}>
-              <label className={ui.label} htmlFor="po-cat-stotal">
-                분석 합계
-              </label>
-              <input
-                id="po-cat-stotal"
-                className={`${ui.input} ${ui.inputNum}`}
-                inputMode="decimal"
-                value={form.poCatStotal}
-                onChange={(e) => set('poCatStotal', e.target.value)}
-              />
-            </div>
           </>
         ) : null}
 

@@ -38,12 +38,13 @@ export function TimeInput(props: {
   const step = (delta: number) => onChange(shiftHour(parseTimeText(text) ?? value, delta, nowTimeKst()))
 
   return (
-    <div className={ui.timeBox}>
-      <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} disabled={disabled} aria-label={`${ariaLabel} 한 시간 앞으로`} title="한 시간 앞으로" onClick={() => step(-1)}>
+    // 테두리 하나 안에 ‹ 시간 › (팀장님 2026-11-25) — 단추는 칸 안쪽 양 끝, 늘 연하게 보인다.
+    <div className={`${ui.timeBox} ${bad ? ui.timeBoxBad : ''}`} aria-disabled={disabled || undefined}>
+      <button type="button" className={ui.timeStep} disabled={disabled} aria-label={`${ariaLabel} 한 시간 앞으로`} title="한 시간 앞으로" onClick={() => step(-1)}>
         ‹
       </button>
       <input
-        className={`${ui.input} ${ui.timeText}`}
+        className={ui.timeText}
         aria-label={ariaLabel}
         aria-invalid={bad || undefined}
         inputMode="numeric"
@@ -64,7 +65,7 @@ export function TimeInput(props: {
           }
         }}
       />
-      <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} disabled={disabled} aria-label={`${ariaLabel} 한 시간 뒤로`} title="한 시간 뒤로" onClick={() => step(1)}>
+      <button type="button" className={ui.timeStep} disabled={disabled} aria-label={`${ariaLabel} 한 시간 뒤로`} title="한 시간 뒤로" onClick={() => step(1)}>
         ›
       </button>
     </div>

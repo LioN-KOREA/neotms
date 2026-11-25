@@ -2015,9 +2015,24 @@
 .dateIcon:disabled { opacity: 0.4; cursor: default; }
 
 /* 24시간 시각 칸 — ‹ 09:00 › */
-.timeBox { display: grid; grid-template-columns: auto 1fr auto; gap: 2px; align-items: center; min-width: 0; }
-.timeBox > .btn { padding: 0 6px; min-width: 0; font-size: 15px; }
-.timeText { text-align: center; min-width: 0; font-variant-numeric: tabular-nums; }
+/* 시간 칸 — 테두리 하나 안에 ‹ 시간 › (팀장님 2026-11-25). 겉모양은 .input 과 같다. */
+.timeBox {
+  display: flex; align-items: stretch; min-width: 0; height: var(--nt-ctl-h);
+  border: 1px solid var(--nt-line2); border-radius: var(--nt-r-sm); background: var(--nt-surface); overflow: hidden;
+}
+.timeBox:focus-within { border-color: var(--nt-ind); box-shadow: 0 0 0 2px var(--nt-tint2); }
+.timeBoxBad { border-color: var(--nt-dan); }
+.timeBox[aria-disabled='true'] { opacity: 0.6; }
+.timeStep {
+  flex: none; width: 24px; border: 0; padding: 0; background: transparent; color: #a0a6ae;
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.timeStep:hover:not(:disabled) { color: var(--nt-ink); background: rgba(127, 127, 127, 0.12); }
+.timeStep:disabled { cursor: default; }
+.timeText {
+  flex: 1 1 auto; min-width: 0; border: 0; outline: none; background: transparent; color: var(--nt-ink);
+  font: inherit; font-size: 12.5px; text-align: center; font-variant-numeric: tabular-nums; padding: 0;
+}
 
 /* 입력하면서 고르는 칸 (SuggestPicker, 2026-11-25) */
 .suggestWrap { position: relative; }
@@ -2091,6 +2106,15 @@
 .tgLine { display: contents; }
 .tgCell { display: flex; align-items: flex-start; gap: 4px; padding: 5px 6px; border-bottom: 1px solid var(--nt-line, #e5e7eb); min-width: 0; font-size: 12.5px; }
 .tgHead { background: #FFD966; font-weight: 700; align-items: center; position: sticky; top: 0; z-index: 1; }
+/* 머리 칸 사이 연한 회색 경계 + 가운데 정렬 (팀장님 2026-11-25). */
+.tgHead { justify-content: center; text-align: center; border-right: 1px solid rgba(0, 0, 0, 0.12); }
+.tgHead:nth-child(7) { border-right: 0; }
+/* 단가 · 고정가격 · 무료 — 하나만 고르는 단추, 고른 것은 포인트 색 */
+.tgModes { display: flex; width: 100%; border: 1px solid #c6cbd2; border-radius: 4px; overflow: hidden; }
+.tgMode { flex: 1 1 0; min-width: 0; border: 0; border-right: 1px solid #c6cbd2; background: #fff; padding: 2px 0; font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap; color: var(--nt-ink2, #555); }
+.tgMode:last-child { border-right: 0; }
+.tgMode:hover:not(:disabled) { background: #fdf3e3; }
+.tgModeOn, .tgModeOn:hover:not(:disabled) { background: #EC9820; color: #fff; font-weight: 700; }
 .tgEmpty { grid-column: 1 / -1; padding: 22px; text-align: center; color: var(--nt-ink3, #8a919b); font-size: 12.5px; }
 .tgLang { flex: 1; font-weight: 600; padding-top: 5px; }
 .tgRemove { border: none; background: transparent; color: #d93025; font-size: 16px; line-height: 1; cursor: pointer; padding: 4px; }
@@ -2149,7 +2173,7 @@
 
 /* 날짜 칸 배치 (DateField, 팀장님 2026-11-25): 위 줄 [날짜][시간], 아래 줄 각 칸의 단추. */
 .dateGrid { position: relative; display: grid; grid-template-columns: 1fr; gap: 4px; }
-.dateGridTime { grid-template-columns: minmax(0, 1fr) 110px; }
+.dateGridTime { grid-template-columns: minmax(0, 1fr) 130px; }
 .dateTimeCell { min-width: 0; }
 .dateTimeBtns { grid-template-columns: repeat(2, 1fr); }
 
@@ -2161,3 +2185,15 @@
 .hoReject { color: #d93025; font-weight: 700; }
 .hoRevision { border: 0; background: transparent; padding: 0; font: inherit; color: #d93025; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .hoStamp { margin-left: 6px; font-size: 11px; color: #8a94a3; }
+
+/* PO 의 CAT 분량 표 (팀장님 2026-11-25) — 단어 줄만 입력, 가중치·소계·합계는 회색 고정. */
+.catTable { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.catTable th, .catTable td { border: 1px solid #d5d9de; padding: 3px 4px; text-align: center; height: 26px; }
+.catTable thead th { background: #FFD966; font-weight: 700; }
+.catTable tbody th { background: #f4f5f7; font-weight: 600; width: 72px; white-space: nowrap; }
+.catTable thead th:first-child { width: 72px; }
+.catInputCell { padding: 0 !important; }
+.catInput { width: 100%; height: 100%; min-height: 26px; border: 0; background: #fff; text-align: center; font: inherit; padding: 0 4px; box-sizing: border-box; }
+.catInput:focus { outline: 2px solid #EC9820; outline-offset: -2px; }
+.catFixed td { background: #fafbfc; color: var(--nt-ink2, #555); }
+.catTotalRow td { font-weight: 700; color: #b06a00; background: #fdf3e3; }

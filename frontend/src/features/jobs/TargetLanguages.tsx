@@ -58,6 +58,9 @@ export function LanguagePickers(props: {
   onSource: (code: string) => void
   /** 도착어 한 개를 표에 추가. 수정 창에서는 없다 (도착어는 표의 한 줄에서 바꾼다). */
   onAddTarget?: (code: string) => void
+  /** 도착어 한 개만 (PO 등록 창 — 팀장님 2026-11-25). 있으면 표에 추가하지 않고 이 값을 바꾼다. */
+  target?: string
+  onTarget?: (code: string) => void
   sourcePlaceholder?: string
   disabled?: boolean
 }) {
@@ -106,7 +109,28 @@ export function LanguagePickers(props: {
         />
       </div>
 
-      {props.onAddTarget ? (
+      {props.onTarget ? (
+        <div className={ui.field}>
+          <label className={ui.label} htmlFor="po-elang">
+            도착어
+          </label>
+          <div className={ui.langRow}>
+            <LangCombo id="po-elang" ariaLabel="도착어" value={props.target ?? ''} onChange={props.onTarget} placeholder="도착어 고르기" pinned={langs} disabled={props.disabled} />
+            {star(props.target ?? '', '도착어')}
+          </div>
+          <Shortcuts
+            title="도착어 바로가기"
+            scope="tgt"
+            current={props.target ?? ''}
+            fav={fav}
+            save={save}
+            ready={ready}
+            nameOf={nameOf}
+            disabled={props.disabled}
+            onPick={props.onTarget}
+          />
+        </div>
+      ) : props.onAddTarget ? (
         <div className={ui.field}>
           <label className={ui.label} htmlFor="job-elang-pick">
             도착어 <span className={ui.hint}>(여러 개 — 고르거나 바로가기를 누르면 아래 표에 바로 들어갑니다)</span>
@@ -418,7 +442,7 @@ export function TargetTable(props: {
           {cell(
             <>
               담당PM
-              <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} style={{ marginLeft: 'auto' }} disabled={!ready} onClick={() => setCustomOpen(true)} title="한 글자 빠른 단추 정하기 (나만 적용)">
+              <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} style={{ marginLeft: 6 }} disabled={!ready} onClick={() => setCustomOpen(true)} title="한 글자 빠른 단추 정하기 (나만 적용)">
                 커스텀
               </button>
             </>,
@@ -502,9 +526,22 @@ export function TargetTable(props: {
                 {cell(
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}>
                     <NumberInput aria-label={`${nameOf(l.lang)} 단가`} value={l.mode === 'free' ? '' : l.price} disabled={disabled || l.mode === 'free'} placeholder={l.mode === 'fixed' ? '금액' : ''} onValueChange={(v) => update(l.key, { price: v })} />
-                    <select className={ui.select} aria-label={`${nameOf(l.lang)} 가격 방식`} value={l.mode} disabled={disabled} onChange={(e) => update(l.key, { mode: e.target.value as PriceMode })}>
-                      {PRICE_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-                    </select>
+                    {/* 단가 · 고정가격 · 무료 중 하나 — 고른 것은 포인트 색 (팀장님 2026-11-25). 기본은 단가. */}
+                    <div className={ui.tgModes} role="radiogroup" aria-label={`${nameOf(l.lang)} 가격 방식`}>
+                      {PRICE_MODES.map((m) => (
+                        <button
+                          key={m.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={l.mode === m.value}
+                          className={`${ui.tgMode} ${l.mode === m.value ? ui.tgModeOn : ''}`}
+                          disabled={disabled}
+                          onClick={() => update(l.key, { mode: m.value as PriceMode })}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>,
                 )}
                 {cell(

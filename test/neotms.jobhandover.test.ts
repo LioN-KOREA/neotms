@@ -207,3 +207,46 @@ describe("job form — language combo, auto-add target, bulk apply", () => {
     expect(combo).toContain("e.key === 'Tab' && top");
   });
 });
+
+describe("PO form — CAT table, pickers, finance-only fields", () => {
+  it("subtotal rounds words x weight to a whole number; total is the sum", async () => {
+    const m = await import("../frontend/src/features/purchaseorders/catMath");
+    expect(m.catSubtotal(125, 30)).toBe(38);
+    expect(m.catSubtotal(1000, 10)).toBe(100);
+    expect(m.catSubtotal(null, 30)).toBe(0);
+    expect(m.catTotal([100, 200, 125, 0, null, 10, 50], m.DEFAULT_CAT_WEIGHTS)).toBe(10 + 0 + 38 + 0 + 0 + 3 + 50);
+  });
+
+  it("weights are fixed; only [거래처] Taijia differs", async () => {
+    const m = await import("../frontend/src/features/purchaseorders/catMath");
+    expect(m.catWeightsFor("홍길동")).toEqual([10, 0, 30, 30, 30, 30, 100]);
+    expect(m.catWeightsFor("[거래처] Taijia")).toEqual([10, 0, 30, 60, 60, 100, 100]);
+    expect(m.catWeightsFor(" [거래처]  taijia ")).toEqual(m.TAIJIA_CAT_WEIGHTS);
+  });
+
+  it("pastes a spreadsheet row or column, skipping a header row", async () => {
+    const m = await import("../frontend/src/features/purchaseorders/catMath");
+    expect(m.parseCatPaste("1,200\t300\t40\r\n")).toEqual(["1,200", "300", "40"]);
+    expect(m.parseCatPaste("10\n20\n30")).toEqual(["10", "20", "30"]);
+    expect(m.parseCatPaste("반복\t100%\t95%\n5\t6\t7")).toEqual(["5", "6", "7"]);
+    const d = m.catDetail(["", "", "100", "100", "", "", "50"], m.DEFAULT_CAT_WEIGHTS);
+    expect(d?.total).toBe(30 + 30 + 50);
+    expect(d?.midWords).toBe(200);
+    expect(d?.newWords).toBe(50);
+    expect(m.catDetail(["", "", "", "", "", "", ""], m.DEFAULT_CAT_WEIGHTS)).toBeNull();
+  });
+
+  it("the form hides state and KRW total, gates tax/payment, and saves the table", () => {
+    const form = read("frontend/src/features/purchaseorders/PurchaseOrderFormModal.tsx");
+    expect(form).not.toContain('htmlFor="po-state"');
+    expect(form).not.toContain('htmlFor="po-ksum"');
+    expect(form).toContain("{mayFinance ? (");
+    expect(form.indexOf("{mayFinance ? (")).toBeLessThan(form.indexOf('htmlFor="po-tax"'));
+    expect(form).toContain("poCatDetail: catInfo.detail");
+    expect(form).toContain("<PoJobPicker");
+    expect(form).toContain("<PoTranslatorPicker");
+    const dbops = read("lambdas/neotms/nodejs/neotms/purchase-orders/NeotmsPurchaseOrder.dbops.ts");
+    expect(dbops).toContain('{ column: "po_cat_detail", kind: "json", read: (i) => i.poCatDetail }');
+    expect(read("db/013_po_cat_detail.sql")).toContain("ADD COLUMN IF NOT EXISTS po_cat_detail jsonb");
+  });
+});
