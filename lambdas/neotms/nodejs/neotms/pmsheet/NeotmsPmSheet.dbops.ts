@@ -14,6 +14,15 @@
 //     every job already on the PO-level workspace is also here from day one.
 // A job the PM removed from the sheet (pm_sheet_row.hidden) is left out.
 //
+// A RE-handover (db/012: job_handover.rehandover - the job was already on the receiver's sheet when
+// it was sent) that is still waiting or was sent back for revision does not count as "the latest
+// handover": the job stays where it is while the re-handover is only a request to confirm.
+//
+// ## Changed cells (db/012)
+//
+// pm_sheet_seen holds, per owner and job, the linked values as the owner last confirmed them
+// (`sheetSnapshot`). A row's `changedKeys` are the linked columns whose value differs now.
+//
 // ## Translator and reviewer
 //
 // The sheet shows a translator PO and a reviewer PO on the same line. The reviewer PO is the first
@@ -73,6 +82,10 @@ export type PmSheetRow = {
   ordNo: number | null;
   groupMonthly: boolean;
   mergedInto: string | null;
+  /** Linked columns whose value changed since the owner last confirmed them (db/012). */
+  changedKeys: string[];
+  /** A waiting re-handover of this job to the sheet's owner, if any. */
+  rehandoverId: string | null;
 };
 
 export type PmSheetCell = {
@@ -97,6 +110,8 @@ export type PmHandover = {
   toName: string | null;
   createdAt: string;
   answeredAt: string | null;
+  /** Sent while the job was already on the receiver's sheet (db/012) - confirm or revise only. */
+  rehandover: boolean;
 };
 
 export type PmNotice = {
@@ -212,7 +227,44 @@ export function toPmSheetRow(row: SqlRow): PmSheetRow {
     ordNo: readInt(row, "ord_no"),
     groupMonthly: readBool(row, "group_monthly") ?? false,
     mergedInto: readId(row, "merged_into"),
+    changedKeys: [],
+    rehandoverId: readId(row, "rehandover_id"),
   };
+}
+
+/**
+ * The linked values of a sheet row, keyed by sheet column - what pm_sheet_seen stores and what a
+ * changed cell is measured against. Only values that come from the job / project / POs.
+ */
+export function sheetSnapshot(row: PmSheetRow): Record<string, string> {
+  const s = (value: string | null | undefined) => value ?? "";
+  return {
+    cusCodeName: s(row.cusCodeName),
+    cusMgrName: s(row.cusMgrName),
+    prjMgrName: s(row.prjMgrName),
+    prjCode: s(row.prjCode),
+    jobName: s(row.jobName),
+    lang: [row.slang, row.elang].filter(Boolean).join("→"),
+    translator: s(row.tr?.tranName),
+    trVolume: s(row.tr?.volume),
+    trPo: row.tr ? "발행" : "-",
+    trEday: s(row.tr?.eday),
+    trTime: s(row.tr?.edayTime),
+    reviewer: s(row.rv?.tranName),
+    rvVolume: s(row.rv?.volume),
+    rvPo: row.rv ? "발행" : "-",
+    rvEday: s(row.rv?.eday),
+    rvTime: s(row.rv?.edayTime),
+    jobEday: s(row.jobEday),
+    jobTime: s(row.jobEdayTime),
+  };
+}
+
+/** Keys of `now` whose value differs from `seen` (a key `seen` never recorded counts as unchanged). */
+export function seenDiff(seen: Record<string, unknown>, now: Record<string, string>): string[] {
+  return Object.keys(now)
+    .filter((key) => key in seen && String(seen[key] ?? "") !== now[key])
+    .sort();
 }
 
 function toHandover(row: SqlRow): PmHandover {
@@ -230,6 +282,7 @@ function toHandover(row: SqlRow): PmHandover {
     toName: readText(row, "to_name"),
     createdAt: readTs(row, "created_at") ?? "",
     answeredAt: readTs(row, "answered_at"),
+    rehandover: readBool(row, "rehandover") ?? false,
   };
 }
 
@@ -263,6 +316,7 @@ const LATEST_HANDOVER = `
       SELECT h.id, h.to_staff_id, h.status, h.created_at, h.answered_at
         FROM job_handover h
        WHERE h.job_id = j.id
+         AND NOT (h.rehandover AND h.status IN (0, 2))
        ORDER BY h.id DESC
        LIMIT 1
     ) hv ON true`;
@@ -286,7 +340,10 @@ export const PmSheetRowsOps = (staffId: string): SqlOps<PmSheetRow[]> => ({
            COALESCE(hv.answered_at, hv.created_at, pacc.created_at) AS handover_at,
            ${poSelect("tr")},
            ${poSelect("rv")},
-           r.pm_state, r.fields, r.row_style, r.ord_no, r.group_monthly, r.merged_into
+           r.pm_state, r.fields, r.row_style, r.ord_no, r.group_monthly, r.merged_into,
+           (SELECT rh.id FROM job_handover rh
+             WHERE rh.job_id = j.id AND rh.rehandover AND rh.status = 0 AND rh.to_staff_id = :staff_id
+             ORDER BY rh.id DESC LIMIT 1) AS rehandover_id
       FROM job j
       JOIN project p ON p.id = j.project_id AND p.deleted = false
       LEFT JOIN job_detail_linguistic jdl ON jdl.job_id = j.id
@@ -540,7 +597,7 @@ export const PmProjectStateSyncOps = (jobId: string, actor: string): SqlOps<stri
 const HANDOVER_COLUMNS = `
     h.id, h.job_id, h.status, h.message, h.reply, h.snapshot, to_jsonb(h.changed_keys) AS changed_keys,
     h.from_staff_id, fs.mgr_name AS from_name, h.to_staff_id, ts.mgr_name AS to_name,
-    h.created_at, h.answered_at`;
+    h.created_at, h.answered_at, h.rehandover`;
 
 /**
  * The job's sheet-relevant values, as the handover sheet shows them and as the diff compares them.
@@ -601,11 +658,12 @@ export const HandoverInsertOps = (input: {
   message: string | null;
   snapshot: Record<string, unknown>;
   changedKeys: string[];
+  rehandover: boolean;
   actor: string;
 }): SqlOps<string | null> => ({
   sql: `
-    INSERT INTO job_handover (job_id, from_staff_id, to_staff_id, status, message, snapshot, changed_keys, created_by)
-    VALUES (:job_id, :from_id, :to_id, 0, :message, :snapshot, :changed, :actor)
+    INSERT INTO job_handover (job_id, from_staff_id, to_staff_id, status, message, snapshot, changed_keys, rehandover, created_by)
+    VALUES (:job_id, :from_id, :to_id, 0, :message, :snapshot, :changed, :rehandover, :actor)
     RETURNING id
   `,
   parameters: [
@@ -615,6 +673,7 @@ export const HandoverInsertOps = (input: {
     param("message", input.message, "text"),
     param("snapshot", input.snapshot, "json"),
     param("changed", input.changedKeys, "textArray"),
+    param("rehandover", input.rehandover, "bool"),
     param("actor", input.actor, "text"),
   ],
   mapper: (rows) => (rows[0] ? readId(rows[0], "id") : null),
@@ -838,4 +897,101 @@ export const TranslatorSuggestionsOps = (jobId: string): SqlOps<PmTranslatorSugg
       prjCode: readText(row, "prj_code"),
       times: readInt(row, "times") ?? 0,
     })),
+});
+
+/* -------------------------------------------------------------------------- */
+/* Seen values (db/012)                                                       */
+/* -------------------------------------------------------------------------- */
+
+/** The linked values of the given jobs, whoever's sheet they are on (for `sheetSnapshot`). */
+export const SheetSnapshotRowsOps = (jobIds: readonly string[]): SqlOps<PmSheetRow[]> => ({
+  sql: `
+    SELECT j.id AS job_id, j.job_code, j.job_name, j.work_code, j.job_type, j.job_eday, j.job_eday_time,
+           j.job_state, jdl.job_slang, jdl.job_elang, jdl.job_volume,
+           p.id AS project_id, p.prj_code, p.prj_name, p.prj_state, p.customer_id, p.cus_code_name,
+           p.cus_mgr_name, p.prj_mgr_name,
+           ${poSelect("tr")},
+           ${poSelect("rv")}
+      FROM job j
+      JOIN project p ON p.id = j.project_id
+      LEFT JOIN job_detail_linguistic jdl ON jdl.job_id = j.id
+      ${poLateral("tr", "po.po_work_code IS DISTINCT FROM '감수'")}
+      ${poLateral("rv", "po.po_work_code = '감수'")}
+     WHERE j.id = ANY(:job_ids)
+  `,
+  parameters: [param("job_ids", [...jobIds], "idArray"), param("po_cancelled", PO_STATE_CANCELLED, "text")],
+  mapper: (rows) => rows.map(toPmSheetRow),
+});
+
+export const SeenReadOps = (staffId: string): SqlOps<Map<string, Record<string, unknown>>> => ({
+  sql: `SELECT job_id, snapshot FROM pm_sheet_seen WHERE staff_id = :staff_id`,
+  parameters: [param("staff_id", staffId, "id")],
+  mapper: (rows) => new Map(rows.map((row) => [readId(row, "job_id") ?? "", readJson<Record<string, unknown>>(row, "snapshot", {})])),
+});
+
+/**
+ * Merge values into an owner's seen snapshots. `create` = also start a row for a job that has none
+ * (a first sight or an explicit confirm); otherwise only jobs already tracked are touched (an edit
+ * the owner made elsewhere must not start tracking a job that is not on their sheet).
+ */
+export const SeenMergeOps = (
+  staffId: string,
+  items: readonly { jobId: string; values: Record<string, string> }[],
+  create: boolean,
+): SqlOps<number> => ({
+  sql: create
+    ? `
+    INSERT INTO pm_sheet_seen (staff_id, job_id, snapshot)
+    SELECT :staff_id, (e->>'jobId')::bigint, e->'values'
+      FROM jsonb_array_elements(:items) e
+    ON CONFLICT (staff_id, job_id)
+    DO UPDATE SET snapshot = pm_sheet_seen.snapshot || EXCLUDED.snapshot, updated_at = now()`
+    : `
+    UPDATE pm_sheet_seen s
+       SET snapshot = s.snapshot || e->'values', updated_at = now()
+      FROM jsonb_array_elements(:items) e
+     WHERE s.staff_id = :staff_id AND s.job_id = (e->>'jobId')::bigint`,
+  parameters: [param("staff_id", staffId, "id"), param("items", items, "json")],
+  mapper: (rows) => rows.length,
+});
+
+/** Start tracking jobs seen for the first time - never overwrites what is already there. */
+export const SeenBaselineOps = (staffId: string, items: readonly { jobId: string; values: Record<string, string> }[]): SqlOps<number> => ({
+  sql: `
+    INSERT INTO pm_sheet_seen (staff_id, job_id, snapshot)
+    SELECT :staff_id, (e->>'jobId')::bigint, e->'values'
+      FROM jsonb_array_elements(:items) e
+    ON CONFLICT (staff_id, job_id) DO NOTHING`,
+  parameters: [param("staff_id", staffId, "id"), param("items", items, "json")],
+  mapper: (rows) => rows.length,
+});
+
+/** Jobs a write may change on a sheet, limited to the ones `staffId` tracks. */
+export const SeenJobsOfOps = (staffId: string, target: { jobId?: string; projectId?: string; poId?: string }): SqlOps<string[]> => ({
+  sql: `
+    SELECT s.job_id
+      FROM pm_sheet_seen s
+      JOIN job j ON j.id = s.job_id
+     WHERE s.staff_id = :staff_id
+       AND (   (:job_id IS NOT NULL AND j.id = :job_id)
+            OR (:project_id IS NOT NULL AND j.project_id = :project_id)
+            OR (:po_id IS NOT NULL AND j.id = (SELECT po.job_id FROM purchase_order po WHERE po.id = :po_id)))
+  `,
+  parameters: [
+    param("staff_id", staffId, "id"),
+    param("job_id", target.jobId ?? null, "id"),
+    param("project_id", target.projectId ?? null, "id"),
+    param("po_id", target.poId ?? null, "id"),
+  ],
+  mapper: (rows) => rows.map((row) => readId(row, "job_id") ?? "").filter(Boolean),
+});
+
+/** The waiting re-handover of a job to `staffId`, if any. */
+export const PendingRehandoverOps = (staffId: string, jobId: string): SqlOps<string | null> => ({
+  sql: `
+    SELECT id FROM job_handover
+     WHERE job_id = :job_id AND to_staff_id = :staff_id AND rehandover AND status = 0
+     ORDER BY id DESC LIMIT 1`,
+  parameters: [param("staff_id", staffId, "id"), param("job_id", jobId, "id")],
+  mapper: (rows) => (rows[0] ? readId(rows[0], "id") : null),
 });

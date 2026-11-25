@@ -82,7 +82,28 @@ export function reorderSlots(
   let at = rest.indexOf(target)
   if (at < 0) at = rest.length
   else if (!before) at += 1
-  const order = [...rest.slice(0, at), ...slots.filter((s) => movingSet.has(s)), ...rest.slice(at)]
+  return applySlots([...rest.slice(0, at), ...slots.filter((s) => movingSet.has(s)), ...rest.slice(at)], freeRows)
+}
+
+/* ----------------------------------------------------------------------------------------------- */
+/* 자리 편집 — 행 추가·삭제, 통합·해제 (팀장님 2026-11-25)                                              */
+/* ----------------------------------------------------------------------------------------------- */
+
+/**
+ * 시트의 모든 자리(0 … 마지막 자리)를 순서대로: 그 자리의 작업 id, 아니면 'f:자리'(빈 줄).
+ * 필터·정렬과 상관없이 저장된 자리 그대로다 — 자리 편집은 늘 이것으로 한다.
+ */
+export function slotsOf(posOf: ReadonlyMap<string, number>, freeRows: readonly PmFreeRow[]): string[] {
+  const live = liveFreeRows(freeRows)
+  const last = Math.max(-1, ...posOf.values(), ...live.map((r) => r.pos))
+  const out: string[] = []
+  for (let i = 0; i <= last; i += 1) out.push(freeRowId(i))
+  for (const [jobId, pos] of posOf) if (pos >= 0 && pos <= last) out[pos] = jobId
+  return out
+}
+
+/** 자리 목록(`order`)을 그대로 새 자리로 — 작업마다 새 자리, 글이 있는 빈 줄은 새 자리로 옮긴다. */
+export function applySlots(order: readonly string[], freeRows: readonly PmFreeRow[]): { jobPos: Map<string, number>; freeRows: PmFreeRow[] } {
   const byPos = new Map(liveFreeRows(freeRows).map((r) => [r.pos, r]))
   const jobPos = new Map<string, number>()
   const nextFree: PmFreeRow[] = []
@@ -93,4 +114,43 @@ export function reorderSlots(
     } else jobPos.set(id, i)
   })
   return { jobPos, freeRows: nextFree }
+}
+
+/** `at` 자리에 빈 줄 `count` 개를 끼워 넣는다 (아래 행은 밀려 내려간다). */
+export function insertSlots(slots: readonly string[], at: number, count = 1): string[] {
+  const i = Math.max(0, Math.min(at, slots.length))
+  return [...slots.slice(0, i), ...Array.from({ length: count }, () => 'f:-1'), ...slots.slice(i)]
+}
+
+/** 자리들을 지운다 (아래 행이 올라온다). */
+export function removeSlots(slots: readonly string[], ids: readonly string[]): string[] {
+  const gone = new Set(ids)
+  return slots.filter((s) => !gone.has(s))
+}
+
+/** `ids` 를 `after` 바로 아래에 차례로 넣는다 (이미 목록에 있으면 그 자리에서 빼고). */
+export function placeAfter(slots: readonly string[], after: string, ids: readonly string[]): string[] {
+  const rest = removeSlots(slots, ids)
+  const at = rest.indexOf(after)
+  return at < 0 ? [...rest, ...ids] : [...rest.slice(0, at + 1), ...ids, ...rest.slice(at + 1)]
+}
+
+/** 열 이름(엑셀식): 0 → A, 25 → Z, 26 → AA. */
+export function columnLetter(index: number): string {
+  let n = index + 1
+  let s = ''
+  while (n > 0) {
+    const r = (n - 1) % 26
+    s = String.fromCharCode(65 + r) + s
+    n = Math.floor((n - 1) / 26)
+  }
+  return s
+}
+
+/** 'YYYY-MM-DD' 를 `days` 만큼 옮긴다 (달·해 넘김 포함). 날짜가 아니면 null. */
+export function shiftYmd(ymd: string, days: number): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd)
+  if (!m) return null
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + days))
+  return d.toISOString().slice(0, 10)
 }

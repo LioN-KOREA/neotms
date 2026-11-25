@@ -59,6 +59,10 @@ export interface PmSheetRow {
   ordNo: number | null
   groupMonthly: boolean
   mergedInto: string | null
+  /** 시트 주인이 마지막으로 확인한 뒤 다른 사람이 바꾼 연동 칸 (db/012). */
+  changedKeys: string[]
+  /** 이 작업의 기다리는 재인계 (있으면). */
+  rehandoverId: string | null
 }
 
 export interface PmSheetCell {
@@ -97,6 +101,8 @@ export interface PmViewPref {
   freezeRows?: number
   /** 글을 적은 빈 줄들. */
   freeRows?: PmFreeRow[]
+  /** 시트 배율 (%) — 100 기준, 5 단위 (시트 주인 기준). */
+  zoom?: number
   /** 작업 등록 창의 언어 즐겨찾기 (나만 적용). */
   langFav?: LangFav
 }
@@ -147,6 +153,8 @@ export interface PmHandover {
   toName: string | null
   createdAt: string
   answeredAt: string | null
+  /** 이미 받는 사람 시트에 있는 작업을 다시 넘긴 인계 — 확인·수정 요청만 (db/012). */
+  rehandover: boolean
 }
 
 export interface PmNotice {
@@ -255,6 +263,13 @@ export const patchPmRow = (input: PmRowPatch) =>
 export const writePmCells = (staffId: string | undefined, items: PmCellWrite[]) =>
   neotmsApi<{ saved: number }>('/api/v0/pm-sheet/cells', { method: 'PUT', body: { staffId, items } })
 
+export const orderPmRows = (staffId: string | undefined, items: { jobId: string; ordNo: number }[]) =>
+  neotmsApi<{ saved: number }>('/api/v0/pm-sheet/rows/order', { method: 'PUT', body: { staffId, items } })
+
+/** 바뀐 칸 확인 — `keys` 가 없으면 그 행의 모든 칸. 남은 칸이 없으면 기다리는 재인계도 확인된다. */
+export const confirmPmSeen = (staffId: string | undefined, jobIds: string[], keys?: string[]) =>
+  neotmsApi<{ confirmed: number; rehandoversConfirmed: number }>('/api/v0/pm-sheet/seen', { method: 'POST', body: { staffId, jobIds, keys } })
+
 export const writePmPref = (staffId: string | undefined, kind: keyof PmPrefs, data: unknown) =>
   neotmsApi<{ saved: boolean }>(`/api/v0/pm-sheet/prefs/${kind}`, { method: 'PUT', body: { staffId, data } })
 
@@ -319,6 +334,8 @@ export function usePmSheet(staffId: string | null) {
     queryKey: pmKeys.sheet(staffId),
     queryFn: ({ signal }) => fetchPmSheet(staffId, signal),
     staleTime: 15_000,
+    // 다른 사람이 프로젝트·작업 창에서 바꾼 값이 보이도록 2분마다 다시 읽는다 (팀장님 2026-11-25).
+    refetchInterval: 120_000,
   })
 }
 

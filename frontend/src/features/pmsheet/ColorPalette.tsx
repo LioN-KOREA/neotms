@@ -98,6 +98,11 @@ export function ColorPalette(props: {
               placeholder="#RRGGBB"
               maxLength={7}
               value={hex}
+              // 누르면 글자 전체가 선택되어 바로 새 코드를 칠 수 있다 (팀장님 2026-11-25).
+              onFocus={(e) => {
+                const el = e.currentTarget
+                requestAnimationFrame(() => el.select())
+              }}
               onChange={(e) => setHex(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && hexOk) pick(hexOk)

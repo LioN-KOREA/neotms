@@ -183,6 +183,9 @@ import {
   writePmCells,
   writePmPref,
   readMyPmPrefs,
+  confirmPmSeen,
+  keepOwnEditsSeen,
+  orderPmRows,
 } from "./pmsheet/NeotmsPmSheetManager.js";
 import {
   PmCellsSchema,
@@ -191,6 +194,8 @@ import {
   PmNoticesReadSchema,
   PmPrefSchema,
   PmRowPatchSchema,
+  PmRowOrderSchema,
+  PmSeenSchema,
 } from "./pmsheet/NeotmsPmSheet.schemas.js";
 import { getProfile } from "./profile/NeotmsProfileManager.js";
 import { registerSelf } from "./profile/NeotmsRegistrationManager.js";
@@ -424,7 +429,7 @@ const handleUpdateProject: RRHandler = async (request) => {
   if (!id) return NOT_A_RECORD_ID;
   const parsed = parseBody(ProjectUpdateSchema, request.body);
   return parsed.ok
-    ? updateProject(callerOf(request), id, parsed.value, writeContext(request))
+    ? keepOwnEditsSeen(callerOf(request), { projectId: id }, () => updateProject(callerOf(request), id, parsed.value, writeContext(request)))
     : parsed.response;
 };
 
@@ -512,7 +517,7 @@ const handleUpdateJob: RRHandler = async (request) => {
   if (!id) return NOT_A_RECORD_ID;
   const parsed = parseBody(JobUpdateSchema, request.body);
   return parsed.ok
-    ? updateJob(callerOf(request), id, parsed.value, writeContext(request))
+    ? keepOwnEditsSeen(callerOf(request), { jobId: id }, () => updateJob(callerOf(request), id, parsed.value, writeContext(request)))
     : parsed.response;
 };
 
@@ -532,7 +537,7 @@ const handleGetPurchaseOrder: RRHandler = async (request) => {
 const handleCreatePurchaseOrder: RRHandler = async (request) => {
   const parsed = parseBody(PurchaseOrderCreateSchema, request.body);
   return parsed.ok
-    ? createPurchaseOrder(callerOf(request), parsed.value, writeContext(request))
+    ? keepOwnEditsSeen(callerOf(request), { jobId: parsed.value.jobId }, () => createPurchaseOrder(callerOf(request), parsed.value, writeContext(request)))
     : parsed.response;
 };
 
@@ -541,13 +546,13 @@ const handleUpdatePurchaseOrder: RRHandler = async (request) => {
   if (!id) return NOT_A_RECORD_ID;
   const parsed = parseBody(PurchaseOrderUpdateSchema, request.body);
   return parsed.ok
-    ? updatePurchaseOrder(callerOf(request), id, parsed.value, writeContext(request))
+    ? keepOwnEditsSeen(callerOf(request), { poId: id }, () => updatePurchaseOrder(callerOf(request), id, parsed.value, writeContext(request)))
     : parsed.response;
 };
 
 const handleDeletePurchaseOrder: RRHandler = async (request) => {
   const id = recordId(request);
-  return id ? deletePurchaseOrder(callerOf(request), id, writeContext(request)) : NOT_A_RECORD_ID;
+  return id ? keepOwnEditsSeen(callerOf(request), { poId: id }, () => deletePurchaseOrder(callerOf(request), id, writeContext(request))) : NOT_A_RECORD_ID;
 };
 
 /*
@@ -723,6 +728,14 @@ const handlePatchPmRow: RRHandler = async (request) => {
 const handleWritePmCells: RRHandler = async (request) => {
   const parsed = parseBody(PmCellsSchema, request.body);
   return parsed.ok ? writePmCells(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
+};
+const handleConfirmPmSeen: RRHandler = async (request) => {
+  const parsed = parseBody(PmSeenSchema, request.body);
+  return parsed.ok ? confirmPmSeen(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
+};
+const handleOrderPmRows: RRHandler = async (request) => {
+  const parsed = parseBody(PmRowOrderSchema, request.body);
+  return parsed.ok ? orderPmRows(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
 };
 const handleReadMyPmPrefs: RRHandler = async (request) => readMyPmPrefs(callerOf(request));
 const handleWritePmPref: RRHandler = async (request) => {
@@ -1244,6 +1257,8 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: "/api/v0/pm-sheet/staff", method: "GET", handler: handleListPmStaff, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/rows", method: "PUT", handler: handlePatchPmRow, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/cells", method: "PUT", handler: handleWritePmCells, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/rows/order", method: "PUT", handler: handleOrderPmRows, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/seen", method: "POST", handler: handleConfirmPmSeen, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/prefs", method: "GET", handler: handleReadMyPmPrefs, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/prefs/:kind", method: "PUT", handler: handleWritePmPref, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/handovers", method: "GET", handler: handleListPendingHandovers, permission: NEOTMS_PERMISSION_WORKSPACE_READ },

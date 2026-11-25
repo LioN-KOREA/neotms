@@ -48,7 +48,7 @@ export function HandoverSheet(props: { staffId: string | null; onNotice: (m: str
   const accept = async (item: Pending) => {
     try {
       await answer.mutateAsync({ id: item.id, action: 'accept', reply: null })
-      props.onNotice(`${item.row.jobCode} 인계를 받았습니다. "내 업무" 시트에 들어갔습니다.`)
+      props.onNotice(item.rehandover ? `${item.row.jobCode} 재인계를 확인했습니다.` : `${item.row.jobCode} 인계를 받았습니다. "내 업무" 시트에 들어갔습니다.`)
     } catch (err) {
       props.onError(err instanceof Error ? err.message : '처리하지 못했습니다.')
     }
@@ -77,12 +77,15 @@ export function HandoverSheet(props: { staffId: string | null; onNotice: (m: str
               <tr key={item.id}>
                 <td>
                   <div className={css.hoActions}>
-                    <button type="button" className={`${ui.btn} ${ui.btnPrimary} ${ui.btnSm}`} disabled={answer.isPending} onClick={() => void accept(item)}>인계 받기</button>
+                    {/* 재인계는 이미 내 시트에 있는 작업 — 확인 차원이라 '확인'·'수정 요청' 만 (팀장님 2026-11-25). */}
+                    <button type="button" className={`${ui.btn} ${ui.btnPrimary} ${ui.btnSm}`} disabled={answer.isPending} onClick={() => void accept(item)}>{item.rehandover ? '확인' : '인계 받기'}</button>
                     <button type="button" className={`${ui.btn} ${ui.btnSm}`} disabled={answer.isPending} onClick={() => setReplying({ item, action: 'revision' })}>수정 요청</button>
-                    <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} disabled={answer.isPending} onClick={() => setReplying({ item, action: 'reject' })}>거부</button>
+                    {item.rehandover ? null : (
+                      <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} disabled={answer.isPending} onClick={() => setReplying({ item, action: 'reject' })}>거부</button>
+                    )}
                   </div>
                 </td>
-                <td>{formatSheetDate(isoToYmd(item.createdAt))}{changed.size > 0 ? <span className={`${css.badge} ${css.badgeMuted}`} title="수정 요청 뒤 다시 넘어온 인계">재인계</span> : null}</td>
+                <td>{formatSheetDate(isoToYmd(item.createdAt))}{item.rehandover || changed.size > 0 ? <span className={`${css.badge} ${css.badgeMuted}`} title={item.rehandover ? '이미 내 시트에 있는 작업 — 확인하면 시트의 바뀐 칸 표시도 지워집니다' : '수정 요청 뒤 다시 넘어온 인계'}>재인계</span> : null}</td>
                 <td>{item.fromName ?? ''}</td>
                 {COLS.map((c) => (
                   <td key={c.key} className={changed.has(c.key) ? css.hoChanged : undefined} title={changed.has(c.key) ? '지난 인계에서 바뀐 칸' : undefined}>

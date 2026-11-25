@@ -52,6 +52,10 @@ export interface SheetCell extends Cell {
   onQuickPick?: (x: number, y: number) => void
   /** 우클릭 메뉴 (이 열로 정렬 · 이 값으로 필터). */
   onMenu?: (x: number, y: number) => void
+  /** 글자 앞의 작은 단추 (통합 행의 'M'). */
+  badge?: { text: string; title: string; onClick?: () => void }
+  /** 마우스를 올리면 보이는 ‹ › (납품일 하루씩). */
+  step?: { onPrev: () => void; onNext: () => void; title: string }
 }
 
 let datalistSeq = 0
@@ -160,7 +164,49 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
               : undefined
           }
         >
+          {cell.step ? (
+            <button
+              type="button"
+              className={css.stepBtn}
+              title={`${cell.step.title} 하루 앞으로`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                cell.step?.onPrev()
+              }}
+            >
+              ‹
+            </button>
+          ) : null}
+          {cell.badge ? (
+            <button
+              type="button"
+              className={css.badgeBtn}
+              title={cell.badge.title}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                cell.badge?.onClick?.()
+              }}
+            >
+              {cell.badge.text}
+            </button>
+          ) : null}
           {body}
+          {cell.step ? (
+            <button
+              type="button"
+              className={`${css.stepBtn} ${css.stepNext}`}
+              title={`${cell.step.title} 하루 뒤로`}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                cell.step?.onNext()
+              }}
+            >
+              ›
+            </button>
+          ) : null}
           {cell.onOpen ? (
             <button
               type="button"

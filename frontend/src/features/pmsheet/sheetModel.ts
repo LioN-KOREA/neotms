@@ -366,21 +366,16 @@ export function distinctValues(
   return [...set].sort((a, b) => (a === BLANK ? 1 : b === BLANK ? -1 : compareValues(a, b)))
 }
 
-/**
- * 행 통합 조건(기획서): 같은 프로젝트의 작업이고, 언어 외 업체/담당자/납기/PRCODE/경로가 같을 것.
- * 맞지 않으면 이유를 돌려준다.
- */
+/** 행 통합 조건 — 같은 프로젝트, 같은 납기. 맞지 않으면 이유를 돌려준다. */
 export function mergeProblem(rows: readonly PmSheetRow[]): string | null {
+  // 팀장님 2026-11-25: 같은 프로젝트(업체도 같다)이고 납기가 같으면 통합. 경로 등은 대표(맨 위) 행의 값.
   if (rows.length < 2) return '통합할 행을 두 개 이상 골라 주세요.'
   const first = rows[0]!
   for (const row of rows.slice(1)) {
     if (row.projectId !== first.projectId) return '같은 프로젝트의 작업만 통합할 수 있습니다.'
-    if ((row.cusCodeName ?? '') !== (first.cusCodeName ?? '')) return '업체가 다른 행이 있습니다.'
-    if ((row.cusMgrName ?? '') !== (first.cusMgrName ?? '')) return '업체 담당자가 다른 행이 있습니다.'
     if ((row.jobEday ?? '') !== (first.jobEday ?? '') || (row.jobEdayTime ?? '') !== (first.jobEdayTime ?? '')) {
-      return '납기가 다른 행이 있습니다.'
+      return '납기가 다른 행이 있습니다. 납기가 같은 작업만 통합할 수 있습니다.'
     }
-    if ((row.fields.path ?? '') !== (first.fields.path ?? '')) return '경로가 다른 행이 있습니다.'
   }
   return null
 }

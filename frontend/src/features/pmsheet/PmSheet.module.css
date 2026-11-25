@@ -115,7 +115,7 @@
 
 /* 시트 */
 .gridWrap { overflow: auto; max-height: calc(100vh - 290px); min-height: 320px; position: relative; }
-.gridWrap :global(.rg-cell) { font-size: 12.5px; }
+.gridWrap :global(.rg-cell) { font-size: calc(13px * var(--pm-zoom, 1)); }
 .sheetCell { padding: 0 !important; }
 .cellInner {
   display: flex; align-items: center; gap: 4px; width: 100%; height: 100%; padding: 0 5px; position: relative; overflow: hidden;
@@ -123,8 +123,8 @@
 .cellText { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .placeholder { color: #9aa3ae; font-style: normal; }
 .cellLink { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1a73e8; text-decoration: underline; }
-.cellInput { width: 100%; height: 100%; border: none; outline: 2px solid #1a73e8; padding: 0 5px; font: inherit; font-size: 12.5px; }
-.cellSelect { width: 100%; height: 100%; font: inherit; font-size: 12.5px; }
+.cellInput { width: 100%; height: 100%; border: none; outline: 2px solid #1a73e8; padding: 0 5px; font: inherit; font-size: calc(13px * var(--pm-zoom, 1)); }
+.cellSelect { width: 100%; height: 100%; font: inherit; font-size: calc(13px * var(--pm-zoom, 1)); }
 .caret { color: #9aa3ae; font-size: 10px; }
 .pickBtn {
   flex: none; border: 1px solid #c6cbd2; background: #fff; border-radius: 3px; font-size: 11px; padding: 0 5px; line-height: 17px; cursor: pointer; color: #333;
@@ -239,3 +239,60 @@
 .ctxItem:disabled { color: #b0b6bf; cursor: default; }
 .ctxOn { color: #1a73e8; font-weight: 600; }
 .ctxSep { height: 1px; margin: 4px 0; background: #eceef1; }
+
+/* ---- 2026-11-25: 아이콘 단추 · 배율 · 행/열 머리 · 데이터 줄 · 바뀐 칸 ---- */
+.iconTool {
+  display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px;
+  border: 1px solid var(--border, #d9dde3); border-radius: 5px; background: var(--surface, #fff);
+  color: inherit; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+.iconTool:hover:not(:disabled) { background: #eef3fd; border-color: #b7c9ee; }
+.iconTool:disabled { opacity: 0.45; cursor: default; }
+.iconTool svg { flex: none; }
+.iconToolAlert { border-color: #d93025; color: #b3261e; background: #fff4f2; }
+
+.stepper { display: inline-flex; align-items: center; gap: 2px; }
+.stepper button {
+  width: 22px; height: 24px; border: none; background: transparent; border-radius: 4px; cursor: pointer; font-size: 15px; color: inherit; line-height: 1;
+}
+.stepper button:hover:not(:disabled) { background: rgba(127, 127, 127, 0.14); }
+.stepper input {
+  width: 40px; height: 24px; text-align: center; font: inherit; font-size: 12px;
+  border: 1px solid var(--border, #c6cbd2); border-radius: 4px; background: var(--surface, #fff); color: inherit;
+}
+.stepperWide input { width: 50px; }
+
+.fxBar {
+  display: flex; align-items: stretch; gap: 0; border-bottom: 1px solid var(--border, #e3e6ea); font-size: 13px; background: var(--surface, #fff);
+}
+.fxAddr {
+  width: 84px; flex: none; padding: 4px 8px; border-right: 1px solid var(--border, #e3e6ea); font-weight: 600;
+  font-variant-numeric: tabular-nums; color: #3c4043; display: flex; align-items: center;
+}
+.fxMark { flex: none; padding: 4px 10px; color: #80868b; font-style: italic; font-family: Georgia, serif; border-right: 1px solid var(--border, #e3e6ea); display: flex; align-items: center; }
+.fxInput { flex: 1 1 auto; border: none; outline: none; padding: 4px 8px; font: inherit; font-size: 13px; background: transparent; color: inherit; min-width: 0; }
+.fxInput:read-only { color: #6b7280; }
+
+.rowHead { justify-content: center; color: #5f6368; font-variant-numeric: tabular-nums; }
+.badgeBtn {
+  flex: none; border: 1px solid #1a73e8; background: #e8f0fe; color: #1a73e8; border-radius: 3px;
+  font-size: 10px; font-weight: 700; line-height: 14px; padding: 0 3px; cursor: pointer;
+}
+.stepBtn {
+  flex: none; visibility: hidden; border: 1px solid #c6cbd2; background: #fff; color: #333; border-radius: 3px;
+  width: 15px; line-height: 15px; padding: 0; font-size: 12px; cursor: pointer;
+}
+.stepNext { margin-left: auto; }
+.cellInner:hover .stepBtn { visibility: visible; }
+.stepBtn:hover { background: #e8f0fe; border-color: #1a73e8; }
+
+.confirmPop {
+  position: fixed; z-index: 60; display: flex; gap: 4px; padding: 4px; border-radius: 6px;
+  background: #fff; border: 1px solid #d93025; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+.confirmPop button {
+  border: 1px solid #d0d4da; background: #fff; border-radius: 4px; font: inherit; font-size: 12px; padding: 3px 9px; cursor: pointer; color: #222;
+}
+.confirmPop button:first-child { background: #d93025; border-color: #d93025; color: #fff; font-weight: 600; }
+.confirmPop button:hover { filter: brightness(0.95); }

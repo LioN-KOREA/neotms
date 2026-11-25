@@ -30,6 +30,8 @@ import '@silevis/reactgrid/styles.css'
 import {
   GROUP_END,
   GROUP_START,
+  confirmPmSeen,
+  orderPmRows,
   patchPmRow,
   pmKeys,
   useTranslatorSuggestions,
@@ -74,12 +76,37 @@ import { CondFormatModal, ColumnsModal, NoteModal, ShortcutsModal, StatesModal }
 import { ACTIONS, comboOf, effectiveShortcuts } from './shortcuts'
 import { ColorPalette } from './ColorPalette'
 import { IconMenu } from './IconMenus'
-import { ALIGN_ICONS, VALIGN_ICONS, WRAP_ICONS } from './menuIcons'
+import { ALIGN_ICONS, TOOL_ICONS, VALIGN_ICONS, WRAP_ICONS } from './menuIcons'
 import { effectiveStates, isClosedState, selectableStates, stateStyleFor } from './pmStates'
-import { BLANK_TAIL, freePosOf, isFreeRowId, layoutPositions, liveFreeRows, reorderSlots, setFreeValue } from './freeRows'
+import {
+  BLANK_TAIL,
+  applySlots,
+  columnLetter,
+  freePosOf,
+  insertSlots,
+  isFreeRowId,
+  layoutPositions,
+  liveFreeRows,
+  placeAfter,
+  removeSlots,
+  reorderSlots,
+  setFreeValue,
+  shiftYmd,
+  slotsOf,
+} from './freeRows'
 import css from './PmSheet.module.css'
 
-const SIZES = [9, 10, 11, 12, 13, 14, 16, 18, 20]
+/** 칸 글자 기본 크기(px) — 글자 크기 `− 13 +` 의 기준. */
+const DEFAULT_SIZE = 13
+/** 행 높이(px, 100%). */
+const ROW_H = 25
+/** 엑셀식 행 머리(1·2·3) 열과 열 머리(A·B·C) 행의 id. */
+const RH = '__rh'
+const LETTERS = '__letters'
+const HEADER = 'header'
+/** 다른 사람이 바꾼 칸 (팀장님 2026-11-25): 빨간 테두리 · 굵게 · 밑줄 · +3 · 노란 칸. */
+const CHANGED_BORDER = { color: '#D93025', width: '2px', style: 'solid' }
+const CHANGED_BG = '#FFF176'
 const GROUP_COLOR = '#990000'
 const MONTH_COLOR = '#FF6D01'
 /** 머리글 색 (팀장님 2026-11-25, 모든 사람의 시트). */
@@ -126,6 +153,9 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   }
 
   const columns = useMemo(() => buildColumns(prefs.columns), [prefs.columns])
+  /** 시트 배율 — 100 기준 5 단위, 시트 주인 기준 (팀장님 2026-11-25). */
+  const zoom = Math.min(200, Math.max(50, prefs.view?.zoom ?? 100))
+  const z = zoom / 100
   const cells = useMemo(() => indexCells(sheet.cells), [sheet.cells])
   const rules: PmCondRule[] = prefs.cf?.rules ?? []
   const defaultsOn = prefs.cf?.defaults !== false
@@ -152,6 +182,13 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const [todayOpen, setTodayOpen] = useState(false)
   const [modal, setModal] = useState<'cf' | 'shortcuts' | 'columns' | 'note' | 'states' | null>(null)
   const [stateMenu, setStateMenu] = useState<{ jobId: string; x: number; y: number } | null>(null)
+  /** 행 머리 우클릭 메뉴. */
+  const [rowMenu, setRowMenu] = useState<{ rowId: string; x: number; y: number } | null>(null)
+  /** 바뀐 칸을 눌렀을 때 옆에 뜨는 '확인'. */
+  const [confirmAt, setConfirmAt] = useState<{ jobId: string; colKey: string; x: number; y: number } | null>(null)
+  /** 데이터 줄이 가리키는 칸 (빈 줄·월 머리행 포함) 과 고치는 중인 글자. */
+  const [cellAt, setCellAt] = useState<{ rowId: string; colKey: string } | null>(null)
+  const [fxDraft, setFxDraft] = useState<{ key: string; text: string } | null>(null)
   /** 우클릭 메뉴 — 머리글(jobId null) 또는 칸. */
   /* 시트 창이 화면 아래 끝까지 — 창 크기·위쪽 내용이 바뀌면 다시 잰다. */
   const gridBox = useRef<HTMLDivElement>(null)
@@ -202,6 +239,10 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   }
 
   const rowById = useMemo(() => new Map(sheet.rows.map((r) => [r.jobId, r])), [sheet.rows])
+  /** 행(통합 행이면 합쳐진 행까지)에서 다른 사람이 바꾼 칸. */
+  const changedSet = (entry: DataEntry) => new Set([entry.row, ...entry.merged].flatMap((r) => r.changedKeys ?? []))
+  const changedRows = sheet.rows.filter((r) => (r.changedKeys?.length ?? 0) > 0)
+  const changedCount = changedRows.reduce((n, r) => n + r.changedKeys.length, 0)
 
   const decimalsOf = (row: PmSheetRow, column: SheetColumn) =>
     mergeStyle(cells.get(cellKey(row.jobId, column.key))?.style, row.rowStyle, column.style).decimals
@@ -266,6 +307,34 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     })
 
   const refresh = () => void qc.invalidateQueries({ queryKey: pmKeys.sheet(ownerId ?? null) })
+
+  /**
+   * 자리 목록대로 저장한다 — 자리가 바뀐 작업은 한 요청으로, 글이 있는 빈 줄은 개인 설정으로.
+   * `base` 는 그 목록을 만들 때의 빈 줄(되돌리기는 예전 것을 넘긴다). `all` 이면 모든 작업의 자리를 보낸다.
+   */
+  const saveSlots = async (order: string[], base: typeof freeRows, all = false) => {
+    const result = applySlots(order, base)
+    const items = [...result.jobPos]
+      .filter(([jobId, pos]) => all || (layout.posOf.get(jobId) ?? rowById.get(jobId)?.ordNo ?? null) !== pos)
+      .map(([jobId, ordNo]) => ({ jobId, ordNo }))
+    if (items.length > 0) await orderPmRows(ownerId, items)
+    if (JSON.stringify(result.freeRows) !== JSON.stringify(freeRows)) {
+      await savePref('view', { ...(prefs.view ?? {}), freeRows: result.freeRows })
+    }
+  }
+
+  /** 바뀐 칸 확인 (`keys` 가 없으면 그 행들의 모든 칸). 남은 칸이 없으면 기다리는 재인계도 확인된다. */
+  const confirmChanges = async (jobIds: string[], keys?: string[]) => {
+    try {
+      const r = await confirmPmSeen(ownerId, jobIds, keys)
+      setConfirmAt(null)
+      refresh()
+      void qc.invalidateQueries({ queryKey: ['workspace', 'pm'] })
+      if (r.rehandoversConfirmed > 0) onNotice(`재인계 ${String(r.rehandoversConfirmed)}건도 확인했습니다.`)
+    } catch (err) {
+      onError(messageOf(err))
+    }
+  }
 
   /* ----------------------------------------------------------------------- */
   /* Writing values                                                          */
@@ -614,6 +683,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     const list: { row: PmSheetRow; column: SheetColumn; text: string }[] = []
     const free: { pos: number; colKey: string; text: string }[] = []
     for (const change of changes) {
+      if (String(change.columnId) === RH) continue
       if (isFreeRowId(String(change.rowId))) {
         const next = change.newCell as unknown as SheetCell
         free.push({ pos: freePosOf(String(change.rowId)), colKey: String(change.columnId), text: next.raw ?? next.text ?? '' })
@@ -636,7 +706,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     const dataRowCount = dataCount
     for (const range of ranges) {
       const rids = range.rows.map((r) => String(r.rowId)).filter((id) => rowById.has(id))
-      const cids = range.columns.map((c) => String(c.columnId))
+      const cids = range.columns.map((c) => String(c.columnId)).filter((id) => id !== RH)
       if (rids.length === 0 || cids.length === 0) continue
       const wholeCols = rids.length === dataRowCount && dataRowCount > 1
       const wholeRows = cids.length === columns.length && columns.length > 1
@@ -650,8 +720,19 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const onFocusLocationChanged = (loc: CellLocation) => {
     const jobId = String(loc.rowId)
     const colKey = String(loc.columnId)
-    if (!rowById.has(jobId)) return
+    if (colKey !== RH && jobId !== HEADER && jobId !== LETTERS) {
+      setCellAt({ rowId: jobId, colKey })
+      setFxDraft(null)
+    }
+    if (!rowById.has(jobId) || colKey === RH) {
+      setConfirmAt(null)
+      return
+    }
     setFocus({ jobId, colKey })
+    // 다른 사람이 바꾼 칸을 누르면 바로 옆에 '확인' 이 뜬다.
+    const entry = entries.find((e): e is DataEntry => e.kind === 'data' && e.row.jobId === jobId)
+    if (entry && changedSet(entry).has(colKey)) setConfirmAt({ jobId, colKey, x: mouse.current.x + 14, y: mouse.current.y - 12 })
+    else setConfirmAt(null)
     if (colKey === 'translator' || colKey === 'reviewer') {
       setSuggestFor({ jobId, which: colKey === 'translator' ? 'tr' : 'rv', x: mouse.current.x + 14, y: mouse.current.y + 8 })
     } else setSuggestFor(null)
@@ -666,14 +747,19 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     })
   }
 
-  const onColumnResized = (columnId: Id, width: number) => persistLayout(null, { [String(columnId)]: Math.round(width) })
+  const onColumnResized = (columnId: Id, width: number) => {
+    if (String(columnId) === RH) return
+    // 화면 너비는 배율이 곱해진 값 — 100% 기준으로 저장한다.
+    persistLayout(null, { [String(columnId)]: Math.round(width / z) })
+  }
 
   const onColumnsReordered = (targetColumnId: Id, columnIds: Id[], dropPosition: string) => {
-    const moving = columnIds.map(String)
+    const moving = columnIds.map(String).filter((k) => k !== RH)
+    if (moving.length === 0) return
     const all = buildColumns({ ...(prefs.columns ?? {}), hidden: [] }).map((c) => c.key)
     const rest = all.filter((k) => !moving.includes(k))
-    const target = rest.indexOf(String(targetColumnId))
-    const at = target < 0 ? rest.length : dropPosition === 'before' ? target : target + 1
+    const target = String(targetColumnId) === RH ? 0 : rest.indexOf(String(targetColumnId))
+    const at = String(targetColumnId) === RH ? 0 : target < 0 ? rest.length : dropPosition === 'before' ? target : target + 1
     persistLayout([...rest.slice(0, at), ...moving, ...rest.slice(at)], null)
   }
 
@@ -681,6 +767,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const onRowsReordered = (targetRowId: Id, rowIds: Id[], dropPosition: string) => {
     const slots = entries.filter((e) => e.kind !== 'month').map((e) => (e.kind === 'data' ? e.row.jobId : e.id))
     let target = String(targetRowId)
+    if (target === HEADER || target === LETTERS) return
     if (target.startsWith('m:')) {
       // 월별 머리행 위에 놓았으면 그 다음 행 자리.
       const idx = entries.findIndex((e) => e.kind === 'month' && e.id === target)
@@ -708,11 +795,35 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const freezeCols = Math.min(prefs.view?.freezeCols ?? 0, columns.length - 1)
   const freezeRows = prefs.view?.freezeRows ?? 0
 
-  const gridColumns: Column[] = columns.map((c) => ({ columnId: c.key, width: c.width, resizable: true, reorderable: true }))
+  const rowH = Math.round(ROW_H * z)
+  const gridColumns: Column[] = [
+    { columnId: RH, width: Math.max(34, Math.round(46 * z)), resizable: false, reorderable: false },
+    ...columns.map((c) => ({ columnId: c.key, width: Math.max(24, Math.round(c.width * z)), resizable: true, reorderable: true })),
+  ]
+
+  /** 엑셀식 열 머리(A·B·C) — 열 고르기·끌어 옮기기·너비 조정은 여기서. */
+  const lettersRow: Row<GridCell> = {
+    rowId: LETTERS,
+    height: rowH,
+    cells: [
+      { type: 'sheetHeader', text: '', style: { background: '#E8EAED' } } as SheetHeaderCell,
+      ...columns.map(
+        (c, i): SheetHeaderCell => ({
+          type: 'sheetHeader',
+          text: columnLetter(i),
+          hint: `${c.label} 열`,
+          onMenu: (x, y) => setColMenu({ key: c.key, x, y, jobId: null }),
+          inner: { justifyContent: 'center', color: '#5F6368' },
+          style: { background: '#F1F3F4' },
+        }),
+      ),
+    ],
+  }
 
   const headerRow: Row<GridCell> = {
-    rowId: 'header',
-    cells: columns.map(
+    rowId: HEADER,
+    height: rowH,
+    cells: [{ type: 'sheetHeader', text: '', style: { background: HEADER_BG } } as SheetHeaderCell, ...columns.map(
       (c): SheetHeaderCell => ({
         type: 'sheetHeader',
         text: c.label,
@@ -725,7 +836,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
         inner: innerStyle(c.style),
         style: { ...toCellStyle(c.style), background: HEADER_BG },
       }),
-    ),
+    )],
   }
 
   const today = todayYmd(now)
@@ -772,6 +883,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     }
     const isGroupMarker = entry.groupRole !== null
     const highlighted = flash === row.jobId
+    const changed = changedSet(entry)
 
     return {
       rowId: row.jobId,
@@ -804,6 +916,19 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           groupBottom: entry.groupRole === 'end',
         })
         if (highlighted) cellStyle.background = '#fff59d'
+        const isChanged = changed.has(column.key)
+        if (isChanged) {
+          cellStyle.background = CHANGED_BG
+          ;(cellStyle as { border?: unknown }).border = { left: CHANGED_BORDER, right: CHANGED_BORDER, top: CHANGED_BORDER, bottom: CHANGED_BORDER }
+        }
+        const inner = isChanged
+          ? {
+              ...innerStyle(style),
+              fontWeight: 700,
+              textDecoration: 'underline',
+              fontSize: `calc(${String((style.size ?? DEFAULT_SIZE) + 3)}px * var(--pm-zoom, 1))`,
+            }
+          : innerStyle(style)
         return {
           type: 'sheet',
           text: column.spec.kind === 'picker' ? v.shown : v.shown,
@@ -812,7 +937,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           internal: v.internal,
           onNavigate: (href) => void navigate(href),
           note: own?.note ?? undefined,
-          tooltip: v.tooltip ?? (!editable && column.spec.source !== 'readonly' && !po && (column.spec.source === 'tr' || column.spec.source === 'rv') ? 'PO 가 없습니다 — 작업 화면에서 PO 를 발행하면 여기서 고칠 수 있습니다.' : undefined),
+          tooltip: isChanged ? '다른 사람이 바꾼 칸입니다 — 눌러서 확인' : v.tooltip ?? (!editable && column.spec.source !== 'readonly' && !po && (column.spec.source === 'tr' || column.spec.source === 'rv') ? 'PO 가 없습니다 — 작업 화면에서 PO 를 발행하면 여기서 고칠 수 있습니다.' : undefined),
           nonEditable: !editable,
           choices: column.key === 'pmState' ? stateNames : column.key === 'task' ? TASK_OPTIONS : undefined,
           // 진행 상태는 한 번 눌러 바로 목록을 연다 (팀장님 2026-11-25).
@@ -836,9 +961,23 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
                   } as SwappableTranslatorPo)
               : undefined,
           style: cellStyle,
-          inner: innerStyle(style),
+          inner,
           wrap: style.wrap === 'wrap' || style.wrap === 'clip' ? style.wrap : null,
           onMenu: (x: number, y: number) => setColMenu({ key: column.key, x, y, jobId: row.jobId }),
+          // 통합 행: 행ID 앞 'M' — 누르면 통합 해제 (팀장님 2026-11-25).
+          badge:
+            column.key === 'rowNo' && entry.merged.length > 0
+              ? {
+                  text: 'M',
+                  title: `통합 행 — ${[row, ...entry.merged].map((r) => r.elang ?? '').filter(Boolean).join('·')} (누르면 통합 해제)`,
+                  onClick: () => void unmergeHeads([row.jobId]),
+                }
+              : undefined,
+          // 납품일: 마우스를 올리면 ‹ › — 실제 작업 납기를 하루씩 옮긴다.
+          step:
+            column.key === 'jobEday' && editable && v.raw
+              ? { title: '납품일', onPrev: () => void shiftDay(row, entry.merged, column, -1), onNext: () => void shiftDay(row, entry.merged, column, 1) }
+              : undefined,
         }
       }),
     }
@@ -859,8 +998,26 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
       }
       lines = Math.max(lines, total)
     })
-    return lines > 1 ? { ...r, height: Math.min(lines * LINE_HEIGHT + 9, 400) } : r
+    return { ...r, height: lines > 1 ? Math.min(Math.round((lines * LINE_HEIGHT + 9) * z), 400) : rowH }
   })
+
+  /** 행 머리(1·2·3) — 화면 순서 번호. 행 고르기·끌어 옮기기, 우클릭으로 행 추가·삭제. */
+  const gridRows: Row<GridCell>[] = sizedRows.map((r, i) => {
+    const id = String(r.rowId)
+    const data = rowById.get(id)
+    const pending = data?.rehandoverId ? '재인계 확인 대기 — 바뀐 칸을 확인하면 재인계도 확인됩니다' : undefined
+    const head: SheetCell = {
+      type: 'sheet',
+      text: `${String(i + 1)}${data?.rehandoverId ? ' ↻' : ''}`,
+      nonEditable: true,
+      tooltip: pending ?? '우클릭: 행 추가·삭제',
+      style: { background: data?.rehandoverId ? '#FCE8E6' : '#F8F9FA', color: '#5F6368' },
+      inner: { justifyContent: 'center', fontSize: `calc(11px * var(--pm-zoom, 1))` },
+      onMenu: id.startsWith('m:') ? undefined : (x: number, y: number) => setRowMenu({ rowId: id, x, y }),
+    }
+    return { ...r, cells: [head, ...r.cells] }
+  })
+  const gridIndex = new Map(gridRows.map((r, i) => [String(r.rowId), i]))
 
   const highlights: Highlight[] = focus && flash ? [{ rowId: flash, columnId: focus.colKey, borderColor: '#FF6D01' }] : []
 
@@ -906,18 +1063,94 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     const problem = mergeProblem(ordered)
     if (problem) return onError(problem)
     const [head, ...rest] = ordered
-    try {
+    const before = slotsOf(layout.posOf, freeRows)
+    const baseFree = freeRows
+    // 통합하면 합쳐진 행의 자리를 지우고 아래 행을 끌어올린다 — 빈 줄이 남지 않게 (팀장님 2026-11-25).
+    const merge = async () => {
       for (const r of rest) await patchPmRow({ staffId: ownerId, jobId: r.jobId, mergedInto: head!.jobId })
+      await saveSlots(removeSlots(before, rest.map((r) => r.jobId)), baseFree, true)
       refresh()
+    }
+    try {
+      await merge()
       onNotice(`${String(ordered.length)}개 행을 한 행으로 통합했습니다. (번역어: ${ordered.map((r) => r.elang ?? '').join('·')})`)
       pushHistory({
         label: '행 통합',
         undo: async () => {
           for (const r of rest) await patchPmRow({ staffId: ownerId, jobId: r.jobId, mergedInto: null })
+          await saveSlots(before, baseFree, true)
+          refresh()
+        },
+        redo: merge,
+      })
+    } catch (err) {
+      onError(messageOf(err))
+    }
+  }
+
+  /** 통합 해제 — 풀린 행은 통합 행 바로 아래에 새 줄로 끼워 넣는다 (아래 행은 밀려 내려갈 뿐). */
+  const unmergeHeads = async (headIds: string[]) => {
+    const heads = headIds.filter((id) => sheet.rows.some((r) => r.mergedInto === id))
+    if (heads.length === 0) return onError('통합된 행을 골라 주세요.')
+    try {
+      let order = slotsOf(layout.posOf, freeRows)
+      for (const head of heads) {
+        const members = sheet.rows.filter((r) => r.mergedInto === head)
+        for (const r of members) await patchPmRow({ staffId: ownerId, jobId: r.jobId, mergedInto: null })
+        order = placeAfter(order, head, members.map((r) => r.jobId))
+      }
+      await saveSlots(order, freeRows)
+      refresh()
+      onNotice('통합을 풀었습니다. 풀린 행은 통합 행 바로 아래에 들어갔습니다.')
+    } catch (err) {
+      onError(messageOf(err))
+    }
+  }
+  const unmergeRows = () => unmergeHeads(selectedRowIds())
+
+  /* 행 머리 메뉴 — 행 추가·삭제. 작업(프로젝트 연결) 행은 지울 수 없다. */
+  const slotOfRow = (rowId: string): number | null =>
+    isFreeRowId(rowId) ? freePosOf(rowId) : (layout.posOf.get(rowId) ?? null)
+
+  /** 행 머리에서 고른 행들 (우클릭한 행이 그 안에 있으면 고른 행 모두, 아니면 그 행만). */
+  const rowsForMenu = (rowId: string): string[] => {
+    const picked = new Set<string>()
+    for (const range of selection.ranges) {
+      const cols = range.columns.map((c) => String(c.columnId))
+      if (!cols.includes(RH) && cols.length < columns.length) continue
+      for (const r of range.rows) picked.add(String(r.rowId))
+    }
+    return picked.has(rowId) ? [...picked].filter((id) => id !== HEADER && id !== LETTERS && !id.startsWith('m:')) : [rowId]
+  }
+
+  const slotEditBlocked = () => {
+    if (sort || Object.values(filters).some((v) => v.length > 0)) {
+      onError('정렬·필터를 푼 뒤에 행을 추가·삭제할 수 있습니다. (자리 순서가 보이는 상태에서만)')
+      return true
+    }
+    return false
+  }
+
+  const insertRows = async (rowId: string, below: boolean) => {
+    setRowMenu(null)
+    if (slotEditBlocked()) return
+    const ids = rowsForMenu(rowId)
+    const positions = ids.map(slotOfRow).filter((n): n is number => n !== null)
+    if (positions.length === 0) return
+    const at = below ? Math.max(...positions) + 1 : Math.min(...positions)
+    const before = slotsOf(layout.posOf, freeRows)
+    const baseFree = freeRows
+    try {
+      await saveSlots(insertSlots(before, at, ids.length), baseFree)
+      refresh()
+      pushHistory({
+        label: '행 추가',
+        undo: async () => {
+          await saveSlots(before, baseFree, true)
           refresh()
         },
         redo: async () => {
-          for (const r of rest) await patchPmRow({ staffId: ownerId, jobId: r.jobId, mergedInto: head!.jobId })
+          await saveSlots(insertSlots(before, at, ids.length), baseFree, true)
           refresh()
         },
       })
@@ -926,17 +1159,39 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     }
   }
 
-  const unmergeRows = async () => {
-    const ids = selectedRowIds()
-    const members = sheet.rows.filter((r) => r.mergedInto && ids.includes(r.mergedInto))
-    if (members.length === 0) return onError('통합된 행을 골라 주세요.')
+  const deleteRows = async (rowId: string) => {
+    setRowMenu(null)
+    if (slotEditBlocked()) return
+    const ids = rowsForMenu(rowId)
+    if (ids.some((id) => rowById.has(id))) {
+      return onError('프로젝트(작업)에 연결된 행은 지울 수 없습니다. 시트에서 빼려면 "행 빼기" 를 써 주세요.')
+    }
+    const before = slotsOf(layout.posOf, freeRows)
+    const baseFree = freeRows
     try {
-      for (const r of members) await patchPmRow({ staffId: ownerId, jobId: r.jobId, mergedInto: null })
+      await saveSlots(removeSlots(before, ids), baseFree)
       refresh()
-      onNotice('통합을 풀었습니다.')
+      pushHistory({
+        label: '행 삭제',
+        undo: async () => {
+          await saveSlots(before, baseFree, true)
+          refresh()
+        },
+        redo: async () => {
+          await saveSlots(removeSlots(before, ids), baseFree, true)
+          refresh()
+        },
+      })
     } catch (err) {
       onError(messageOf(err))
     }
+  }
+
+  /** 납품일 ‹ › — 실제 작업 납기를 하루씩 (통합 행이면 합쳐진 작업도 같이 — 통합은 납기가 같아야 하므로). */
+  const shiftDay = async (row: PmSheetRow, merged: PmSheetRow[], column: SheetColumn, days: number) => {
+    const next = shiftYmd(currentRaw(row, column), days)
+    if (!next) return
+    await applyValues([row, ...merged].map((r) => ({ row: r, column, text: next })))
   }
 
   const focusRow = focus ? rowById.get(focus.jobId) : undefined
@@ -1002,6 +1257,31 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   /* Render                                                                  */
   /* ----------------------------------------------------------------------- */
 
+  /* 데이터 줄 */
+  const fxColumn = cellAt ? columnOf(cellAt.colKey) : null
+  const fxColIndex = fxColumn ? columns.indexOf(fxColumn) : -1
+  const fxRowIndex = cellAt ? (gridIndex.get(cellAt.rowId) ?? -1) : -1
+  const fxAddress = fxColIndex >= 0 && fxRowIndex >= 0 ? `${columnLetter(fxColIndex)}${String(fxRowIndex + 1)}` : ''
+  const fxKey = cellAt ? `${cellAt.rowId}|${cellAt.colKey}` : ''
+  const fxEntry = cellAt ? entries.find((e) => (e.kind === 'data' ? e.row.jobId : e.id) === cellAt.rowId) : undefined
+  let fxValue = ''
+  let fxEditable = false
+  if (fxEntry && fxColumn) {
+    if (fxEntry.kind === 'data') {
+      fxValue = currentRaw(fxEntry.row, fxColumn)
+      fxEditable = isEditable(fxColumn, fxEntry.row)
+    } else if (fxEntry.kind === 'free') {
+      fxValue = fxEntry.values[fxColumn.key] ?? ''
+      fxEditable = true
+    } else fxValue = fxEntry.label
+  }
+  const commitFx = (text: string) => {
+    setFxDraft(null)
+    if (!fxEntry || !fxColumn || !fxEditable || text === fxValue) return
+    if (fxEntry.kind === 'data') void applyValues([{ row: fxEntry.row, column: fxColumn, text }])
+    else if (fxEntry.kind === 'free') writeFree([{ pos: fxEntry.pos, colKey: fxColumn.key, text }])
+  }
+
   const can = { undo: histSize.undo > 0, redo: histSize.redo > 0 }
   const focusColumn = focus ? columnOf(focus.colKey) : null
 
@@ -1014,10 +1294,14 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           <button type="button" className={css.tool} disabled={!can.redo} title={`재실행 (${shortcuts.redo ?? ''})`} onClick={() => void redo()}>↷</button>
         </span>
         <span className={css.group}>
-          <select className={css.toolSelect} title="글자 크기" value={focusStyle.size ?? ''} onChange={(e) => void applyStyle({ size: e.target.value ? Number(e.target.value) : null }, '글자 크기')}>
-            <option value="">크기</option>
-            {SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <Stepper
+            title="글자 크기"
+            value={focusStyle.size ?? DEFAULT_SIZE}
+            min={6}
+            max={40}
+            step={1}
+            onChange={(n) => void applyStyle({ size: n === DEFAULT_SIZE ? null : n }, '글자 크기')}
+          />
           <button type="button" className={`${css.tool} ${focusStyle.bold ? css.toolOn : ''}`} title={`굵게 (${shortcuts.bold ?? ''})`} onClick={() => toggle('bold', '굵게')}><b>B</b></button>
           <button type="button" className={`${css.tool} ${focusStyle.italic ? css.toolOn : ''}`} title={`기울임 (${shortcuts.italic ?? ''})`} onClick={() => toggle('italic', '기울임')}><i>I</i></button>
           <button type="button" className={`${css.tool} ${focusStyle.underline ? css.toolOn : ''}`} title={`밑줄 (${shortcuts.underline ?? ''})`} onClick={() => toggle('underline', '밑줄')}><u>U</u></button>
@@ -1063,13 +1347,13 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
             <option value="">소수</option>
             {[0, 1, 2, 3, 4].map((d) => <option key={d} value={d}>{d === 0 ? '0,000' : `0,000.${'0'.repeat(d)}`}</option>)}
           </select>
-          <button type="button" className={css.tool} title={`메모 (${shortcuts.note ?? ''})`} onClick={() => runAction('note')}>메모</button>
-          <button type="button" className={css.tool} title="서식 지우기" onClick={() => runAction('clearFormat')}>서식✕</button>
+          <button type="button" className={css.iconTool} title={`메모 (${shortcuts.note ?? ''})`} onClick={() => runAction('note')}>{TOOL_ICONS.note}메모</button>
+          <button type="button" className={css.iconTool} title="서식 지우기" onClick={() => runAction('clearFormat')}>{TOOL_ICONS.clearFormat}서식 지우기</button>
         </span>
         <span className={css.group}>
-          <button type="button" className={css.tool} onClick={() => setModal('cf')}>조건부 서식</button>
-          <button type="button" className={css.tool} onClick={() => setModal('columns')}>열 관리</button>
-          <button type="button" className={css.tool} onClick={() => setModal('shortcuts')}>단축키</button>
+          <button type="button" className={css.iconTool} onClick={() => setModal('cf')}>{TOOL_ICONS.cf}조건부 서식</button>
+          <button type="button" className={css.iconTool} onClick={() => setModal('columns')}>{TOOL_ICONS.columns}열 관리</button>
+          <button type="button" className={css.iconTool} onClick={() => setModal('shortcuts')}>{TOOL_ICONS.shortcuts}단축키</button>
           <select className={css.toolSelect} title="열 고정" value={freezeCols} onChange={(e) => void savePref('view', { ...(prefs.view ?? {}), freezeCols: Number(e.target.value) })}>
             {[0, 1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n === 0 ? '열 고정 없음' : `열 ${String(n)}개 고정`}</option>)}
           </select>
@@ -1078,15 +1362,15 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           </select>
         </span>
         <span className={css.group}>
-          <button type="button" className={css.tool} title="고른 행(같은 프로젝트·업체·담당자·납기·경로, 언어만 다른 행)을 한 행으로" onClick={() => void mergeRows()}>행 통합</button>
-          <button type="button" className={css.tool} onClick={() => void unmergeRows()}>통합 해제</button>
+          <button type="button" className={css.iconTool} title="고른 행(같은 프로젝트·같은 납기)을 한 행으로 — 경로 등은 맨 위 행의 값" onClick={() => void mergeRows()}>{TOOL_ICONS.merge}행 통합</button>
+          <button type="button" className={css.iconTool} title="풀린 행은 통합 행 바로 아래에 새 줄로 들어갑니다" onClick={() => void unmergeRows()}>{TOOL_ICONS.unmerge}통합 해제</button>
           {focusRow?.pmState === GROUP_START ? (
             <label className={css.tool} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }} title="인계일 기준 월별 머리행을 넣습니다">
               <input type="checkbox" checked={focusRow.groupMonthly} onChange={() => void toggleMonthly()} />
               월별 정리
             </label>
           ) : null}
-          <button type="button" className={css.tool} title="고른 행을 이 시트에서 뺍니다" onClick={() => void hideRows()}>행 빼기</button>
+          <button type="button" className={css.iconTool} title="고른 행을 이 시트에서 뺍니다" onClick={() => void hideRows()}>{TOOL_ICONS.hide}행 빼기</button>
         </span>
         <span className={css.group}>
           {favorites.map((f) => (
@@ -1095,11 +1379,36 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
               <button type="button" className={css.favX} title="즐겨찾기 지우기" onClick={() => void savePref('filters', { favorites: favorites.filter((x) => x.id !== f.id) })}>×</button>
             </span>
           ))}
-          <button type="button" className={css.tool} title="지금 걸린 필터를 버튼으로 저장 (최대 3개)" onClick={saveFavorite}>☆ 필터 저장</button>
+          <button type="button" className={css.iconTool} title="지금 걸린 필터를 버튼으로 저장 (최대 3개)" onClick={saveFavorite}>{TOOL_ICONS.favSave}필터 저장</button>
           {Object.values(filters).some((v) => v.length > 0) ? (
-            <button type="button" className={css.tool} onClick={() => setFilters({})}>필터 해제</button>
+            <button type="button" className={css.iconTool} onClick={() => setFilters({})}>{TOOL_ICONS.filterClear}필터 해제</button>
           ) : null}
         </span>
+        <span className={css.group} title="시트 배율 (5% 단위, 이 시트에 저장)">
+          {TOOL_ICONS.zoom}
+          <Stepper
+            title="시트 배율"
+            value={zoom}
+            min={50}
+            max={200}
+            step={5}
+            suffix="%"
+            wide
+            onChange={(n) => void savePref('view', { ...(prefs.view ?? {}), zoom: n })}
+          />
+        </span>
+        {changedCount > 0 ? (
+          <span className={css.group}>
+            <button
+              type="button"
+              className={`${css.iconTool} ${css.iconToolAlert}`}
+              title="다른 사람이 프로젝트·작업 창에서 바꾼 칸을 모두 확인합니다 (기다리는 재인계도 함께 확인)"
+              onClick={() => void confirmChanges(changedRows.map((r) => r.jobId))}
+            >
+              {TOOL_ICONS.confirm}바뀐 칸 {changedCount}개 · 모두 확인
+            </button>
+          </span>
+        ) : null}
         <span className={css.scope}>{scopeLabel}{focusColumn ? ` · ${focusColumn.label}` : ''}</span>
       </div>
 
@@ -1127,15 +1436,30 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
         ) : null}
       </div>
 
+      {/* 데이터 줄 — 고른 칸의 주소(A1)와 전체 내용. 고칠 수 있는 칸이면 여기서 고치고 Enter. */}
+      <FormulaBar
+        address={fxAddress}
+        value={fxValue}
+        editable={fxEditable}
+        draft={fxDraft && fxDraft.key === fxKey ? fxDraft.text : null}
+        onDraft={(text) => setFxDraft({ key: fxKey, text })}
+        onCancel={() => setFxDraft(null)}
+        onCommit={commitFx}
+      />
+
       {/* 시트 */}
-      <div className={css.gridWrap} ref={gridBox} style={gridHeight ? { height: gridHeight, maxHeight: 'none' } : undefined}>
+      <div
+        className={css.gridWrap}
+        ref={gridBox}
+        style={{ ...(gridHeight ? { height: gridHeight, maxHeight: 'none' } : {}), ['--pm-zoom' as string]: String(z) } as CSSProperties}
+      >
         {dataCount === 0 ? (
           <p style={{ padding: 16 }}>
             {sheet.rows.length === 0 ? '이 시트에 아직 작업이 없습니다. "인계" 탭에서 인계를 받으면 여기에 들어옵니다.' : '필터에 맞는 행이 없습니다.'}
           </p>
         ) : null}
         <ReactGrid
-          rows={[headerRow, ...sizedRows]}
+          rows={[lettersRow, headerRow, ...gridRows]}
           columns={gridColumns}
           customCellTemplates={{ sheet: new SheetCellTemplate(), sheetHeader: new SheetHeaderTemplate() }}
           onCellsChanged={onCellsChanged as unknown as (changes: CellChange[]) => void}
@@ -1147,8 +1471,8 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           canReorderRows={(target) => !sort && (rowById.has(String(target)) || String(target).startsWith('m:') || isFreeRowId(String(target)))}
           focusLocation={focusLocation}
           highlights={highlights}
-          stickyTopRows={1 + Math.min(freezeRows, renderRows.length)}
-          stickyLeftColumns={freezeCols}
+          stickyTopRows={2 + Math.min(freezeRows, renderRows.length)}
+          stickyLeftColumns={freezeCols + 1}
           enableRangeSelection
           enableRowSelection
           enableColumnSelection
@@ -1296,6 +1620,37 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           }}
         />
       ) : null}
+      {rowMenu ? (
+        <RowMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          linked={rowsForMenu(rowMenu.rowId).some((id) => rowById.has(id))}
+          count={rowsForMenu(rowMenu.rowId).length}
+          onClose={() => setRowMenu(null)}
+          onInsert={(below) => void insertRows(rowMenu.rowId, below)}
+          onDelete={() => void deleteRows(rowMenu.rowId)}
+        />
+      ) : null}
+      {confirmAt ? (
+        <ConfirmPop
+          x={confirmAt.x}
+          y={confirmAt.y}
+          rowCount={(() => {
+            const e = entries.find((x): x is DataEntry => x.kind === 'data' && x.row.jobId === confirmAt.jobId)
+            return e ? changedSet(e).size : 0
+          })()}
+          onCell={() => {
+            const e = entries.find((x): x is DataEntry => x.kind === 'data' && x.row.jobId === confirmAt.jobId)
+            const ids = e ? [e.row, ...e.merged].filter((r) => r.changedKeys.includes(confirmAt.colKey)).map((r) => r.jobId) : [confirmAt.jobId]
+            void confirmChanges(ids, [confirmAt.colKey])
+          }}
+          onRow={() => {
+            const e = entries.find((x): x is DataEntry => x.kind === 'data' && x.row.jobId === confirmAt.jobId)
+            void confirmChanges(e ? [e.row, ...e.merged].map((r) => r.jobId) : [confirmAt.jobId])
+          }}
+          onClose={() => setConfirmAt(null)}
+        />
+      ) : null}
       {modal === 'columns' ? (
         <ColumnsModal
           pref={prefs.columns ?? {}}
@@ -1362,6 +1717,148 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
 /* -------------------------------------------------------------------------- */
 /* Small parts                                                                */
 /* -------------------------------------------------------------------------- */
+
+/** `− 13 +` — 눌러서 한 단계씩, 숫자를 쳐서 Enter 로 바로 (구글 시트의 글자 크기와 같은 모양). */
+function Stepper(props: {
+  title: string
+  value: number
+  min: number
+  max: number
+  step: number
+  suffix?: string
+  wide?: boolean
+  onChange: (value: number) => void
+}) {
+  const { value, min, max, step, suffix = '' } = props
+  const [text, setText] = useState<string | null>(null)
+  const clamp = (n: number) => Math.min(max, Math.max(min, Math.round(n / step) * step))
+  const commit = () => {
+    if (text === null) return
+    const n = Number(text.replace(/[^\d.]/g, ''))
+    setText(null)
+    if (Number.isFinite(n) && n > 0 && clamp(n) !== value) props.onChange(clamp(n))
+  }
+  return (
+    <span className={`${css.stepper} ${props.wide ? css.stepperWide : ''}`} title={props.title}>
+      <button type="button" aria-label={`${props.title} 줄이기`} disabled={value <= min} onClick={() => props.onChange(clamp(value - step))}>−</button>
+      <input
+        aria-label={props.title}
+        value={text ?? `${String(value)}${suffix}`}
+        onFocus={(e) => {
+          const el = e.currentTarget
+          requestAnimationFrame(() => el.select())
+        }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') setText(null)
+        }}
+      />
+      <button type="button" aria-label={`${props.title} 키우기`} disabled={value >= max} onClick={() => props.onChange(clamp(value + step))}>+</button>
+    </span>
+  )
+}
+
+function FormulaBar(props: {
+  address: string
+  value: string
+  editable: boolean
+  draft: string | null
+  onDraft: (text: string) => void
+  onCancel: () => void
+  onCommit: (text: string) => void
+}) {
+  const shown = props.draft ?? props.value
+  return (
+    <div className={css.fxBar}>
+      <span className={css.fxAddr} aria-label="칸 주소">{props.address}</span>
+      <span className={css.fxMark} aria-hidden="true">fx</span>
+      <input
+        className={css.fxInput}
+        aria-label="칸 내용"
+        value={shown}
+        readOnly={!props.editable}
+        placeholder={props.address ? (props.editable ? '' : '이 칸은 여기서 고칠 수 없습니다') : '칸을 고르면 내용이 여기에 보입니다'}
+        onChange={(e) => props.onDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            props.onCommit(shown)
+          }
+          if (e.key === 'Escape') props.onCancel()
+        }}
+        onBlur={() => {
+          if (props.draft !== null) props.onCommit(props.draft)
+        }}
+      />
+    </div>
+  )
+}
+
+function RowMenu(props: {
+  x: number
+  y: number
+  linked: boolean
+  count: number
+  onClose: () => void
+  onInsert: (below: boolean) => void
+  onDelete: () => void
+}) {
+  const box = useRef<HTMLDivElement>(null)
+  const { onClose } = props
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+  const n = props.count > 1 ? `${String(props.count)}개 ` : ''
+  return (
+    <div ref={box} className={css.stateMenu} style={{ left: Math.min(props.x, window.innerWidth - 220), top: Math.min(props.y + 2, window.innerHeight - 140), minWidth: 200 }}>
+      <button type="button" className={css.stateItem} onClick={() => props.onInsert(false)}>위에 행 {n}추가</button>
+      <button type="button" className={css.stateItem} onClick={() => props.onInsert(true)}>아래에 행 {n}추가</button>
+      <button
+        type="button"
+        className={css.stateItem}
+        disabled={props.linked}
+        style={props.linked ? { color: '#9aa3ae', cursor: 'default' } : { color: '#b3261e' }}
+        title={props.linked ? '프로젝트(작업)에 연결된 행은 지울 수 없습니다' : undefined}
+        onClick={props.onDelete}
+      >
+        행 {n}삭제{props.linked ? ' (작업 연결 행 — 불가)' : ''}
+      </button>
+    </div>
+  )
+}
+
+function ConfirmPop(props: { x: number; y: number; rowCount: number; onCell: () => void; onRow: () => void; onClose: () => void }) {
+  const box = useRef<HTMLDivElement>(null)
+  const { onClose } = props
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div ref={box} className={css.confirmPop} style={{ left: Math.min(props.x, window.innerWidth - 220), top: Math.max(4, props.y) }} onMouseDown={(e) => e.stopPropagation()}>
+      <button type="button" onClick={props.onCell} title="이 칸을 확인 — 서식이 원래대로 돌아갑니다">확인</button>
+      {props.rowCount > 1 ? (
+        <button type="button" onClick={props.onRow} title="이 행의 바뀐 칸을 모두 확인">행 전체 ({props.rowCount})</button>
+      ) : null}
+    </div>
+  )
+}
 
 function FilterPopover(props: {
   x: number
@@ -1621,7 +2118,7 @@ function innerStyle(style: PmStyle): CSSProperties {
   if (style.italic) out.fontStyle = 'italic'
   const deco = [style.underline ? 'underline' : '', style.strike ? 'line-through' : ''].filter(Boolean).join(' ')
   if (deco) out.textDecoration = deco
-  if (style.size) out.fontSize = `${String(style.size)}px`
+  if (style.size) out.fontSize = `calc(${String(style.size)}px * var(--pm-zoom, 1))`
   if (style.align) out.justifyContent = style.align === 'left' ? 'flex-start' : style.align === 'center' ? 'center' : 'flex-end'
   if (style.align) out.textAlign = style.align
   if (style.valign) out.alignItems = style.valign === 'top' ? 'flex-start' : style.valign === 'middle' ? 'center' : 'flex-end'

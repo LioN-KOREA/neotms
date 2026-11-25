@@ -130,6 +130,28 @@ export const PmHandoverAnswerSchema = v.object({
   reply: v.optional(v.nullable(v.pipe(v.string(), v.maxLength(2000)))),
 });
 
+/** Confirm changed cells (db/012). No `keys` = every linked column of those rows. */
+export const PmSeenSchema = v.object({
+  ...SheetOwner,
+  jobIds: v.pipe(v.array(IdSchema), v.minLength(1), v.maxLength(2000)),
+  keys: v.optional(v.pipe(v.array(ColKey), v.maxLength(40))),
+});
+
+/** Many row positions in one request - inserting a row moves every row below it. */
+export const PmRowOrderSchema = v.object({
+  ...SheetOwner,
+  items: v.pipe(
+    v.array(
+      v.object({
+        jobId: IdSchema,
+        ordNo: v.pipe(v.number(), v.integer(), v.minValue(-1_000_000), v.maxValue(1_000_000)),
+      }),
+    ),
+    v.minLength(1),
+    v.maxLength(2000),
+  ),
+});
+
 export const PmNoticesReadSchema = v.object({
   ids: v.optional(v.nullable(v.pipe(v.array(IdSchema), v.maxLength(200)))),
 });
@@ -138,5 +160,7 @@ export type PmRowPatch = v.InferOutput<typeof PmRowPatchSchema>;
 export type PmCellsInput = v.InferOutput<typeof PmCellsSchema>;
 export type PmPrefInput = v.InferOutput<typeof PmPrefSchema>;
 export type PmHandoverCreate = v.InferOutput<typeof PmHandoverCreateSchema>;
+export type PmSeenInput = v.InferOutput<typeof PmSeenSchema>;
+export type PmRowOrderInput = v.InferOutput<typeof PmRowOrderSchema>;
 export type PmHandoverAnswer = v.InferOutput<typeof PmHandoverAnswerSchema>;
 export type PmNoticesRead = v.InferOutput<typeof PmNoticesReadSchema>;
