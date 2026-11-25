@@ -76,6 +76,7 @@ import { ColorPalette } from './ColorPalette'
 import { IconMenu } from './IconMenus'
 import { ALIGN_ICONS, VALIGN_ICONS, WRAP_ICONS } from './menuIcons'
 import { effectiveStates, isClosedState, selectableStates, stateStyleFor } from './pmStates'
+import { BLANK_TAIL, freePosOf, isFreeRowId, layoutPositions, liveFreeRows, reorderSlots, setFreeValue } from './freeRows'
 import css from './PmSheet.module.css'
 
 const SIZES = [9, 10, 11, 12, 13, 14, 16, 18, 20]
@@ -152,6 +153,25 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const [modal, setModal] = useState<'cf' | 'shortcuts' | 'columns' | 'note' | 'states' | null>(null)
   const [stateMenu, setStateMenu] = useState<{ jobId: string; x: number; y: number } | null>(null)
   /** 우클릭 메뉴 — 머리글(jobId null) 또는 칸. */
+  /* 시트 창이 화면 아래 끝까지 — 창 크기·위쪽 내용이 바뀌면 다시 잰다. */
+  const gridBox = useRef<HTMLDivElement>(null)
+  const [gridHeight, setGridHeight] = useState<number | null>(null)
+  useEffect(() => {
+    const fit = () => {
+      const el = gridBox.current
+      if (!el) return
+      const h = Math.max(320, Math.floor(window.innerHeight - el.getBoundingClientRect().top - 12))
+      setGridHeight((old) => (old === h ? old : h))
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    const ro = new ResizeObserver(fit)
+    if (gridBox.current?.parentElement) ro.observe(gridBox.current.parentElement)
+    return () => {
+      window.removeEventListener('resize', fit)
+      ro.disconnect()
+    }
+  }, [])
   const [colMenu, setColMenu] = useState<{ key: string; x: number; y: number; jobId: string | null } | null>(null)
   const [swapping, setSwapping] = useState<SwappableTranslatorPo | null>(null)
   const [suggestFor, setSuggestFor] = useState<{ jobId: string; which: 'tr' | 'rv'; x: number; y: number } | null>(null)
@@ -186,7 +206,35 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const decimalsOf = (row: PmSheetRow, column: SheetColumn) =>
     mergeStyle(cells.get(cellKey(row.jobId, column.key))?.style, row.rowStyle, column.style).decimals
 
-  const entries = buildEntries({ rows: sheet.rows, columns, cells, sort, filters, overrides, decimalsOf })
+  /* 빈 줄 — 작업 행 사이·아래의 자리. 글을 적을 수 있고, 새 인계 작업은 아무것도 없는 첫 자리에 들어간다. */
+  const freeRows = liveFreeRows(prefs.view?.freeRows)
+  const topJobs = sheet.rows.filter((r) => !(r.mergedInto && rowById.has(r.mergedInto)))
+  const layout = layoutPositions(topJobs.map((r) => ({ jobId: r.jobId, ordNo: r.ordNo })), freeRows)
+  const entries = buildEntries({ rows: sheet.rows, columns, cells, sort, filters, overrides, decimalsOf, posOf: layout.posOf, freeRows, blankTail: BLANK_TAIL })
+  const dataCount = entries.filter((e) => e.kind === 'data').length
+
+  // 자리가 새로 정해진 작업(새 인계 등)은 그 자리를 저장해 둔다 — 나중에 빈 줄에 글을 적어도 밀리지 않게.
+  const movesKey = layout.moves.map((m) => `${m.jobId}:${String(m.pos)}`).join(',')
+  const savedMoves = useRef('')
+  useEffect(() => {
+    if (!movesKey || savedMoves.current === movesKey) return
+    savedMoves.current = movesKey
+    void (async () => {
+      try {
+        for (const m of layout.moves) await patchPmRow({ staffId: ownerId, jobId: m.jobId, ordNo: m.pos })
+        void qc.invalidateQueries({ queryKey: pmKeys.sheet(ownerId ?? null) })
+      } catch {
+        // 화면 자리는 이미 맞다 — 다시 시도하지 않는다(볼 권한만 있는 시트 등). 자리가 또 바뀌면 그때 저장한다.
+      }
+    })()
+  })
+
+  /** 빈 줄 글 고치기 (여러 칸 한꺼번에). */
+  const writeFree = (changes: { pos: number; colKey: string; text: string }[]) => {
+    let next = freeRows
+    for (const c of changes) next = setFreeValue(next, c.pos, c.colKey, c.text)
+    void savePref('view', { ...(prefs.view ?? {}), freeRows: next })
+  }
 
   if (edits.source !== sheet.rows) {
     const next = new Map(edits.values)
@@ -564,7 +612,13 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
 
   const onCellsChanged = (changes: CellChange<GridCell>[]) => {
     const list: { row: PmSheetRow; column: SheetColumn; text: string }[] = []
+    const free: { pos: number; colKey: string; text: string }[] = []
     for (const change of changes) {
+      if (isFreeRowId(String(change.rowId))) {
+        const next = change.newCell as unknown as SheetCell
+        free.push({ pos: freePosOf(String(change.rowId)), colKey: String(change.columnId), text: next.raw ?? next.text ?? '' })
+        continue
+      }
       const row = rowById.get(String(change.rowId))
       const column = columnOf(String(change.columnId))
       if (!row || !column || (change.newCell as { type: string }).type !== 'sheet') continue
@@ -572,13 +626,14 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
       list.push({ row, column, text: next.raw ?? next.text })
     }
     if (list.length > 0) void applyValues(list)
+    if (free.length > 0) writeFree(free)
   }
 
   const onSelectionChanged = (ranges: Range[]) => {
     const sel: Target[] = []
     const rowsSel = new Set<string>()
     const colsSel = new Set<string>()
-    const dataRowCount = entries.filter((e) => e.kind === 'data').length
+    const dataRowCount = dataCount
     for (const range of ranges) {
       const rids = range.rows.map((r) => String(r.rowId)).filter((id) => rowById.has(id))
       const cids = range.columns.map((c) => String(c.columnId))
@@ -622,23 +677,23 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     persistLayout([...rest.slice(0, at), ...moving, ...rest.slice(at)], null)
   }
 
-  /** 행 끌어 옮기기 — 정렬하지 않을 때만. 별도 관리 묶음 안으로 옮기는 방법이다. */
+  /** 행 끌어 옮기기 — 정렬하지 않을 때만. 별도 관리 묶음 안으로 옮기는 방법이다. 빈 줄도 자리 하나로 센다. */
   const onRowsReordered = (targetRowId: Id, rowIds: Id[], dropPosition: string) => {
-    const dataIds = entries.filter((e): e is DataEntry => e.kind === 'data').map((e) => e.row.jobId)
-    const moving = rowIds.map(String).filter((id) => rowById.has(id))
-    const rest = dataIds.filter((id) => !moving.includes(id))
-    let target = rest.indexOf(String(targetRowId))
-    if (target < 0) {
-      // 월별 머리행 위에 놓았으면 그 다음 데이터 행 자리.
-      const idx = entries.findIndex((e) => e.kind === 'month' && e.id === String(targetRowId))
-      const nextData = entries.slice(idx + 1).find((e): e is DataEntry => e.kind === 'data')
-      target = nextData ? rest.indexOf(nextData.row.jobId) : rest.length
+    const slots = entries.filter((e) => e.kind !== 'month').map((e) => (e.kind === 'data' ? e.row.jobId : e.id))
+    let target = String(targetRowId)
+    if (target.startsWith('m:')) {
+      // 월별 머리행 위에 놓았으면 그 다음 행 자리.
+      const idx = entries.findIndex((e) => e.kind === 'month' && e.id === target)
+      const next = entries.slice(idx + 1).find((e) => e.kind !== 'month')
+      target = next ? (next.kind === 'data' ? next.row.jobId : next.id) : ''
     }
-    const at = dropPosition === 'before' ? target : target + 1
-    const order = [...rest.slice(0, at), ...moving, ...rest.slice(at)]
+    const moving = rowIds.map(String).filter((id) => slots.includes(id))
+    const result = reorderSlots(slots, moving, target, dropPosition === 'before' || !target, freeRows)
     void (async () => {
       try {
-        await Promise.all(order.map((jobId, i) => (rowById.get(jobId)?.ordNo === i ? null : patchPmRow({ staffId: ownerId, jobId, ordNo: i }))))
+        const changed = [...result.jobPos].filter(([jobId, pos]) => rowById.get(jobId)?.ordNo !== pos)
+        await Promise.all(changed.map(([jobId, pos]) => patchPmRow({ staffId: ownerId, jobId, ordNo: pos })))
+        if (JSON.stringify(result.freeRows) !== JSON.stringify(freeRows)) await savePref('view', { ...(prefs.view ?? {}), freeRows: result.freeRows })
         refresh()
       } catch (err) {
         onError(messageOf(err))
@@ -676,6 +731,21 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
   const today = todayYmd(now)
 
   const renderRows: Row<GridCell>[] = entries.map((entry): Row<GridCell> => {
+    if (entry.kind === 'free') {
+      return {
+        rowId: entry.id,
+        reorderable: !sort,
+        cells: columns.map(
+          (c): SheetCell => ({
+            type: 'sheet',
+            text: entry.values[c.key] ?? '',
+            raw: entry.values[c.key] ?? '',
+            nonEditable: false,
+            onMenu: (x: number, y: number) => setColMenu({ key: c.key, x, y, jobId: null }),
+          }),
+        ),
+      }
+    }
     if (entry.kind === 'month') {
       return {
         rowId: entry.id,
@@ -1058,8 +1128,8 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
       </div>
 
       {/* 시트 */}
-      <div className={css.gridWrap}>
-        {entries.length === 0 ? (
+      <div className={css.gridWrap} ref={gridBox} style={gridHeight ? { height: gridHeight, maxHeight: 'none' } : undefined}>
+        {dataCount === 0 ? (
           <p style={{ padding: 16 }}>
             {sheet.rows.length === 0 ? '이 시트에 아직 작업이 없습니다. "인계" 탭에서 인계를 받으면 여기에 들어옵니다.' : '필터에 맞는 행이 없습니다.'}
           </p>
@@ -1074,7 +1144,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
           onColumnResized={onColumnResized}
           onColumnsReordered={onColumnsReordered}
           onRowsReordered={onRowsReordered}
-          canReorderRows={(target) => !sort && rowById.has(String(target)) || String(target).startsWith('m:')}
+          canReorderRows={(target) => !sort && (rowById.has(String(target)) || String(target).startsWith('m:') || isFreeRowId(String(target)))}
           focusLocation={focusLocation}
           highlights={highlights}
           stickyTopRows={1 + Math.min(freezeRows, renderRows.length)}

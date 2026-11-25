@@ -7,9 +7,9 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { neotmsApi } from './neotms.client'
-import type { PmCondRule, PmStateDef, PmStyle } from './pmsheet.types'
+import type { PmCondRule, PmFreeRow, PmStateDef, PmStyle } from './pmsheet.types'
 
-export type { PmCondClause, PmCondOp, PmCondRule, PmStateDef, PmStyle } from './pmsheet.types'
+export type { PmCondClause, PmCondOp, PmCondRule, PmFreeRow, PmStateDef, PmStyle } from './pmsheet.types'
 
 /* -------------------------------------------------------------------------- */
 /* Types                                                                      */
@@ -95,6 +95,8 @@ export interface PmFilterFavorite {
 export interface PmViewPref {
   freezeCols?: number
   freezeRows?: number
+  /** 글을 적은 빈 줄들. */
+  freeRows?: PmFreeRow[]
 }
 
 export interface PmPrefs {

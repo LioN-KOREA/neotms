@@ -36,6 +36,7 @@ import {
   selectableStates,
   stateStyleFor,
 } from "../frontend/src/features/pmsheet/pmStates";
+import { layoutPositions, reorderSlots, setFreeValue } from "../frontend/src/features/pmsheet/freeRows";
 
 // The client's list lives in a module that also pulls in React Query, so it is read as text.
 const CLIENT_STATES = (() => {
@@ -242,5 +243,53 @@ describe("personal PM states (⚙)", () => {
     expect(v.safeParse(PmRowPatchSchema, { jobId: "1", pmState: "x".repeat(51) }).success).toBe(false);
     expect(v.safeParse(PmStyleSchema, { wrap: "wrap" }).success).toBe(true);
     expect(v.safeParse(PmStyleSchema, { wrap: "shrink" }).success).toBe(false);
+  });
+});
+
+describe("blank rows (빈 줄)", () => {
+  const free = [{ pos: 2, values: { memo: "회의 메모" } }];
+
+  it("a new job takes the first slot with nothing written in it", () => {
+    const { posOf, moves } = layoutPositions(
+      [
+        { jobId: "a", ordNo: 0 },
+        { jobId: "b", ordNo: 1 },
+        { jobId: "new", ordNo: null },
+      ],
+      free,
+    );
+    expect(posOf.get("new")).toBe(3);
+    expect(moves).toEqual([{ jobId: "new", pos: 3 }]);
+  });
+
+  it("a gap left between jobs is filled first", () => {
+    const { posOf } = layoutPositions(
+      [
+        { jobId: "a", ordNo: 0 },
+        { jobId: "b", ordNo: 5 },
+        { jobId: "new", ordNo: null },
+      ],
+      free,
+    );
+    expect(posOf.get("new")).toBe(1);
+  });
+
+  it("a job whose slot now holds written text moves to the first empty slot", () => {
+    const { posOf } = layoutPositions([{ jobId: "a", ordNo: 2 }], free);
+    expect(posOf.get("a")).toBe(0);
+  });
+
+  it("clearing every value in a blank row removes it", () => {
+    expect(setFreeValue(free, 2, "memo", " ")).toEqual([]);
+    expect(setFreeValue(free, 4, "a", "x")).toEqual([...free, { pos: 4, values: { a: "x" } }]);
+  });
+
+  it("dragging counts blank rows as slots and carries their text", () => {
+    const r = reorderSlots(["a", "f:1", "f:2", "b"], ["b"], "a", true, free);
+    expect([...r.jobPos]).toEqual([
+      ["b", 0],
+      ["a", 1],
+    ]);
+    expect(r.freeRows).toEqual([{ pos: 3, values: { memo: "회의 메모" } }]);
   });
 });

@@ -74,3 +74,9 @@ export interface PmStateDef {
   from?: string | null
   to?: string | null
 }
+
+/** 글을 적은 빈 줄 (작업이 아닌 행). `pos` 는 시트의 자리, `values` 는 열 키 → 글. */
+export interface PmFreeRow {
+  pos: number
+  values: Record<string, string>
+}

@@ -197,7 +197,14 @@ export interface MonthEntry {
   id: string
   label: string
 }
-export type Entry = DataEntry | MonthEntry
+/** 빈 줄 — 작업이 아닌 행. 글을 적을 수 있다 (`values`). */
+export interface FreeEntry {
+  kind: 'free'
+  id: string
+  pos: number
+  values: Record<string, string>
+}
+export type Entry = DataEntry | MonthEntry | FreeEntry
 
 const compareValues = (a: string, b: string): number => {
   const na = asNumber(a)
@@ -223,8 +230,14 @@ export function buildEntries(args: {
   filters: Filters
   overrides: Map<string, string>
   decimalsOf: (row: PmSheetRow, column: SheetColumn) => number | null | undefined
+  /** 작업 행의 자리 (freeRows.layoutPositions). 없으면 빈 줄 없이 받은 순서대로. */
+  posOf?: Map<string, number>
+  /** 글을 적은 빈 줄들. */
+  freeRows?: readonly { pos: number; values: Record<string, string> }[]
+  /** 맨 아래 덧붙일 빈 줄 수. */
+  blankTail?: number
 }): Entry[] {
-  const { rows, columns, cells, sort, filters, overrides } = args
+  const { rows, columns, cells, sort, filters, overrides, posOf } = args
   const ids = new Set(rows.map((r) => r.jobId))
   const mergedBy = new Map<string, PmSheetRow[]>()
   const visible: PmSheetRow[] = []
@@ -235,6 +248,8 @@ export function buildEntries(args: {
       mergedBy.set(row.mergedInto, list)
     } else visible.push(row)
   }
+  // 자리 순서로 (자리가 정해지지 않은 행은 뒤로 — 받은 순서 그대로).
+  if (posOf) visible.sort((a, b) => (posOf.get(a.jobId) ?? Number.MAX_SAFE_INTEGER) - (posOf.get(b.jobId) ?? Number.MAX_SAFE_INTEGER))
 
   // 묶음 판정은 저장된 순서에서 한다 — 정렬·필터 전.
   const groupInfo = new Map<string, { inGroup: boolean; role: 'start' | 'end' | null }>()
@@ -289,7 +304,21 @@ export function buildEntries(args: {
   const out: Entry[] = []
   let monthly = false
   let lastMonth = ''
+  // 빈 줄은 정렬·필터가 없을 때만 보인다 — 자리 그대로의 시트.
+  const withFree = Boolean(posOf) && !sort && activeFilters.length === 0
+  const freeByPos = new Map((args.freeRows ?? []).map((f) => [f.pos, f.values]))
+  let nextPos = 0
+  const fillTo = (pos: number) => {
+    for (; nextPos < pos; nextPos += 1) out.push({ kind: 'free', id: `f:${String(nextPos)}`, pos: nextPos, values: freeByPos.get(nextPos) ?? {} })
+  }
   for (const row of list) {
+    if (withFree) {
+      const pos = posOf!.get(row.jobId)
+      if (pos !== undefined) {
+        fillTo(pos)
+        nextPos = pos + 1
+      }
+    }
     const info = groupInfo.get(row.jobId) ?? { inGroup: false, role: null }
     if (!sort) {
       if (info.role === 'start') {
@@ -313,6 +342,10 @@ export function buildEntries(args: {
       groupRole: info.role,
       rowNo: rowNoOf.get(row.jobId) ?? 0,
     })
+  }
+  if (withFree) {
+    const lastFree = Math.max(-1, ...freeByPos.keys())
+    fillTo(Math.max(lastFree + 1, nextPos) + (args.blankTail ?? 0))
   }
   return out
 }
