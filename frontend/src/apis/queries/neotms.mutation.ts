@@ -691,7 +691,7 @@ export function useReorderWorkspaceColumns() {
  * 편집이 있으면 그 칸이 옛 값으로 되돌아간다. 화면이 보낸 값을 그대로 들고 있으므로(낙관적
  * 반영) 다시 읽을 것이 없다.
  *
- * **실패했을 때는** 화면이 그 칸을 서버 값으로 되돌린다(`WorkspaceGrid`). 저장되지 않은 값이
+ * **실패했을 때는** 화면이 그 칸을 서버 값으로 되돌린다(`PmSheet`). 저장되지 않은 값이
  * 저장된 것처럼 남아 있는 것이 이 화면에서 가장 비싼 거짓말이다.
  */
 /**
@@ -699,7 +699,7 @@ export function useReorderWorkspaceColumns() {
  *
  * 둘 다 사용자가 방금 화면에서 한 일이고 화면은 그 결과를 이미 그리고 있다 — 열을 끌어 놓은
  * 직후에 시트를 다시 읽으면 200건이 갈아끼워지면서 방금 잡은 스크롤 위치와 선택이 사라진다.
- * 서버가 거절하면 그때 화면이 되돌린다(`WorkspaceGrid`).
+ * 서버가 거절하면 그때 화면이 되돌린다(`PmSheet`).
  */
 export function useSetWorkspaceLayout() {
   return useMutation({

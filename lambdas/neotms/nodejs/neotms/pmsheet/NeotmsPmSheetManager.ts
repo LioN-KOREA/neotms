@@ -347,7 +347,7 @@ export async function answerHandover(
         return badRequest("이미 처리되었거나 더 새로운 인계가 있는 건입니다. 화면을 새로 고쳐 주세요.");
       }
       if (status === 1 && handover.rehandover) {
-        // 확인 차원의 인계 — 진행 상태는 그대로, 바뀐 칸은 모두 확인한 것으로.
+        // A re-handover only asks for confirmation: 진행 상태 stays as it is, and every changed cell counts as 확인.
         await markSeen(handover.toStaffId, [handover.jobId], null, client);
         // 재인계 비고 — 기존 비고 아래에 '<재인계 비고>' 머리를 달고 덧붙인다 (팀장님 2026-11-25).
         const current = (await pgQuery(SheetRemarkOps(handover.toStaffId, handover.jobId), client)).data;

@@ -1,6 +1,7 @@
 /**
- * PM 시트 2026-11-25 개편: 행 자리 편집(추가·삭제·통합·해제), 열 이름, 납품일 하루 이동,
- * 바뀐 칸 표시(db/012)와 재인계.
+ * The 2026-11-25 PM sheet rework: row-slot editing (add, delete, merge,
+ * ungroup), column names, moving 납품일 by one day, changed-cell
+ * highlighting (db/012) and re-handover.
  */
 import { describe, expect, it } from "@jest/globals";
 import { readFileSync } from "node:fs";
@@ -106,7 +107,7 @@ describe("changed cells (db/012)", () => {
     expect(dbops).toContain("AND NOT (h.rehandover AND h.status IN (0, 2))");
     const manager = read("lambdas", "neotms", "nodejs", "neotms", "pmsheet", "NeotmsPmSheetManager.ts");
     expect(manager).toContain("재인계는 반려할 수 없습니다");
-    // 확인해도 진행 상태를 '인계 수령' 으로 되돌리지 않는다.
+    // Confirming must not send 진행 상태 back to '인계 수령'.
     expect(manager).toMatch(/status === 1 && handover\.rehandover\)[\s\S]{0,200}markSeen/);
   });
 

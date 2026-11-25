@@ -1,5 +1,5 @@
 -- =====================================================================
--- NEOTMS :: 009_attributes_and_scope.sql
+-- NEOTMS :: 010_attributes_and_scope.sql
 -- Three more staff attributes, and row-level scope recorded as dormant.
 -- =====================================================================
 --

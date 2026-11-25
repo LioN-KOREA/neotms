@@ -220,7 +220,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     return () => window.clearInterval(t)
   }, [])
 
-  /* 저장 중인 값 — 서버 값이 같아지면 버린다 (WorkspaceGrid 와 같은 방식). */
+  /* 저장 중인 값 — 서버 값이 같아지면 버린다. */
   const [edits, setEdits] = useState<{ source: PmSheetRow[]; values: Map<string, string> }>({
     source: sheet.rows,
     values: new Map(),

@@ -123,7 +123,7 @@
 .cellText { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .placeholder { color: #9aa3ae; font-style: normal; }
 .cellLink { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1a73e8; text-decoration: underline; }
-.cellInput { width: 100%; height: 100%; border: none; outline: 2px solid #1a73e8; padding: 0 5px; font: inherit; font-size: calc(13px * var(--pm-zoom, 1)); }
+.cellInput { width: 100%; height: 100%; border: none; outline: none; padding: 0 5px; font: inherit; font-size: calc(13px * var(--pm-zoom, 1)); }
 .cellSelect { width: 100%; height: 100%; font: inherit; font-size: calc(13px * var(--pm-zoom, 1)); }
 .caret { color: #9aa3ae; font-size: 10px; }
 .pickBtn {
@@ -312,3 +312,67 @@
 .freezeOpt { border: 0; background: transparent; text-align: left; padding: 5px 12px; font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
 .freezeOpt:hover { background: #e8f0fe; }
 .freezeOn { font-weight: 700; color: #1a73e8; }
+
+/* ── 칸 테두리: 고른 칸은 파랑 한 겹, 고치는 칸은 보라 한 겹 ───────────── */
+/*
+ * 고치기 시작하면 테두리가 서로 1~2px 어긋난 채 세 겹으로 겹쳐 보였다. 하나씩은 다 맞는
+ * 선인데, 같은 칸을 세 군데에서 그리고 있었다:
+ *
+ *   1. `.rg-cell-focus`  — ReactGrid 가 고른 칸 위에 덮는 2px 파란 테두리. 편집기가 떠 있는
+ *      동안에도 **계속 그려진다**.
+ *   2. `.rg-celleditor`  — ReactGrid 의 편집기 상자. 2px 파란 테두리 + 그림자.
+ *   3. `:focus-visible`  — 앱 전역 규칙(styles/global.css)의 2px 보라 outline. `outline-offset:
+ *      1px` 이라 한 겹 더 바깥으로 떨어져 나온다. 보고된 "파랑 아니면 보라" 가 1번과 3번이다.
+ *      (입력칸 자신도 파란 outline 을 그리고 있었다 — 위 `.cellInput` 에서 지웠다.)
+ *
+ * 그래서 **상태마다 선을 하나로** 줄인다. 고른 칸은 파랑, 고치는 칸은 보라 — 그리고 색이 곧
+ * 상태다. 보라면 지금 글자가 들어가고, 파랑이면 고른 것일 뿐이다.
+ *
+ * 보라는 `--nt-vio` 다. 전역 포커스 링의 `--nt-ind`(인디고)와 **다른 색을 일부러 쓴다** — 같은
+ * 색이면 "고치는 중" 과 "포커스가 여기 있음" 이 한 색으로 보이고, 애초에 겹쳐 있던 두 선을
+ * 구분하려던 목적이 사라진다. 디자인 토큰의 설명도 `--nt-vio` 를 편집 중 칸으로 적고 있다.
+ */
+
+/* 1. 고른 칸 — 파랑 한 겹. 네 겹 선택자인 이유는 ReactGrid 의 규칙이 세 겹이기 때문이다. */
+.gridWrap :global(.reactgrid-content) :global(.rg-pane) :global(.rg-cell-focus) {
+  border-width: 2px;
+  border-color: #3579f8;
+}
+
+/*
+ * 2. 고치는 칸 — 보라 한 겹, 조금 더 굵게. 그림자는 뺀다(흐린 두 번째 경계로 보이던 원인이다).
+ *
+ * 사용자 정의 칸(`sheetCells.tsx`)도 이 상자 안에서 열린다 — 브라우저에서 확인한 사실이고,
+ * 그래서 테두리를 입력칸이 아니라 **상자에** 건다. 입력칸에 걸면 칸마다 종류가 달라 모양이
+ * 갈리고(입력칸·드롭다운·날짜), 상자는 하나뿐이다.
+ */
+.gridWrap :global(.rg-celleditor) {
+  border-color: var(--nt-vio);
+  border-width: 3px;
+  box-shadow: none;
+}
+
+/*
+ * 3. 상자 안에서는 아무도 따로 선을 그리지 않는다.
+ *
+ * 전역 `:focus-visible` 규칙까지 여기서 끈다. 보통은 끄면 안 되는 규칙이지만(키보드로 옮겨
+ * 다니는 사람에게 어디 있는지 알려 주는 선이다) 이 자리에서는 **보라 테두리가 이미 그 역할을
+ * 하고 있고**, 그것도 1px 바깥에 겹쳐서 두 번 한다. 접근성을 줄인 것이 아니라 같은 신호를
+ * 한 번만 보내는 것이다.
+ */
+.gridWrap :global(.rg-celleditor) *:focus,
+.gridWrap :global(.rg-celleditor) *:focus-visible {
+  outline: none;
+}
+
+/*
+ * 4. 고치는 동안에는 파란 테두리를 숨긴다.
+ *
+ * 둘은 같은 칸을 가리키지만 1px 어긋나 있어서, 숨기지 않으면 보라 테두리 안쪽에 파란 선이
+ * 한 겹 남는다 — 겹침의 마지막 한 겹이다. `:has()` 로 "편집기가 떠 있는 동안" 을 표현한다.
+ * 지원하지 않는 브라우저에서는 규칙이 적용되지 않을 뿐이므로, 최악의 경우가 지금까지의
+ * 모습이고 더 나빠지지 않는다.
+ */
+.gridWrap:has(:global(.rg-celleditor)) :global(.rg-cell-focus) {
+  display: none;
+}
