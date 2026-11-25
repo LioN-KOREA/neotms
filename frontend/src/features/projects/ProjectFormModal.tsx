@@ -140,6 +140,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
     prjEday: toDateInputValue(project?.prjEday),
     prjEdayTime: project?.prjEdayTime ?? '',
     prjContent: project?.prjContent ?? '',
+    prjPath: project?.prjPath ?? '',
   })
   const [dirty, setDirty] = useState(false)
 
@@ -209,6 +210,7 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
       prjEday: form.prjEday || null,
       prjEdayTime: form.prjEdayTime || null,
       prjContent: form.prjContent.trim() || null,
+      prjPath: form.prjPath.trim() || null,
       cusMgrName: form.cusMgrName.trim() || null,
       /*
        * The two assignees, always sent - including as `null` when the box is empty.
@@ -500,6 +502,21 @@ export function ProjectFormModal({ project, onClose, onSaved }: Props) {
             value={form.prjField2}
             onChange={(v) => set('prjField2', v)}
             placeholder={unsetPlaceholder(isEdit, form.prjField2)}
+          />
+        </div>
+
+        {/* 경로 — 프로젝트의 NAS 경로를 붙여 넣는 칸 (팀장님 2026-11-25). */}
+        <div className={ui.fieldWide}>
+          <label className={ui.label} htmlFor="prj-path">
+            경로
+          </label>
+          <input
+            id="prj-path"
+            className={ui.input}
+            maxLength={1000}
+            placeholder="NAS 경로를 붙여 넣으세요 (예: \\nas01\프로젝트\2026\...)"
+            value={form.prjPath}
+            onChange={(e) => set('prjPath', e.target.value)}
           />
         </div>
 

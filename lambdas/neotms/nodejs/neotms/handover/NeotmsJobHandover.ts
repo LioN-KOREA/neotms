@@ -143,6 +143,7 @@ export async function sendJobHandover(
       login = signedIn.result;
     }
 
+    const path = input.path.trim();
     const message = composeHandoverRemark({
       formats: input.formats,
       formatText,
@@ -150,7 +151,7 @@ export async function sendJobHandover(
       layoutText,
       note: input.note,
     });
-    const created = await createHandovers(caller, { jobIds: ids, message }, ctx);
+    const created = await createHandovers(caller, { jobIds: ids, message, path: path || null }, ctx);
     if (created.status !== 200 || typeof created.body === "string") return created as ResponseData<string>;
     const result: JobHandoverResult = { ...created.body, mails: [] };
     const skippedIds = new Set(result.skipped.map((s) => s.jobId));
@@ -158,26 +159,15 @@ export async function sendJobHandover(
     if (handed.length > 0) await pgExecute(StartWaitingJobsOps(handed));
 
     if (login) {
+      // 인계 메일은 한 통 (팀장님 2026-11-25): 받는 사람 = 모든 담당PM, 담당PM 칸 = 모두 ", " 로.
       const skipped = new Set(result.skipped.map((s) => s.jobId));
-      const byPm = new Map<string, PickedHandoverJob[]>();
-      for (const job of jobs) {
-        if (skipped.has(job.jobId)) continue;
-        const list = byPm.get(job.pmId!) ?? [];
-        list.push(job);
-        byPm.set(job.pmId!, list);
-      }
-      for (const group of byPm.values()) {
-        const recipient = group[0]!.pmEmail!.trim();
-        const pmName = group[0]!.jobPmName ?? recipient;
-        const mail = composeHandoverMail(project, group, {
-          formats: input.formats,
-          layouts: input.layouts,
-          note: input.note,
-          formatText,
-          layoutText,
-          deadlineFromJobs: true,
-        });
-        const sent = await hiworksSendEmail(login, [recipient], [], input.cc, mail.subject, mail.html);
+      const handedJobs = jobs.filter((j) => !skipped.has(j.jobId));
+      if (handedJobs.length > 0) {
+        const recipients = [...new Set(handedJobs.map((j) => j.pmEmail!.trim()))];
+        const pmName = [...new Set(handedJobs.map((j) => j.jobPmName ?? j.pmEmail ?? ""))].join(", ");
+        const mail = composeHandoverMail(project, handedJobs, mailChoices(input));
+        const sent = await hiworksSendEmail(login, recipients, [], input.cc, mail.subject, mail.html);
+        const recipient = recipients.join(", ");
         result.mails.push(
           sent.status === 200
             ? { pmName, recipient, subject: mail.subject, sent: true }
@@ -186,5 +176,38 @@ export async function sendJobHandover(
       }
     }
     return ok(result);
+  });
+}
+
+/** 메일 칸 고르기 — 보낼 때와 미리보기가 같은 것을 쓰게. */
+function mailChoices(input: JobHandoverInput) {
+  return {
+    formats: input.formats,
+    layouts: input.layouts,
+    note: input.note,
+    formatText: input.formatText.trim(),
+    layoutText: input.layoutText.trim(),
+    path: input.path.trim(),
+    deadlineFromJobs: true,
+  };
+}
+
+/**
+ * [미리보기] (팀장님 2026-11-25) — 보낼 인계 메일을 그대로 만들어 돌려준다. 아무것도 저장·발송하지 않는다.
+ */
+export async function previewJobHandover(
+  caller: NeotmsCaller,
+  projectId: string,
+  input: JobHandoverInput,
+): Promise<ResponseData<{ subject: string; html: string; recipients: string[] } | string>> {
+  return runDb("preview job handover", async () => {
+    const project = (await pgQuery(ProjectGetOps(caller, projectId))).data;
+    if (!project) return notFound("project");
+    const ids = [...new Set(input.jobIds)];
+    const jobs = (await pgQuery(PickedHandoverJobsOps(projectId, ids))).data;
+    if (jobs.length !== ids.length) return badRequest("이 프로젝트의 작업이 아닌 것이 섞여 있습니다. 화면을 새로 고쳐 주세요.");
+    const mail = composeHandoverMail(project, jobs, mailChoices(input));
+    const recipients = [...new Set(jobs.map((j) => (j.pmEmail ?? "").trim() || (j.jobPmName ?? "")).filter(Boolean))];
+    return ok({ ...mail, recipients });
   });
 }

@@ -123,6 +123,8 @@ export const PmPrefSchema = v.object({
 export const PmHandoverCreateSchema = v.object({
   jobIds: v.pipe(v.array(IdSchema), v.minLength(1), v.maxLength(100)),
   message: v.optional(v.nullable(v.pipe(v.string(), v.maxLength(2000)))),
+  /** 인계 경로 (db/015) — 받으면 시트 경로 열로. */
+  path: v.optional(v.nullable(v.pipe(v.string(), v.maxLength(1000)))),
 });
 
 export const PmHandoverAnswerSchema = v.object({

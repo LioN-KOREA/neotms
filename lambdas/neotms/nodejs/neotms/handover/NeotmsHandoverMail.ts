@@ -83,6 +83,8 @@ export type HandoverChoices = {
   formatText?: string;
   /** 레이아웃 직접 입력. */
   layoutText?: string;
+  /** 경로 (팀장님 2026-11-25) — 인계 창에서 정한 것. 없으면 프로젝트 경로(db/015). */
+  path?: string;
   /**
    * 납품요청일을 프로젝트 머리가 아니라 고른 작업들의 납기로 쓴다 — 작업을 골라 PM 마다 따로
    * 보내는 새 인계(NeotmsJobHandover). 납기가 여럿이면 날짜마다 한 줄에 그 언어를 적는다.
@@ -408,7 +410,7 @@ ${gap}
 </tr>
 <tr>
   <td style="${HEAD}" colspan="2">경로</td>
-  <td style="${CELL}" colspan="4">${escLines((project.prjContent ?? "").trim()) || "&nbsp;"}</td>
+  <td style="${CELL}" colspan="4">${escLines((choices.path ?? project.prjPath ?? "").trim()) || "&nbsp;"}</td>
   ${tail}
 </tr>
 ${gap}

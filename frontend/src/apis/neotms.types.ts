@@ -731,6 +731,8 @@ export interface ProjectRow {
   prjEday: string | null
   prjEdayTime: string | null
   prjContent: string | null
+  /** NAS 경로 (db/015, 팀장님 2026-11-25). */
+  prjPath?: string | null
   /**
    * Whether `prjPmId` has taken the project on - one of the three `PROJECT_ACCEPTANCE_*` values.
    *
@@ -779,6 +781,7 @@ export interface ProjectInput {
   prjEday?: string | null
   prjEdayTime?: string | null
   prjContent?: string | null
+  prjPath?: string | null
 }
 
 /* -------------------------------------------------------------------------- */

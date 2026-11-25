@@ -64,6 +64,8 @@ import { HandoverStateCell } from './HandoverStateCell'
 import { latestHandoverByJob, tidyNumber } from './handoverState'
 import { JobHandoverFlow } from './JobHandoverFlow'
 import { JobGroupModal } from './JobGroupModal'
+import { ConfirmDialog } from '@/shared/ui/ConfirmDialog'
+import { PathCopy } from '@/shared/ui/PathCopy'
 import { useApplyJobGroup } from '@/apis/jobGroup.api'
 import { ProjectAcceptanceModal } from './ProjectAcceptanceModal'
 import { JobPmName, JobPmSwapModal } from '@/features/jobs/JobPmSwapModal'
@@ -186,6 +188,7 @@ export function ProjectDetailView() {
   /** 인계 창 — 열려 있으면 미리 고른 작업 번호들(빈 배열이면 작업 선택 창부터). */
   const [handingOver, setHandingOver] = useState<string[] | null>(null)
   const [groupingOpen, setGroupingOpen] = useState(false)
+  const [splitting, setSplitting] = useState<JobRow | null>(null)
 
   const project = projectQuery.data
   const jobs = useMemo(() => jobsQuery.data?.pages.flatMap((p) => p.items) ?? [], [jobsQuery.data])
@@ -245,11 +248,7 @@ export function ProjectDetailView() {
         setGroupingOpen(true)
         return
       }
-      if (!window.confirm(`해당 작업을 별도의 작업 그룹으로 분리하시겠습니까?
-(${one.jobCode} · 지금 그룹 ${one.jobGroup ?? ''})`)) return
-      const res = await applyGroup.mutateAsync({ projectId: project.id, mode: 'new', jobIds: [one.id] })
-      setNotice(`${one.jobCode} 작업을 새 작업 그룹 ${res.code} 으로 분리했습니다.`)
-      jobSel.clear()
+      setSplitting(one) // 예쁜 확인 창으로 묻는다 (팀장님 2026-11-25)
       return
     }
     const res = await applyGroup.mutateAsync({ projectId: project.id, mode: 'merge', jobIds: picked.map((j) => j.id) })
@@ -743,6 +742,13 @@ export function ProjectDetailView() {
             </div>
           </div>
 
+          <div className={ui.detailItem}>
+            <span className={ui.detailLabel}>경로</span>
+            <span className={ui.detailValue}>
+              {project.prjPath ? <PathCopy path={project.prjPath} onCopied={() => setNotice('경로를 복사했습니다. 탐색기 주소창에 붙여 넣으세요.')} /> : '-'}
+            </span>
+          </div>
+
           {project.prjContent ? (
             <div className={ui.detailItem}>
               <span className={ui.detailLabel}>비고</span>
@@ -1051,6 +1057,34 @@ export function ProjectDetailView() {
         )}
       </div>
 
+      {splitting && project ? (
+        <ConfirmDialog
+          title="작업 그룹 분리"
+          message="해당 작업을 별도의 작업 그룹으로 분리하시겠습니까?"
+          detail={
+            <>
+              <b>{splitting.jobCode}</b> {splitting.jobName ?? ''}
+              <br />
+              지금 그룹 <b>{splitting.jobGroup ?? '-'}</b> (작업 {jobs.filter((j) => j.jobGroup === splitting.jobGroup).length}건) → 새 그룹 코드를 받습니다.
+            </>
+          }
+          confirmLabel="분리"
+          pending={applyGroup.isPending}
+          onCancel={() => setSplitting(null)}
+          onConfirm={() => {
+            const one = splitting
+            void applyGroup
+              .mutateAsync({ projectId: project.id, mode: 'new', jobIds: [one.id] })
+              .then((res) => {
+                setNotice(`${one.jobCode} 작업을 새 작업 그룹 ${res.code} 으로 분리했습니다.`)
+                jobSel.clear()
+              })
+              .catch((e: unknown) => setNotice(`작업 그룹을 바꾸지 못했습니다: ${e instanceof Error ? e.message : String(e)}`))
+              .finally(() => setSplitting(null))
+          }}
+        />
+      ) : null}
+
       {groupingOpen && project ? (
         <JobGroupModal projectId={project.id} jobs={jobs} onClose={() => setGroupingOpen(false)} onNotice={setNotice} />
       ) : null}
@@ -1059,6 +1093,7 @@ export function ProjectDetailView() {
         <JobHandoverFlow
           projectId={project.id}
           projectLabel={`${project.prjCode} ${project.prjName ?? ''}`.trim()}
+          projectPath={project.prjPath ?? ''}
           preselected={handingOver}
           onClose={() => setHandingOver(null)}
           onDone={(m) => {

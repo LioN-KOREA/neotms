@@ -163,7 +163,7 @@ export function cellValue(
     const value = result.value
     const shown =
       typeof value === 'number'
-        ? formatNumber(value, decimals ?? (Number.isInteger(value) ? 0 : 2))
+        ? formatNumber(Math.round(value * 1e6) / 1e6, decimals)
         : typeof value === 'boolean'
           ? value ? 'TRUE' : 'FALSE'
           : isYmd(value) ? formatSheetDate(value) : value

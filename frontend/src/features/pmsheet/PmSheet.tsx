@@ -53,6 +53,7 @@ import {
   ROW_FIELD_KEYS,
   TASK_OPTIONS,
   buildColumns,
+  isCustomKey,
   mergeStyle,
   type SheetColumn,
 } from './sheetColumns'
@@ -75,6 +76,7 @@ import {
 import { CondFormatModal, ColumnsModal, NoteModal, ShortcutsModal, StatesModal } from './PmSheetModals'
 import { ACTIONS, comboOf, effectiveShortcuts } from './shortcuts'
 import { ColorPalette } from './ColorPalette'
+import { BorderMenu, type BorderKind } from './BorderMenu'
 import { FreezeMenu, IconMenu } from './IconMenus'
 import { ALIGN_ICONS, TOOL_ICONS, VALIGN_ICONS, WRAP_ICONS } from './menuIcons'
 import { effectiveStates, isClosedState, selectableStates, stateStyleFor } from './pmStates'
@@ -248,8 +250,11 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   const changedRows = sheet.rows.filter((r) => (r.changedKeys?.length ?? 0) > 0)
   const changedCount = changedRows.reduce((n, r) => n + r.changedKeys.length, 0)
 
-  const decimalsOf = (row: PmSheetRow, column: SheetColumn) =>
-    mergeStyle(cells.get(cellKey(row.jobId, column.key))?.style, row.rowStyle, column.style).decimals
+  /**
+   * 소수 자리 옵션은 없앴다 (팀장님 2026-11-25): 숫자는 늘 천 단위 쉼표, 소수가 있으면 있는 자리까지.
+   * 예전에 걸어 둔 소수 자리 꾸밈도 더는 쓰지 않는다.
+   */
+  const decimalsOf = (_row: PmSheetRow, _column: SheetColumn): null => null
 
   /* 빈 줄 — 작업 행 사이·아래의 자리. 글을 적을 수 있고, 새 인계 작업은 아무것도 없는 첫 자리에 들어간다. */
   const freeRows = liveFreeRows(prefs.view?.freeRows)
@@ -572,24 +577,110 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   const toggle = (prop: 'bold' | 'italic' | 'underline' | 'strike', label: string) =>
     void applyStyle({ [prop]: focusStyle[prop] ? null : true }, label)
 
-  /** 바깥 테두리: 각 칸이 범위의 어느 가장자리에 있는지로 변을 정한다. */
-  const outerBorder = () => {
-    const edge = new Map<string, string>()
+  /* 테두리 아이콘 판 — 색과 굵기는 다음 칠하기에 쓴다 (화면에서만 기억). */
+  const [borderColor, setBorderColor] = useState('#000000')
+  const [borderWeight, setBorderWeight] = useState<'thin' | 'thick'>('thin')
+
+  /**
+   * 테두리 칠하기. 칸 범위면 각 칸이 범위의 어느 가장자리에 있는지로 변을 정한다(안쪽 · 바깥 · 한쪽).
+   * 한쪽(왼·위·오른·아래)은 그 가장자리 칸에 변을 **더하고**, 다른 칸의 테두리는 그대로 둔다.
+   * 행·열 전체를 골랐으면 가장자리를 따질 수 없어 모양대로 모든 칸에 같은 변을 준다.
+   */
+  const applyBorder = (kind: BorderKind) => {
+    if (kind === 'clear') {
+      void applyStyle({ border: null, borderSides: null, borderColor: null }, '테두리 지우기')
+      return
+    }
+    const flat: Record<Exclude<BorderKind, 'clear'>, string> = {
+      all: 'tblr', inner: 'tblr', hInner: 'tb', vInner: 'lr', outer: 'tblr', left: 'l', top: 't', right: 'r', bottom: 'b',
+    }
+    const pos = new Map<string, { t: boolean; b: boolean; l: boolean; r: boolean }>()
     for (const range of selection.ranges) {
       const rowIds = range.rows.map((r) => String(r.rowId)).filter((id) => rowById.has(id))
       const colIds = range.columns.map((c) => String(c.columnId))
       rowIds.forEach((rid, ri) => {
         colIds.forEach((cid, ci) => {
-          let s = ''
-          if (ri === 0) s += 't'
-          if (ri === rowIds.length - 1) s += 'b'
-          if (ci === 0) s += 'l'
-          if (ci === colIds.length - 1) s += 'r'
-          edge.set(cellKey(rid, cid), s)
+          pos.set(cellKey(rid, cid), { t: ri === 0, b: ri === rowIds.length - 1, l: ci === 0, r: ci === colIds.length - 1 })
         })
       })
     }
-    void applyStyle({ border: 'thin' }, '바깥 테두리', (t) => ({ borderSides: edge.get(cellKey(t.jobId, t.colKey)) ?? '' }))
+    const label = { all: '모든 테두리', inner: '안쪽 테두리', hInner: '가로 안쪽 테두리', vInner: '세로 안쪽 테두리', outer: '바깥 테두리', left: '왼쪽 테두리', top: '위쪽 테두리', right: '오른쪽 테두리', bottom: '아래쪽 테두리' }[kind]
+    const patch: PmStyle = { border: borderWeight, borderColor, borderSides: flat[kind] }
+    void applyStyle(patch, label, (t) => {
+      const p = pos.get(cellKey(t.jobId, t.colKey))
+      if (!p) return {}
+      const own = cells.get(cellKey(t.jobId, t.colKey))?.style ?? {}
+      const pick = (sides: [boolean, string][]) => sides.filter(([on]) => on).map(([, s]) => s).join('')
+      let sides: string
+      if (kind === 'all') sides = 'tblr'
+      else if (kind === 'inner') sides = pick([[!p.t, 't'], [!p.b, 'b'], [!p.l, 'l'], [!p.r, 'r']])
+      else if (kind === 'hInner') sides = pick([[!p.t, 't'], [!p.b, 'b']])
+      else if (kind === 'vInner') sides = pick([[!p.l, 'l'], [!p.r, 'r']])
+      else if (kind === 'outer') sides = pick([[p.t, 't'], [p.b, 'b'], [p.l, 'l'], [p.r, 'r']])
+      else {
+        const edge = { left: p.l, top: p.t, right: p.r, bottom: p.b }[kind]
+        const side = { left: 'l', top: 't', right: 'r', bottom: 'b' }[kind]
+        // 가장자리가 아닌 칸은 원래 테두리 그대로.
+        if (!edge) return { border: own.border ?? null, borderColor: own.borderColor ?? null, borderSides: own.borderSides ?? null }
+        const merged = [...new Set(((own.borderSides ?? '') + side).split(''))].join('')
+        return { borderSides: merged }
+      }
+      return { borderSides: sides || null, ...(sides ? {} : { border: null, borderColor: null }) }
+    })
+  }
+
+  /* ----------------------------------------------------------------------- */
+  /* 열 숨기기 · 추가 · 삭제 — 열 머리 우클릭 (팀장님 2026-11-25)              */
+  /* ----------------------------------------------------------------------- */
+
+  /** 우클릭한 열이 고른 열 안에 있으면 고른 열 모두, 아니면 그 열 하나. 화면 순서대로. */
+  const menuCols = (key: string): string[] => {
+    const picked = selection.cols.includes(key) ? selection.cols : [key]
+    const order = columns.map((c) => c.key)
+    return [...picked].sort((a, b) => order.indexOf(a) - order.indexOf(b))
+  }
+  const fullOrder = () => buildColumns({ ...(prefs.columns ?? {}), hidden: [] }).map((c) => c.key)
+
+  const hideColumns = async (keys: string[]) => {
+    if (keys.length >= columns.length) {
+      onError('모든 열을 숨길 수는 없습니다.')
+      return
+    }
+    const hidden = [...new Set([...(prefs.columns?.hidden ?? []), ...keys])]
+    await savePref('columns', { ...(prefs.columns ?? {}), hidden })
+    onNotice(`열 ${String(keys.length)}개를 숨겼습니다. 다시 보려면 열 머리를 우클릭해 '숨긴 열 모두 보이기' 를 누르세요.`)
+  }
+
+  const addColumnBeside = async (keys: string[], side: 'left' | 'right') => {
+    const pref = prefs.columns ?? {}
+    const custom = pref.custom ?? []
+    const labels = new Set(buildColumns({ ...pref, hidden: [] }).map((c) => c.label))
+    let n = 1
+    while (labels.has(n === 1 ? '새 열' : `새 열 ${String(n)}`)) n += 1
+    const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+    const key = `c:${id}`
+    const order = fullOrder()
+    const anchor = side === 'left' ? keys[0]! : keys[keys.length - 1]!
+    const at = order.indexOf(anchor)
+    order.splice(side === 'left' ? Math.max(0, at) : at + 1, 0, key)
+    await savePref('columns', { ...pref, custom: [...custom, { id, label: n === 1 ? '새 열' : `새 열 ${String(n)}` }], order })
+    onNotice('열을 추가했습니다. 이름은 열 관리에서 바꿀 수 있습니다.')
+  }
+
+  const deleteColumns = async (keys: string[]) => {
+    const removable = keys.filter(isCustomKey)
+    if (removable.length === 0) {
+      onError('기본 열은 삭제할 수 없습니다 — 열 숨기기를 쓰세요.')
+      return
+    }
+    const pref = prefs.columns ?? {}
+    await savePref('columns', {
+      ...pref,
+      custom: (pref.custom ?? []).filter((c) => !removable.includes(`c:${c.id}`)),
+      order: (pref.order ?? []).filter((k) => !removable.includes(k)),
+    })
+    const skipped = keys.length - removable.length
+    onNotice(`열 ${String(removable.length)}개를 삭제했습니다.${skipped > 0 ? ` 기본 열 ${String(skipped)}개는 삭제할 수 없어 그대로 두었습니다.` : ''}`)
   }
 
   /* ----------------------------------------------------------------------- */
@@ -817,7 +908,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           text: columnLetter(i),
           hint: `${c.label} 열`,
           onMenu: (x, y) => setColMenu({ key: c.key, x, y, jobId: null }),
-          inner: { justifyContent: 'center', color: '#5F6368' },
+          inner: { justifyContent: 'center', textAlign: 'center', color: '#5F6368' },
           style: { background: '#F1F3F4' },
         }),
       ),
@@ -896,7 +987,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       cells: columns.map((column, ci): SheetCell => {
         const own = cells.get(cellKey(row.jobId, column.key))
         const manual = mergeStyle(own?.style, row.rowStyle, column.style)
-        const v = cellValue(row, column, ctx, manual.decimals)
+        const v = cellValue(row, column, ctx, null)
         let found: string | null = null
         if (column.spec.defaultCf === 'date') found = dayState(v.raw, now)
         else if (column.spec.defaultCf === 'hour') found = hourState(read(column.spec.pairDate ?? '').raw, v.raw, now)
@@ -1017,7 +1108,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       nonEditable: true,
       tooltip: pending ?? '우클릭: 행 추가·삭제',
       style: { background: data?.rehandoverId ? '#FCE8E6' : '#F8F9FA', color: '#5F6368' },
-      inner: { justifyContent: 'center', fontSize: `calc(11px * var(--pm-zoom, 1))` },
+      inner: { justifyContent: 'center', textAlign: 'center', fontSize: `calc(11px * var(--pm-zoom, 1))` },
       onMenu: id.startsWith('m:') ? undefined : (x: number, y: number) => setRowMenu({ rowId: id, x, y }),
     }
     return { ...r, cells: [head, ...r.cells] }
@@ -1330,29 +1421,11 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           />
         </span>
         <span className={css.group}>
-          <select className={css.toolSelect} title="테두리" value="" onChange={(e) => {
-            const v = e.target.value
-            if (v === 'outer') outerBorder()
-            else if (v === 'none') void applyStyle({ border: null, borderSides: null }, '테두리 지우기')
-            else if (v) {
-              const [weight, sides] = v.split(':') as ['thin' | 'thick', string]
-              void applyStyle({ border: weight, borderSides: sides }, '테두리')
-            }
-          }}>
-            <option value="">테두리</option>
-            <option value="thin:tblr">모든 테두리</option>
-            <option value="outer">바깥 테두리</option>
-            <option value="thin:b">아래 테두리</option>
-            <option value="thick:tblr">굵은 테두리</option>
-            <option value="none">테두리 없음</option>
-          </select>
+          {/* 테두리 — 구글 시트처럼 아이콘 판 (팀장님 2026-11-25) */}
+          <BorderMenu color={borderColor} weight={borderWeight} onColor={setBorderColor} onWeight={setBorderWeight} onPick={applyBorder} />
           <IconMenu title="가로 정렬" icons={ALIGN_ICONS} value={focusStyle.align ?? 'left'} onPick={(k) => void applyStyle({ align: k }, '가로 정렬')} />
           <IconMenu title="세로 정렬" icons={VALIGN_ICONS} value={focusStyle.valign ?? 'middle'} onPick={(k) => void applyStyle({ valign: k }, '세로 정렬')} />
           <IconMenu title="텍스트 줄바꿈" icons={WRAP_ICONS} value={focusStyle.wrap ?? 'overflow'} onPick={(k) => void applyStyle({ wrap: k === 'overflow' ? null : k }, '텍스트 줄바꿈')} />
-          <select className={css.toolSelect} title="소수 자리" value={focusStyle.decimals ?? ''} onChange={(e) => void applyStyle({ decimals: e.target.value === '' ? null : Number(e.target.value) }, '소수 자리')}>
-            <option value="">소수</option>
-            {[0, 1, 2, 3, 4].map((d) => <option key={d} value={d}>{d === 0 ? '0,000' : `0,000.${'0'.repeat(d)}`}</option>)}
-          </select>
           <button type="button" className={css.iconTool} title={`메모 (${shortcuts.note ?? ''})`} onClick={() => runAction('note')}>{TOOL_ICONS.note}메모</button>
           <button type="button" className={css.iconTool} title="서식 지우기" onClick={() => runAction('clearFormat')}>{TOOL_ICONS.clearFormat}서식 지우기</button>
         </span>
@@ -1608,6 +1681,36 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           }}
           onClearAll={() => {
             setFilters({})
+            setColMenu(null)
+          }}
+          colCount={menuCols(colMenu.key).length}
+          deletable={menuCols(colMenu.key).some(isCustomKey)}
+          hiddenCount={(prefs.columns?.hidden ?? []).length}
+          onHide={() => {
+            void hideColumns(menuCols(colMenu.key))
+            setColMenu(null)
+          }}
+          onAdd={(side) => {
+            void addColumnBeside(menuCols(colMenu.key), side)
+            setColMenu(null)
+          }}
+          onDelete={() => {
+            void deleteColumns(menuCols(colMenu.key))
+            setColMenu(null)
+          }}
+          copyPath={colMenu.key === 'path' && colMenu.jobId && menuValue(colMenu) !== BLANK ? menuValue(colMenu) : null}
+          onCopyPath={() => {
+            const v = menuValue(colMenu)
+            if (v && v !== BLANK) {
+              void navigator.clipboard.writeText(v).then(
+                () => onNotice('경로를 복사했습니다. 탐색기 주소창에 붙여 넣으세요.'),
+                () => onError('복사하지 못했습니다. 칸을 고르고 Ctrl+C 를 눌러 주세요.'),
+              )
+            }
+            setColMenu(null)
+          }}
+          onShowHidden={() => {
+            void savePref('columns', { ...(prefs.columns ?? {}), hidden: [] })
             setColMenu(null)
           }}
         />
@@ -1948,6 +2051,17 @@ function ColumnMenu(props: {
   onExcept: (value: string) => void
   onClearThis: () => void
   onClearAll: () => void
+  /** 열 숨기기 · 추가 · 삭제 (팀장님 2026-11-25). count 는 고른 열 수. */
+  colCount: number
+  deletable: boolean
+  hiddenCount: number
+  onHide: () => void
+  onAdd: (side: 'left' | 'right') => void
+  onDelete: () => void
+  onShowHidden: () => void
+  /** 경로 칸이면 그 경로 — [경로 복사] (팀장님 2026-11-25). */
+  copyPath?: string | null
+  onCopyPath?: () => void
 }) {
   const box = useRef<HTMLDivElement>(null)
   const { onClose } = props
@@ -1966,11 +2080,17 @@ function ColumnMenu(props: {
     }
   }, [onClose])
   const left = Math.min(props.x, window.innerWidth - 240)
-  const top = Math.min(props.y, window.innerHeight - 330)
+  const top = Math.min(props.y, window.innerHeight - 470)
   const short = (v: string) => (v.length > 16 ? `${v.slice(0, 16)}…` : v)
   return (
     <div ref={box} className={css.ctxMenu} style={{ left, top }} onContextMenu={(e) => e.preventDefault()}>
       <div className={css.ctxHead}>{props.label}</div>
+      {props.copyPath ? (
+        <>
+          <button type="button" className={css.ctxItem} onClick={props.onCopyPath} title="탐색기 주소창에 붙여 넣으세요">📋 경로 복사</button>
+          <div className={css.ctxSep} />
+        </>
+      ) : null}
       {props.sortable ? (
         <>
           <button type="button" className={`${css.ctxItem} ${props.sort === 'asc' ? css.ctxOn : ''}`} onClick={() => props.onSort('asc')}>▲ 오름차순 정렬</button>
@@ -1988,6 +2108,26 @@ function ColumnMenu(props: {
       <button type="button" className={css.ctxItem} onClick={props.onFilterDialog}>필터…</button>
       <button type="button" className={css.ctxItem} disabled={!props.filtered} onClick={props.onClearThis}>이 열 필터 해제</button>
       <button type="button" className={css.ctxItem} disabled={!props.anyFilter} onClick={props.onClearAll}>모든 필터 해제</button>
+      <div className={css.ctxSep} />
+      <button type="button" className={css.ctxItem} onClick={() => props.onAdd('left')}>⇤ 왼쪽에 열 추가</button>
+      <button type="button" className={css.ctxItem} onClick={() => props.onAdd('right')}>⇥ 오른쪽에 열 추가</button>
+      <button type="button" className={css.ctxItem} onClick={props.onHide}>
+        👁 열 숨기기{props.colCount > 1 ? ` (${String(props.colCount)}개)` : ''}
+      </button>
+      <button
+        type="button"
+        className={css.ctxItem}
+        disabled={!props.deletable}
+        title={props.deletable ? undefined : '기본 열은 삭제할 수 없습니다 — 숨기기를 쓰세요. 추가한 열만 삭제됩니다.'}
+        onClick={props.onDelete}
+      >
+        🗑 열 삭제{props.colCount > 1 ? ` (${String(props.colCount)}개)` : ''}
+      </button>
+      {props.hiddenCount > 0 ? (
+        <button type="button" className={css.ctxItem} onClick={props.onShowHidden}>
+          숨긴 열 모두 보이기 ({String(props.hiddenCount)}개)
+        </button>
+      ) : null}
     </div>
   )
 }

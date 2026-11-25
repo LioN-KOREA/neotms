@@ -144,7 +144,7 @@ import {
 } from "./projects/NeotmsProjectManager.js";
 import { createJob, deleteJob, getJob, listJobs, updateJob } from "./jobs/NeotmsJobManager.js";
 import { sendHandoverMail } from "./handover/NeotmsHandoverManager.js";
-import { sendJobHandover } from "./handover/NeotmsJobHandover.js";
+import { previewJobHandover, sendJobHandover } from "./handover/NeotmsJobHandover.js";
 import { applyJobGroup, peekJobGroup } from "./jobs/NeotmsJobGroup.js";
 import {
   createPurchaseOrder,
@@ -513,6 +513,14 @@ const handleJobHandover: RRHandler = async (request) => {
     return permissionRefusal(NEOTMS_PERMISSION_PROJECT_EMAIL);
   }
   return sendJobHandover(caller, id, parsed.value, writeContext(request));
+};
+
+/** 인계 메일 미리보기 (팀장님 2026-11-25) — 저장·발송 없음. */
+const handlePreviewJobHandover: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(JobHandoverSchema, request.body);
+  return parsed.ok ? previewJobHandover(callerOf(request), id, parsed.value) : parsed.response;
 };
 
 const handleListJobs: RRHandler = async (request) => listJobs(callerOf(request), request);
@@ -1215,6 +1223,7 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // is a mail, not a row.
   { path: `${PROJECTS}/:id/handover-mail`, method: "POST", handler: handleSendHandoverMail, permission: NEOTMS_PERMISSION_PROJECT_EMAIL },
   { path: `${PROJECTS}/:id/handover`, method: "POST", handler: handleJobHandover, permission: NEOTMS_PERMISSION_PROJECT_UPDATE },
+  { path: `${PROJECTS}/:id/handover/preview`, method: "POST", handler: handlePreviewJobHandover, permission: NEOTMS_PERMISSION_PROJECT_READ },
   { path: `${PROJECTS}/:id/job-groups/next`, method: "GET", handler: handlePeekJobGroup, permission: NEOTMS_PERMISSION_JOB_CREATE },
   { path: `${PROJECTS}/:id/job-groups`, method: "POST", handler: handleJobGroupAction, permission: NEOTMS_PERMISSION_JOB_UPDATE },
   // Acceptance. `PROJECT_READ` deliberately - see the handler for why the gate is the row and not

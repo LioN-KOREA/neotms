@@ -235,6 +235,8 @@ export const ProjectCreateSchema = v.object({
   prjEday: settable(DateSchema),
   prjEdayTime: settable(TimeSchema),
   prjContent: settable(text(5000)),
+  /** NAS 경로 (팀장님 2026-11-25, db/015). */
+  prjPath: settable(text(1000)),
 });
 
 export const ProjectUpdateSchema = v.partial(ProjectCreateSchema);
@@ -701,6 +703,8 @@ export const JobHandoverSchema = v.object({
   layouts: v.optional(v.array(v.picklist(HANDOVER_LAYOUTS)), []),
   layoutText: v.optional(v.pipe(v.string(), v.maxLength(200)), ""),
   note: v.optional(v.pipe(v.string(), v.maxLength(2000)), ""),
+  /** 경로 — 기본은 프로젝트 경로. 이 인계(메일·시트)에만 쓰고 프로젝트 경로는 바꾸지 않는다. */
+  path: v.optional(v.pipe(v.string(), v.maxLength(1000)), ""),
   cc: v.optional(
     v.pipe(v.array(v.pipe(v.string(), v.trim(), v.email("must be an email address"), v.maxLength(300))), v.maxLength(30)),
     [],

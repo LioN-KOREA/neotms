@@ -2207,3 +2207,18 @@
 /* 언어별 설정 표 — 본문 칸 사이에도 옅은 회색 세로선 (팀장님 2026-11-25) */
 .tgLine > .tgCell { border-right: 1px solid rgba(0, 0, 0, 0.08); }
 .tgLine > .tgCell:last-child { border-right: 0; }
+
+/* 확인 창 (ConfirmDialog, 2026-11-25) */
+.confirmBody { display: flex; gap: 14px; align-items: flex-start; padding: 4px 2px 2px; }
+.confirmIcon { flex: none; width: 36px; height: 36px; border-radius: 50%; background: #fdf3e3; color: #EC9820; font-weight: 800; font-size: 19px; display: flex; align-items: center; justify-content: center; border: 2px solid #f6d29b; }
+.confirmMsg { margin: 6px 0 8px; font-size: 14.5px; font-weight: 700; color: var(--nt-ink, #1f2328); line-height: 1.45; }
+.confirmDetail { font-size: 12.5px; color: var(--nt-ink2, #555); background: #f7f8fa; border: 1px solid #e6e8ec; border-radius: 6px; padding: 8px 10px; line-height: 1.6; }
+
+/* NAS 경로 + 복사 (팀장님 2026-11-25) */
+.pathCopy { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+.pathText { font-family: Consolas, 'D2Coding', monospace; font-size: 12.5px; word-break: break-all; }
+
+/* 인계 메일 미리보기 (팀장님 2026-11-25) */
+.mailHead { display: grid; gap: 4px; margin-bottom: 10px; font-size: 13px; }
+.mailHead > div > span { display: inline-block; width: 68px; color: #5f6368; }
+.mailFrame { width: 100%; height: 560px; border: 1px solid #dadce0; border-radius: 6px; background: #fff; }

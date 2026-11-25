@@ -112,6 +112,8 @@ export type PmHandover = {
   answeredAt: string | null;
   /** Sent while the job was already on the receiver's sheet (db/012) - confirm or revise only. */
   rehandover: boolean;
+  /** 인계 경로 (db/015). */
+  path: string | null;
 };
 
 export type PmNotice = {
@@ -283,6 +285,7 @@ function toHandover(row: SqlRow): PmHandover {
     createdAt: readTs(row, "created_at") ?? "",
     answeredAt: readTs(row, "answered_at"),
     rehandover: readBool(row, "rehandover") ?? false,
+    path: readText(row, "path"),
   };
 }
 
@@ -607,7 +610,7 @@ export const PmProjectStateSyncOps = (jobId: string, actor: string): SqlOps<stri
 const HANDOVER_COLUMNS = `
     h.id, h.job_id, h.status, h.message, h.reply, h.snapshot, to_jsonb(h.changed_keys) AS changed_keys,
     h.from_staff_id, fs.mgr_name AS from_name, h.to_staff_id, ts.mgr_name AS to_name,
-    h.created_at, h.answered_at, h.rehandover`;
+    h.created_at, h.answered_at, h.rehandover, h.path`;
 
 /**
  * The job's sheet-relevant values, as the handover sheet shows them and as the diff compares them.
@@ -669,11 +672,12 @@ export const HandoverInsertOps = (input: {
   snapshot: Record<string, unknown>;
   changedKeys: string[];
   rehandover: boolean;
+  path?: string | null;
   actor: string;
 }): SqlOps<string | null> => ({
   sql: `
-    INSERT INTO job_handover (job_id, from_staff_id, to_staff_id, status, message, snapshot, changed_keys, rehandover, created_by)
-    VALUES (:job_id, :from_id, :to_id, 0, :message, :snapshot, :changed, :rehandover, :actor)
+    INSERT INTO job_handover (job_id, from_staff_id, to_staff_id, status, message, snapshot, changed_keys, rehandover, path, created_by)
+    VALUES (:job_id, :from_id, :to_id, 0, :message, :snapshot, :changed, :rehandover, :path, :actor)
     RETURNING id
   `,
   parameters: [
@@ -684,6 +688,7 @@ export const HandoverInsertOps = (input: {
     param("snapshot", input.snapshot, "json"),
     param("changed", input.changedKeys, "textArray"),
     param("rehandover", input.rehandover, "bool"),
+    param("path", input.path ?? null, "text"),
     param("actor", input.actor, "text"),
   ],
   mapper: (rows) => (rows[0] ? readId(rows[0], "id") : null),

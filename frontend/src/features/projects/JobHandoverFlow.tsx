@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react'
 import { CODE_DOMAIN, isLinguistic } from '@/apis/neotms.codes'
 import type { JobRow, JobUpdate } from '@/apis/neotms.types'
 import { HANDOVER_FORMATS, HANDOVER_LAYOUTS } from '@/apis/neotms.types'
-import { useSendJobHandover } from '@/apis/pmsheet.api'
+import { previewJobHandover, useSendJobHandover, type JobHandoverInput } from '@/apis/pmsheet.api'
 import { useUpdateJob } from '@/apis/queries/neotms.mutation'
 import { useCodeNames, useJobs, useProfile } from '@/apis/queries/neotms.query'
 import { groupNumber } from '@/apis/jobGroup.api'
@@ -73,6 +73,8 @@ export function JobHandoverFlow(props: {
   projectId: string
   /** 창 머리에 보일 프로젝트 — 코드와 이름. */
   projectLabel: string
+  /** 프로젝트 NAS 경로 — 인계정보 '경로' 칸의 기본값 (팀장님 2026-11-25). */
+  projectPath?: string
   /** 프로젝트 화면에서 골라 둔 작업. 있으면 바로 인계정보 입력으로 (담당PM 이 다 있을 때). */
   preselected?: string[]
   onClose: () => void
@@ -312,6 +314,7 @@ function toggle<T>(list: readonly T[], value: T): T[] {
 function HandoverInfo(props: {
   projectId: string
   projectLabel: string
+  projectPath?: string
   jobs: { id: string; label: string; pmName: string }[]
   onClose: () => void
   onBack: () => void
@@ -324,6 +327,11 @@ function HandoverInfo(props: {
   const [layouts, setLayouts] = useState<string[]>([])
   const [layoutText, setLayoutText] = useState('')
   const [note, setNote] = useState('')
+  // 경로 — 기본은 프로젝트 경로. 여기서 고쳐도 프로젝트 경로는 그대로 (이 인계의 메일·시트에만).
+  const [path, setPath] = useState(props.projectPath ?? '')
+  const [preview, setPreview] = useState<{ subject: string; html: string; recipients: string[] } | null>(null)
+  const [previewError, setPreviewError] = useState<unknown>(null)
+  const [previewing, setPreviewing] = useState(false)
   const [cc, setCc] = useState<EmailChip[]>(() => [parseEmailChip(DEFAULT_CC)!])
   const [hiworksId, setHiworksId] = useState<string | null>(null)
   const [hiworksPassword, setHiworksPassword] = useState('')
@@ -335,22 +343,35 @@ function HandoverInfo(props: {
   const canHandover = choicesOk && !send.isPending
   const canSend = canHandover && !ccBad && id.trim().length > 0 && hiworksPassword.length > 0
 
+  const inputOf = (withMail: boolean): JobHandoverInput => ({
+    jobIds: props.jobs.map((j) => j.id),
+    formats,
+    formatText: formatText.trim(),
+    layouts,
+    layoutText: layoutText.trim(),
+    note: note.trim(),
+    path: path.trim(),
+    cc: withMail ? cc.map((c) => c.email) : [],
+    send: withMail,
+    ...(withMail ? { hiworksId: id.trim(), hiworksPassword } : {}),
+  })
+
+  /** [미리보기] — 보낼 메일을 서버가 그대로 만들어 준다. 저장·발송은 하지 않는다. */
+  const openPreview = async () => {
+    setPreviewing(true)
+    setPreviewError(null)
+    try {
+      setPreview(await previewJobHandover(props.projectId, inputOf(false)))
+    } catch (e) {
+      setPreviewError(e)
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
   const submit = async (withMail: boolean) => {
     if (withMail ? !canSend : !canHandover) return
-    const r = await send.mutateAsync({
-      projectId: props.projectId,
-      input: {
-        jobIds: props.jobs.map((j) => j.id),
-        formats,
-        formatText: formatText.trim(),
-        layouts,
-        layoutText: layoutText.trim(),
-        note: note.trim(),
-        cc: withMail ? cc.map((c) => c.email) : [],
-        send: withMail,
-        ...(withMail ? { hiworksId: id.trim(), hiworksPassword } : {}),
-      },
-    })
+    const r = await send.mutateAsync({ projectId: props.projectId, input: inputOf(withMail) })
     const label = (jobId: string) => props.jobs.find((j) => j.id === jobId)?.label ?? jobId
     const parts = [`작업 ${String(r.created)}건을 인계했습니다.`]
     if (r.skipped.length > 0) parts.push(`제외: ${r.skipped.map((s) => `${label(s.jobId)} (${s.reason})`).join(' / ')}`)
@@ -374,19 +395,22 @@ function HandoverInfo(props: {
           <button type="button" className={`${ui.btn} ${ui.btnGhost}`} onClick={props.onBack} disabled={busy} style={{ marginRight: 'auto' }}>
             ‹ 작업 선택
           </button>
+          <button type="button" className={ui.btn} onClick={() => void openPreview()} disabled={busy || previewing} title="보낼 인계 메일을 미리 봅니다 (보내지 않음)">
+            {previewing ? '불러오는 중…' : '미리보기'}
+          </button>
           <button type="button" className={ui.btn} onClick={props.onClose} disabled={busy}>
             취소
           </button>
           <button type="button" className={ui.btn} onClick={() => void submit(false)} disabled={!canHandover} title="각 작업의 담당PM 에게 인계합니다 (메일은 보내지 않음)">
             {busy ? '처리 중…' : '인계'}
           </button>
-          <button type="button" className={`${ui.btn} ${ui.btnPrimary}`} onClick={() => void submit(true)} disabled={!canSend} title="인계하고, 담당PM 마다 인계 메일을 보냅니다">
+          <button type="button" className={`${ui.btn} ${ui.btnPrimary}`} onClick={() => void submit(true)} disabled={!canSend} title="인계하고, 모든 담당PM 에게 인계 메일 한 통을 보냅니다">
             {busy ? '처리 중…' : '인계·발송'}
           </button>
         </>
       }
     >
-      <ErrorNotice error={send.error} />
+      <ErrorNotice error={send.error ?? previewError} />
       <p className={ui.hint} style={{ marginTop: 0 }}>
         <strong>{props.projectLabel}</strong> — 작업 {props.jobs.length}건을 담당PM{pms.length > 0 ? ` (${pms.join(', ')})` : ''} 에게 인계합니다.
         PM 이 받으면 아래 내용이 그 PM 의 나의 업무 <strong>비고</strong> 칸에 들어갑니다.
@@ -423,6 +447,23 @@ function HandoverInfo(props: {
       </div>
 
       <div className={ui.field}>
+        <label className={ui.label} htmlFor="ho-path">경로</label>
+        <input
+          id="ho-path"
+          className={ui.input}
+          maxLength={1000}
+          placeholder="NAS 경로 — 프로젝트에 경로가 있으면 미리 들어갑니다"
+          value={path}
+          // 누르면 전체 선택 — 바로 덮어써 넣을 수 있게 (팀장님 2026-11-25).
+          onFocus={(e) => e.currentTarget.select()}
+          onMouseUp={(e) => e.preventDefault()}
+          onChange={(e) => setPath(e.target.value)}
+          disabled={busy}
+        />
+        <p className={ui.hint}>인계 메일의 경로 칸과, PM 이 받으면 나의 업무 시트 <strong>경로</strong> 칸에 들어갑니다. 여기서 고쳐도 프로젝트 경로는 바뀌지 않습니다.</p>
+      </div>
+
+      <div className={ui.field}>
         <label className={ui.label} htmlFor="ho-note">기타요청</label>
         <textarea
           id="ho-note"
@@ -440,7 +481,7 @@ function HandoverInfo(props: {
         <label className={ui.label} htmlFor="ho-cc">메일 참조</label>
         <EmailChips id="ho-cc" value={cc} onChange={setCc} disabled={busy} placeholder="이름 <주소> 또는 주소 — 쉼표·Enter 로 구분" />
         {ccBad ? <p className={`${ui.hint} ${ui.hintWarn}`}>메일 주소가 아닌 항목(빨간색)이 있습니다. 고치거나 지워 주세요.</p> : null}
-        <p className={ui.hint}>받는 사람은 각 작업의 담당PM 이메일로 정해집니다. PM 이 여럿이면 PM 마다 자기 작업만 담은 메일이 갑니다.</p>
+        <p className={ui.hint}>받는 사람은 고른 작업의 담당PM 이메일로 정해집니다. PM 이 여럿이어도 메일은 한 통이고, 모든 PM 이 함께 받습니다.</p>
       </div>
 
       <InfoNotice>
@@ -457,6 +498,17 @@ function HandoverInfo(props: {
           <input id="ho-pw" className={ui.input} type="password" autoComplete="current-password" value={hiworksPassword} onChange={(e) => setHiworksPassword(e.target.value)} disabled={busy} />
         </div>
       </div>
+      {preview ? (
+        <Modal title="인계 메일 미리보기" width={560} onClose={() => setPreview(null)} footer={<button type="button" className={ui.btn} onClick={() => setPreview(null)}>닫기</button>}>
+          <div className={ui.mailHead}>
+            <div><span>받는 사람</span>{preview.recipients.join(', ') || '-'}</div>
+            <div><span>참조</span>{cc.map((c) => c.email).join(', ') || '-'}</div>
+            <div><span>제목</span><strong>{preview.subject}</strong></div>
+          </div>
+          {/* 보낼 메일 본문 그대로 — 스크립트가 돌지 않는 틀 안에서 보인다. */}
+          <iframe title="인계 메일 본문" className={ui.mailFrame} sandbox="" srcDoc={preview.html} />
+        </Modal>
+      ) : null}
     </Modal>
   )
 }

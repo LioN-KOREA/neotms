@@ -544,6 +544,7 @@ export function ProjectsView() {
         <JobHandoverFlow
           projectId={handingOver.id}
           projectLabel={`${handingOver.prjCode} ${handingOver.prjName ?? ''}`.trim()}
+          projectPath={handingOver.prjPath ?? ''}
           onClose={() => setHandingOver(null)}
           onDone={setNotice}
         />

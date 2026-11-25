@@ -5818,6 +5818,7 @@ describe("the handover mail", () => {
     prjEday: null,
     prjEdayTime: null,
     prjContent: null,
+    prjPath: null,
     // Assigned and unanswered, which is what every project starts as. Nothing in the handover mail
     // reads it; it is here because `ProjectRow` requires it.
     acceptanceStatus: 0,
@@ -6053,7 +6054,7 @@ describe("the handover mail", () => {
      * are text somebody can choose.
      */
     const mail = composeHandoverMail(
-      project({ prjContent: "\\\\nas01\\\\프로젝트\\n2종" }),
+      project({ prjPath: "\\\\nas01\\\\프로젝트\\n2종" }),
       [job()],
       { formats: ["WORD"], layouts: ["보기좋게"], note: "<b>급건</b></td><td>주입" } as const,
     );

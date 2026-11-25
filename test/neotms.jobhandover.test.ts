@@ -53,7 +53,7 @@ describe("handover remark — what lands in the PM's 비고 cell", () => {
   it("accepting writes the remark; confirming a re-handover appends it", () => {
     const manager = read("lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmSheetManager.ts");
     expect(manager).toContain("appendRehandoverRemark(current, handover.message)");
-    expect(manager).toContain('{ pmState: "인계 수령", hidden: false, ...(remark ? { fields: { remark } } : {}) }');
+    expect(manager).toContain('{ pmState: "인계 수령", hidden: false, ...(remark || path ? { fields: { ...(remark ? { remark } : {}), ...(path ? { path } : {}) } } : {}) }');
   });
 });
 
@@ -65,6 +65,7 @@ describe("handover mail — typed options and per-job deadlines", () => {
     prjMgrName: "영업",
     prjPmName: null,
     prjContent: null,
+    prjPath: null,
     prjEday: "2026-12-31",
     prjEdayTime: null,
   } as unknown as Parameters<typeof composeHandoverMail>[0];
@@ -305,5 +306,69 @@ describe("job groups", () => {
     const flow = read("frontend/src/features/projects/JobHandoverFlow.tsx");
     expect(flow).toContain("domain={CODE_DOMAIN.WORK} value={d.workCode}");
     expect(flow).toContain("`${src.join(', ') || '-'} → ${tgt.join(', ') || '-'}`");
+  });
+});
+
+describe("work sheet toolbar and numbers", () => {
+  it("no decimals option; numbers get commas and keep their own decimals", async () => {
+    const sheet = read("frontend/src/features/pmsheet/PmSheet.tsx");
+    expect(sheet).not.toContain('title="소수 자리"');
+    expect(sheet).toContain("<BorderMenu");
+    const f = await import("../frontend/src/features/pmsheet/sheetFormat");
+    expect(f.formatNumber(12000, null)).toBe("12,000");
+    expect(f.formatNumber(1234.5, null)).toBe("1,234.5");
+    expect(f.formatNumber(0.125, null)).toBe("0.125");
+  });
+});
+
+describe("column hide / add / delete never moves handover data", () => {
+  it("values are stored by column key, and only added columns can be deleted", () => {
+    const manager = read("lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmSheetManager.ts");
+    expect(manager).toContain("...(remark ? { remark } : {}), ...(path ? { path } : {})"); // handover remark/path -> their keys, wherever the columns sit
+    const sheet = read("frontend/src/features/pmsheet/PmSheet.tsx");
+    expect(sheet).toContain("const removable = keys.filter(isCustomKey)");
+    expect(sheet).toContain("custom: (pref.custom ?? []).filter((c) => !removable.includes(`c:${c.id}`)),");
+  });
+});
+
+describe("project NAS path (db/015)", () => {
+  it("project has prj_path; handover keeps its own path and lands in the sheet path column", () => {
+    expect(read("db/015_project_path.sql")).toContain("ADD COLUMN IF NOT EXISTS prj_path text");
+    expect(read("db/015_project_path.sql")).toContain("ALTER TABLE job_handover ADD COLUMN IF NOT EXISTS path");
+    const dbops = read("lambdas/neotms/nodejs/neotms/projects/NeotmsProject.dbops.ts");
+    expect(dbops).toContain('{ column: "prj_path", kind: "text", read: (i) => i.prjPath }');
+    const manager = read("lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmSheetManager.ts");
+    expect(manager).toContain("const path = handover.path?.trim()");
+  });
+
+  it("the mail path cell uses the handover path, else the project path", async () => {
+    const { composeHandoverMail } = await import("../lambdas/neotms/nodejs/neotms/handover/NeotmsHandoverMail");
+    const base = { prjCode: "P1", prjPath: "\\nas\project" } as never;
+    const job = { jobName: "a", jobType: null, jobSlang: "ko", jobElang: "en", jobPmName: "김", jobEday: null, jobEdayTime: null } as never;
+    expect(composeHandoverMail(base, [job], { formats: ["WORD"], layouts: ["보기좋게"], note: "" }).html).toContain("nas");
+    expect(composeHandoverMail(base, [job], { formats: ["WORD"], layouts: ["보기좋게"], note: "", path: "Z:\other" }).html).toContain("other");
+  });
+
+  it("one mail to every PM, and a preview that sends nothing", () => {
+    const src = read("lambdas/neotms/nodejs/neotms/handover/NeotmsJobHandover.ts");
+    expect(src).not.toContain("byPm");
+    expect(src).toContain("hiworksSendEmail(login, recipients,");
+    expect(src).toContain("export async function previewJobHandover");
+    expect(read("lambdas/neotms/nodejs/neotms/neotms.handler.ts")).toContain("/:id/handover/preview`");
+  });
+});
+
+describe("path in the screens", () => {
+  it("project form, detail, handover info (select-all, preview) and sheet copy", () => {
+    const form = read("frontend/src/features/projects/ProjectFormModal.tsx");
+    expect(form.indexOf('htmlFor="prj-path"')).toBeGreaterThan(form.indexOf('htmlFor="prj-field2"'));
+    expect(form.indexOf('htmlFor="prj-path"')).toBeLessThan(form.indexOf('htmlFor="prj-content"'));
+    expect(read("frontend/src/features/projects/ProjectDetailView.tsx")).toContain("<PathCopy path={project.prjPath}");
+    const flow = read("frontend/src/features/projects/JobHandoverFlow.tsx");
+    expect(flow.indexOf('htmlFor="ho-path"')).toBeLessThan(flow.indexOf('htmlFor="ho-note"'));
+    expect(flow).toContain("useState(props.projectPath ?? '')");
+    expect(flow).toContain("onFocus={(e) => e.currentTarget.select()}");
+    expect(flow).toContain('sandbox="" srcDoc={preview.html}');
+    expect(read("frontend/src/features/pmsheet/PmSheet.tsx")).toContain("📋 경로 복사");
   });
 });

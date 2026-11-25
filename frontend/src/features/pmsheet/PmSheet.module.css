@@ -409,3 +409,16 @@
 .gridWrap .badgeBtn { font-size: calc(10px * var(--pm-zoom, 1)); line-height: calc(14px * var(--pm-zoom, 1)); }
 .gridWrap .caret, .gridWrap .hdrBtn { font-size: calc(10px * var(--pm-zoom, 1)); }
 .gridWrap .noteMark { border-top-width: calc(7px * var(--pm-zoom, 1)); border-left-width: calc(7px * var(--pm-zoom, 1)); }
+
+/* 테두리 아이콘 판 (구글 시트식, 2026-11-25) */
+.borderMenu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; display: flex; gap: 6px; padding: 6px; background: #fff; border: 1px solid #dadce0; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); }
+.borderGrid { display: flex; flex-direction: column; gap: 2px; padding-right: 6px; border-right: 1px solid #e3e6ea; }
+.borderRow { display: flex; gap: 2px; }
+.borderSide { display: flex; flex-direction: column; gap: 2px; }
+.borderPen { display: inline-flex; flex-direction: column; align-items: center; line-height: 0; }
+.borderPenBar { display: block; width: 14px; height: 3px; margin-top: 1px; border-radius: 1px; }
+.borderPop { position: absolute; top: 0; left: calc(100% + 4px); z-index: 41; display: flex; flex-wrap: wrap; gap: 4px; width: 112px; padding: 6px; background: #fff; border: 1px solid #dadce0; border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18); }
+.borderSwatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, 0.15); cursor: pointer; padding: 0; }
+.borderSwatchOn { outline: 2px solid #1a73e8; outline-offset: 1px; }
+.borderWeightOpt { display: flex; align-items: center; width: 100%; height: 22px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer; color: #333; }
+.borderWeightOpt:hover { background: #f1f3f4; }

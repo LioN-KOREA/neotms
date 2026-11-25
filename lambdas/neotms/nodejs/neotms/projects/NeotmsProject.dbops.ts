@@ -135,6 +135,8 @@ export type ProjectRow = {
   prjEday: string | null;
   prjEdayTime: string | null;
   prjContent: string | null;
+  /** NAS 경로 (db/015). */
+  prjPath: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 };
@@ -166,6 +168,7 @@ const projectColumns = (q: string): string => `
   ${q}.prj_eday            AS prj_eday,
   ${q}.prj_eday_time       AS prj_eday_time,
   ${q}.prj_content         AS prj_content,
+  ${q}.prj_path            AS prj_path,
   ${q}.created_at          AS created_at,
   ${q}.updated_at          AS updated_at
 `;
@@ -204,6 +207,7 @@ export const toProjectRow = (row: SqlRow): ProjectRow => ({
   prjEday: readText(row, "prj_eday"),
   prjEdayTime: readText(row, "prj_eday_time"),
   prjContent: readText(row, "prj_content"),
+  prjPath: readText(row, "prj_path"),
   createdAt: readText(row, "created_at"),
   updatedAt: readText(row, "updated_at"),
 });
@@ -478,6 +482,7 @@ const PROJECT_FIELDS: readonly FieldSpec<ProjectUpdate>[] = [
   { column: "prj_eday", kind: "date", read: (i) => i.prjEday },
   { column: "prj_eday_time", kind: "time", read: (i) => i.prjEdayTime },
   { column: "prj_content", kind: "text", read: (i) => i.prjContent },
+  { column: "prj_path", kind: "text", read: (i) => i.prjPath },
 ];
 
 /**

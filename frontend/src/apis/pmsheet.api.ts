@@ -287,6 +287,8 @@ export type JobHandoverInput = {
   layouts: string[]
   layoutText: string
   note: string
+  /** 경로 — 기본은 프로젝트 경로. 이 인계에만 쓴다. */
+  path: string
   cc: string[]
   send: boolean
   hiworksId?: string
@@ -299,6 +301,13 @@ export type JobHandoverResult = {
 }
 export const sendJobHandover = (projectId: string, input: JobHandoverInput) =>
   neotmsApi<JobHandoverResult>(`/api/v0/projects/${encodeURIComponent(projectId)}/handover`, { method: 'POST', body: input })
+
+/** 인계 메일 미리보기 — 저장·발송 없음 (팀장님 2026-11-25). */
+export const previewJobHandover = (projectId: string, input: JobHandoverInput) =>
+  neotmsApi<{ subject: string; html: string; recipients: string[] }>(
+    `/api/v0/projects/${encodeURIComponent(projectId)}/handover/preview`,
+    { method: 'POST', body: input },
+  )
 
 export const answerHandover = (id: string, action: 'accept' | 'revision' | 'reject', reply: string | null) =>
   neotmsApi<{ status: number }>(`/api/v0/pm-sheet/handovers/${encodeURIComponent(id)}/answer`, {

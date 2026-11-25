@@ -274,6 +274,7 @@ export async function createHandovers(
   ctx: WriteContext,
 ): Promise<ResponseData<HandoverCreateResult | string>> {
   const message = input.message?.trim() ? input.message.trim() : null;
+  const path = input.path?.trim() ? input.path.trim() : null;
   return runDb("create job handovers", async () =>
     pgTransaction(async (client) => {
       const result: HandoverCreateResult = { created: 0, skipped: [] };
@@ -301,6 +302,7 @@ export async function createHandovers(
               snapshot: job.snapshot,
               changedKeys: changed,
               rehandover,
+              path,
               actor: ctx.actor,
             }),
             client,
@@ -352,18 +354,23 @@ export async function answerHandover(
         // 재인계 비고 — 기존 비고 아래에 '<재인계 비고>' 머리를 달고 덧붙인다 (팀장님 2026-11-25).
         const current = (await pgQuery(SheetRemarkOps(handover.toStaffId, handover.jobId), client)).data;
         const remark = appendRehandoverRemark(current, handover.message);
-        if (remark !== null) {
-          await pgExecute(PmSheetRowWriteOps(handover.toStaffId, handover.jobId, { fields: { remark } }, ctx.actor), client);
+        // 재인계 경로가 있으면 시트 경로 열을 새 경로로 (비어 있으면 원래 경로 그대로).
+        const path = handover.path?.trim() ?? "";
+        const fields = { ...(remark !== null ? { remark } : {}), ...(path ? { path } : {}) };
+        if (Object.keys(fields).length > 0) {
+          await pgExecute(PmSheetRowWriteOps(handover.toStaffId, handover.jobId, { fields }, ctx.actor), client);
         }
       } else if (status === 1) {
         // On the sheet, starting at the first PM step, and visible even if it was removed before.
         // 인계 때 적은 내용(편집포맷·레이아웃·기타요청)이 시트 비고 칸으로 (팀장님 2026-11-25).
         const remark = handover.message?.trim() ?? "";
+        // 인계 경로 → 시트 경로 열 (팀장님 2026-11-25).
+        const path = handover.path?.trim() ?? "";
         await pgExecute(
           PmSheetRowWriteOps(
             handover.toStaffId,
             handover.jobId,
-            { pmState: "인계 수령", hidden: false, ...(remark ? { fields: { remark } } : {}) },
+            { pmState: "인계 수령", hidden: false, ...(remark || path ? { fields: { ...(remark ? { remark } : {}), ...(path ? { path } : {}) } } : {}) },
             ctx.actor,
           ),
           client,
