@@ -266,14 +266,21 @@ export const RoleListOps: () => SqlOps<RoleOption[]> = () => ({
  * rather than as a 23503 after the fact. `null` clears it, which is how an account is suspended
  * without being deleted: the person still signs in, and can do nothing.
  */
+/*
+ * `view_scope` is NOT here any more, and its absence is the enforcement.
+ *
+ * Row-level scope is not applied (see NeotmsAuthGuard), so a screen that still set the column
+ * would be offering a choice with no effect - and the next administrator would reasonably read a
+ * saved 'N' as "this person is restricted". Leaving the column out of this list is what makes
+ * that unsayable rather than merely unsaid.
+ */
 const STAFF_ADMIN_FIELDS: readonly FieldSpec<StaffAdminUpdate>[] = [
   { column: "role_id", kind: "id", read: (i) => i.roleId },
-  { column: "view_scope", kind: "text", read: (i) => i.viewScope },
   { column: "active", kind: "bool", read: (i) => i.active },
 ];
 
 /**
- * Assign a role, a view scope, or the active flag. Returns null when no such row.
+ * Assign a role or the active flag. Returns null when no such row.
  *
  * `updated_at = now()` is appended unconditionally rather than being a `FieldSpec`, because an
  * administrative change to somebody else's permissions is the one edit in this system where "when

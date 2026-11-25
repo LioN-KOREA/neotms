@@ -508,7 +508,10 @@ export interface StaffAttributesInput {
  */
 export interface StaffUpdateInput {
   roleId?: string | null
-  viewScope?: 'Y' | 'N'
+  /*
+   * `viewScope` 는 여기 없다. 행 단위 열람 제한을 쓰지 않으므로(서버의 `NeotmsAuthGuard`)
+   * 서버 스키마에서도 빠졌고, 보내면 400 이다 — 조용히 무시되는 것보다 낫다.
+   */
   active?: boolean
 }
 

@@ -30,12 +30,18 @@ interface Props {
  * 퇴사자에게는 보통 '사용 중지' 가 맞고, 권한을 다시 검토하는 동안 잠시 멈추는 것이라면 이쪽이
  * 맞다.
  *
- * ## 열람 범위를 라디오로 둔 이유
+ * ## 열람 범위 칸은 **없앴다**
  *
- * 체크박스 하나로 두면 "전체 열람" 이 꺼진 상태가 두 가지로 읽힌다 — 내 담당분만 보도록 정한
- * 것인지, 아직 정하지 않은 것인지. `view_scope` 는 'Y' 가 아닌 모든 값(NULL·빈 문자열 포함)을
- * 내 담당분만으로 해석하므로(서버의 `VIEW_SCOPE_ALL`), ETL 로 들어온 행은 실제로 "정해지지
- * 않은" 상태로 존재한다. 두 선택지를 나란히 보여 주면 저장하는 순간 둘 중 하나로 확정된다.
+ * 행 단위 열람 제한을 쓰지 않기로 했기 때문이다(서버의 `NeotmsAuthGuard`). 화면을 열 수 있는
+ * 사람은 그 화면의 모든 행을 본다 — 무엇을 볼 수 있는지는 역할이 정하고, 누가 담당인지는
+ * 정하지 않는다.
+ *
+ * 고르게 두고 서버가 무시하는 쪽이 더 나빴을 것이다. 저장된 '본인 담당분만' 은 다음 관리자에게
+ * **그 사람이 제한되어 있다**는 뜻으로 읽히고, 그 오해는 아무 증상도 내지 않는다. 서버의 수정
+ * 스키마에서도 그 칸을 뺐으므로 지금은 보낼 수조차 없다.
+ *
+ * `staff.view_scope` 컬럼 자체는 남아 있다(레거시 MGR_VIEW 의 값). 되살리는 일은 가드의 한 줄과
+ * 이 칸을 되돌리는 일이다.
  */
 export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
   const rolesQuery = useRoles()
@@ -43,7 +49,6 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
   const pending = updateStaff.isPending
 
   const [roleId, setRoleId] = useState<string>(staff.roleId ?? '')
-  const [scopeAll, setScopeAll] = useState<boolean>(staff.viewScope === 'Y')
   const [active, setActive] = useState<boolean>(staff.active)
   const [dirty, setDirty] = useState(false)
 
@@ -61,8 +66,6 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
     const input: StaffUpdateInput = {}
     const nextRoleId = roleId === '' ? null : roleId
     if (nextRoleId !== staff.roleId) input.roleId = nextRoleId
-    const nextScope = scopeAll ? 'Y' : 'N'
-    if (nextScope !== staff.viewScope) input.viewScope = nextScope
     if (active !== staff.active) input.active = active
 
     if (Object.keys(input).length === 0) {
@@ -164,45 +167,7 @@ export function StaffRoleModal({ staff, isSelf, onClose, onSaved }: Props) {
           </span>
         </div>
 
-        <div className={ui.fieldWide}>
-          <span className={ui.label}>열람 범위</span>
-          <label className={ui.check}>
-            <input
-              type="radio"
-              name="staff-scope"
-              checked={!scopeAll}
-              onChange={() => {
-                setDirty(true)
-                setScopeAll(false)
-              }}
-            />
-            <span className={ui.checkText}>
-              <span className={ui.checkLabel}>본인 담당분만</span>
-              <span className={ui.checkDesc}>
-                자신이 담당자로 지정된 프로젝트·작업·PO 만 보입니다. 목록과 보고서의 숫자도 그
-                범위로 계산됩니다.
-              </span>
-            </span>
-          </label>
-          <label className={ui.check}>
-            <input
-              type="radio"
-              name="staff-scope"
-              checked={scopeAll}
-              onChange={() => {
-                setDirty(true)
-                setScopeAll(true)
-              }}
-            />
-            <span className={ui.checkText}>
-              <span className={ui.checkLabel}>회사 전체</span>
-              <span className={ui.checkDesc}>
-                담당자와 무관하게 모든 행이 보입니다. 매출·원가가 그대로 드러나므로 관리자와
-                경영진에게만 주십시오.
-              </span>
-            </span>
-          </label>
-        </div>
+
 
         <div className={ui.fieldWide}>
           <label className={ui.check}>

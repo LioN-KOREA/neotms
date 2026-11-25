@@ -803,14 +803,13 @@ export const CodeUpdateSchema = v.partial(v.omit(CodeCreateSchema, ["code"]));
 export const StaffAdminUpdateSchema = v.partial(
   v.object({
     roleId: v.nullable(IdSchema),
-    /**
-     * `Y` = sees every row, `N` = sees only their own.
-     *
-     * A picklist of two, though `VIEW_SCOPE_ALL` in NeotmsAuthGuard also accepts the legacy 'ALL'
-     * and 'A'. The guard has to read what the ETL loads; this screen only ever writes the canonical
-     * pair, so the value set does not keep growing from the new system's side.
+    /*
+     * `viewScope` was here and is gone. Row-level scope is not enforced (see NeotmsAuthGuard), so
+     * the field would have accepted a value, stored it, and changed nothing - and a stored 'N'
+     * reads to the next administrator as "this person is restricted". A request still carrying it
+     * now fails validation rather than being quietly ignored, which is the difference between
+     * finding out and not.
      */
-    viewScope: v.picklist(["Y", "N"]),
     /** False removes the sign-in without deleting the history attributed to this `mgr_id`. */
     active: v.boolean(),
   }),

@@ -47,16 +47,32 @@ import {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Row-level visibility, derived from `staff.view_scope` (legacy MGR_VIEW, nvarchar(3)).
+ * Row-level visibility. **NOT ENFORCED AT PRESENT - everybody sees every row.**
  *
- * EXACT SEMANTICS UNCONFIRMED - the width suggests a Y/N flag, but it has not been verified. So
- * this fails closed: only a value in `VIEW_SCOPE_ALL` widens the scope, and anything unrecognised
- * (including NULL, an empty string, or a value the ETL did not expect) means "own rows only".
+ * `seesEveryRow` below is a literal `true`, so `scopeClause()` contributes nothing to any
+ * statement and whoever may open a screen sees all of it. That is a decision, taken because
+ * row-level restriction is not wanted for now: access is decided by the permission on the screen,
+ * not by who owns the row.
  *
- * Failing closed here is deliberate and it has a visible failure mode: if the set below is wrong,
- * managers see too few projects and say so on the first day. The alternative - defaulting to "see
- * everything" - would be wrong in the direction nobody reports, because nothing looks broken when
- * you can see more than you should.
+ * ## What is deliberately still here
+ *
+ * `staff.view_scope` is still read onto the caller and still logged, the three scope column lists
+ * (`JOB_SCOPE_COLUMNS` and the rest) are untouched, and every statement still calls
+ * `scopeClause()`. None of that is dead code kept out of sentiment - it is what makes turning this
+ * back on a one-line change here plus restoring the control on 사용자 관리, instead of
+ * re-deriving which column means "mine" on six tables.
+ *
+ * `VIEW_SCOPE_ALL` is what the column USED to be read through, kept beside the switch so that
+ * restoring it does not have to rediscover which values the legacy data uses.
+ *
+ * ## The direction this is wrong in, if it is wrong
+ *
+ * The previous rule failed CLOSED: an unrecognised value meant "own rows only", so a mistake
+ * showed up as somebody seeing too little and saying so the same day. This one fails OPEN by
+ * construction. There is no subtle failure mode left to catch - it is unconditional, and it is
+ * written here in one place rather than spread across the statements - but it does mean that
+ * anyone who can open 작업 목록 can read every job in the company, which is the thing to weigh
+ * before adding a screen rather than after.
  */
 const VIEW_SCOPE_ALL = new Set(["Y", "ALL", "A"]);
 
@@ -274,7 +290,12 @@ const toCaller = (
   isSuperuser:
     attributes.has(NEOTMS_USER_ATTRIBUTE_SUPERUSER) || holdsBootstrapAuthority(account),
   viewScope: staff.viewScope,
-  seesEveryRow: staff.viewScope !== null && VIEW_SCOPE_ALL.has(staff.viewScope.trim().toUpperCase()),
+  /*
+   * Unconditional. See the comment on VIEW_SCOPE_ALL above for why, and for what to put back:
+   *
+   *   staff.viewScope !== null && VIEW_SCOPE_ALL.has(staff.viewScope.trim().toUpperCase())
+   */
+  seesEveryRow: true,
 });
 
 /**

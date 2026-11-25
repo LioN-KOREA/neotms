@@ -36,6 +36,7 @@ import type { IconName } from '@/shared/ui/Icon'
  */
 export type NeotmsNavGroupId =
   | 'dashboard'
+  | 'sheet'
   | 'work'
   | 'party'
   | 'insight'
@@ -99,6 +100,19 @@ export const NEOTMS_NAV_GROUPS: readonly NeotmsNavGroup[] = [
    * 화면을 뜻한다.
    */
   { id: 'dashboard', label: '대시보드', icon: 'grid' },
+  /*
+   * 업무 워크시트가 '업무' 와 따로 선 이유.
+   *
+   * 묶음은 모양이 아니라 **성격**으로 나눈다(이 배열 머리의 주석). 프로젝트·작업·PO 는 한 건을
+   * 열어 고치는 화면이고, 워크시트는 **여러 건을 한 장에 펼쳐 놓고** 훑으며 고치는 화면이다 —
+   * 쓰는 방식도, 한 번에 보는 양도, 여는 빈도도 다르다. 같은 묶음에 넣으면 목록 셋 뒤에 끼어
+   * 네 번째 항목이 되고, 매일 여는 화면이 매일 세 번 지나쳐야 하는 자리에 놓인다.
+   *
+   * 묶음이 항목 하나로 시작하는 것은 일시적이다. 같은 틀(칸 꾸밈, 추가 열, 끌어 옮기는 열)을
+   * 쓰는 다른 시트가 이 아래로 들어올 예정이고, 그때 이 자리가 그대로 늘어난다 — 나중에 묶음을
+   * 만들면 그날 모든 사람의 레일에서 메뉴가 한 칸씩 움직인다.
+   */
+  { id: 'sheet', label: '업무 워크시트', icon: 'table' },
   { id: 'work', label: '업무', icon: 'folder' },
   { id: 'party', label: '고객', icon: 'users' },
   { id: 'trn', label: '번역가', icon: 'globe' },
@@ -169,14 +183,14 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     group: 'dashboard',
   },
   /*
-   * 나의 업무가 '업무' 묶음의 맨 앞이다.
+   * 나의 업무 — 지금은 워크시트 묶음의 **유일한** 항목이고, 그래서 레일에서 이 항목을 누르면
+   * 2차 패널에 하나만 선다. 그 모양이 어색해 보여도 묶음을 미리 만드는 쪽이 맞다: 나중에
+   * 만들면 그날 모든 사람의 레일에서 메뉴가 한 칸씩 움직이고, 익숙해진 자리를 다시 익혀야 한다.
    *
-   * 프로젝트·작업·PO 는 **무엇이 있는지** 묻는 화면이고, 이 화면은 **내가 무엇을 들고 있는지**
-   * 묻는 화면이다. PM 이 하루를 시작하는 자리가 뒤쪽에 있으면, 매일 두 번씩 지나치는 화면이
-   * 목록 세 개 다음에 놓인다.
-   *
-   * 대시보드 묶음에 넣지 않은 이유는 성격이다. 대시보드는 읽는 화면이고 이 시트는 **고치는**
-   * 화면이다 — 그래서 권한도 따로이고(`WORKSPACE_READ`), 레일에서도 업무 쪽에 선다.
+   * 배열에서의 **자리는 그대로 둔다**(대시보드 바로 다음). `readableNav` 가 묶음이 아니라 이
+   * 배열의 순서를 따르므로(`NEOTMS_NAV_GROUPS` 의 주석), 여기를 옮기면 워크시트 권한만 가진
+   * 사람의 로그인 직후 첫 화면이 바뀐다 — 이번 변경은 레일의 자리에 대한 것이지 첫 화면에
+   * 대한 것이 아니다.
    */
   {
     menuId: NeotmsMenuId.WORKSPACE,
@@ -184,7 +198,7 @@ export const NEOTMS_NAV: readonly NeotmsNavItem[] = [
     path: '/workspace',
     label: '나의 업무',
     hint: '내가 수락한 프로젝트의 PO를 한 장의 시트에서',
-    group: 'work',
+    group: 'sheet',
   },
   {
     menuId: NeotmsMenuId.PROJECT,

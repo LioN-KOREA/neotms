@@ -142,7 +142,7 @@ async function assigneeRefusal(
 
   return (
     problem("PM", NEOTMS_USER_ATTRIBUTE_PM, check.pm) ??
-    problem("담당영업", NEOTMS_USER_ATTRIBUTE_SALES_MANAGER, check.mgr)
+    problem("영업담당", NEOTMS_USER_ATTRIBUTE_SALES_MANAGER, check.mgr)
   );
 }
 
