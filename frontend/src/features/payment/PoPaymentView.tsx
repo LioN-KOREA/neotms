@@ -28,6 +28,7 @@ import { ALL_ALREADY_APPROVED, approvalPrompt, unapprovedOf } from './poBulkAppr
 import { PoDocButtons, type PoPrintRequest } from './print/PoDocButtons'
 import { PoPrintModal } from './print/PoPrintModal'
 import { SettlementModal } from './SettlementModal'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 /**
  * 결제 — PO 승인·정산. **승인된 PO가, 마감일 오늘 ±30일로, 조회된 채 열린다.**
@@ -478,20 +479,8 @@ export function PoPaymentView() {
                 {draft.basis === 'paid' ? '지급일' : '마감일'} 범위
               </label>
               <div className={ui.inputRow}>
-                <input
-                  id="pay-from"
-                  className={ui.input}
-                  type="date"
-                  value={draft.from}
-                  onChange={(e) => setDraft((p) => ({ ...p, from: e.target.value }))}
-                />
-                <input
-                  className={ui.input}
-                  type="date"
-                  aria-label={`${draft.basis === 'paid' ? '지급일' : '마감일'} 종료`}
-                  value={draft.to}
-                  onChange={(e) => setDraft((p) => ({ ...p, to: e.target.value }))}
-                />
+                <DateTextInput id="pay-from" value={draft.from} onChange={(v) => setDraft((p) => ({ ...p, from: v }))} />
+                <DateTextInput ariaLabel={`${draft.basis === 'paid' ? '지급일' : '마감일'} 종료`} value={draft.to} onChange={(v) => setDraft((p) => ({ ...p, to: v }))} />
               </div>
             </div>
           )}

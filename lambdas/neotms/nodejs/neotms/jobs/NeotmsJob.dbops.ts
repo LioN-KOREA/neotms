@@ -88,6 +88,8 @@ import type { JobCreate, JobUpdate } from "../neotms.schemas.js";
 export type JobRow = {
   id: string;
   jobCode: string;
+  /** 작업 그룹 코드 (db/014) — J6000 처럼. */
+  jobGroup: string | null;
   projectId: string;
   /** Carried from the joined project, so a job list can show what it belongs to. */
   prjCode: string | null;
@@ -171,6 +173,7 @@ export type JobRow = {
 const jobColumns = (q: string): string => `
   ${q}.id             AS job_id,
   ${q}.job_code       AS job_code,
+  ${q}.job_group      AS job_group,
   ${q}.project_id     AS project_id,
   ${q}.job_name       AS job_name,
   ${q}.work_code      AS work_code,
@@ -253,6 +256,7 @@ const JOB_DETAIL_COLUMNS = `
 export const toJobRow = (row: SqlRow): JobRow => ({
   id: readId(row, "job_id") ?? "",
   jobCode: readText(row, "job_code") ?? "",
+  jobGroup: readText(row, "job_group"),
   projectId: readId(row, "project_id") ?? "",
   prjCode: readText(row, "prj_code"),
   prjName: readText(row, "prj_name"),

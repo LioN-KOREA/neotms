@@ -9,6 +9,7 @@ import { dateKstOffsetDays, formatDateTime, todayKst } from '@/shared/utils/form
 import { cssPercent, formatMoney, isNegative } from '@/shared/utils/money'
 import { barHeight, buildScale } from './reportScale'
 import ui from '@/shared/ui/ui.module.css'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 /**
  * 집계 리포트.
@@ -241,30 +242,14 @@ export function ReportsView() {
             <label className={ui.label} htmlFor="rf-from">
               시작일
             </label>
-            <input
-              id="rf-from"
-              className={ui.input}
-              type="date"
-              value={draft.from}
-              max={draft.to || undefined}
-              onChange={(e) => change('from', e.target.value)}
-              required
-            />
+            <DateTextInput id="rf-from" value={draft.from} onChange={(v) => change('from', v)} />
           </div>
 
           <div className={ui.filterField}>
             <label className={ui.label} htmlFor="rf-to">
               종료일
             </label>
-            <input
-              id="rf-to"
-              className={ui.input}
-              type="date"
-              value={draft.to}
-              min={draft.from || undefined}
-              onChange={(e) => change('to', e.target.value)}
-              required
-            />
+            <DateTextInput id="rf-to" value={draft.to} onChange={(v) => change('to', v)} />
           </div>
 
           <div className={ui.filterField}>

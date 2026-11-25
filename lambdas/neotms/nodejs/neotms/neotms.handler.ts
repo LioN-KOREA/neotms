@@ -89,6 +89,7 @@ import {
   CustomerUpdateSchema,
   HandoverMailSchema,
   JobHandoverSchema,
+  JobGroupActionSchema,
   JobCreateSchema,
   JobUpdateSchema,
   ProjectCreateSchema,
@@ -144,6 +145,7 @@ import {
 import { createJob, deleteJob, getJob, listJobs, updateJob } from "./jobs/NeotmsJobManager.js";
 import { sendHandoverMail } from "./handover/NeotmsHandoverManager.js";
 import { sendJobHandover } from "./handover/NeotmsJobHandover.js";
+import { applyJobGroup, peekJobGroup } from "./jobs/NeotmsJobGroup.js";
 import {
   createPurchaseOrder,
   deletePurchaseOrder,
@@ -514,6 +516,19 @@ const handleJobHandover: RRHandler = async (request) => {
 };
 
 const handleListJobs: RRHandler = async (request) => listJobs(callerOf(request), request);
+
+/** 작업 그룹 — 다음 코드 미리보기, [작업 그룹] 단추 (팀장님 2026-11-25). */
+const handlePeekJobGroup: RRHandler = async (request) => {
+  const id = recordId(request);
+  return id ? peekJobGroup(callerOf(request), id) : NOT_A_RECORD_ID;
+};
+
+const handleJobGroupAction: RRHandler = async (request) => {
+  const id = recordId(request);
+  if (!id) return NOT_A_RECORD_ID;
+  const parsed = parseBody(JobGroupActionSchema, request.body);
+  return parsed.ok ? applyJobGroup(callerOf(request), id, parsed.value) : parsed.response;
+};
 
 const handleGetJob: RRHandler = async (request) => {
   const id = recordId(request);
@@ -1200,6 +1215,8 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   // is a mail, not a row.
   { path: `${PROJECTS}/:id/handover-mail`, method: "POST", handler: handleSendHandoverMail, permission: NEOTMS_PERMISSION_PROJECT_EMAIL },
   { path: `${PROJECTS}/:id/handover`, method: "POST", handler: handleJobHandover, permission: NEOTMS_PERMISSION_PROJECT_UPDATE },
+  { path: `${PROJECTS}/:id/job-groups/next`, method: "GET", handler: handlePeekJobGroup, permission: NEOTMS_PERMISSION_JOB_CREATE },
+  { path: `${PROJECTS}/:id/job-groups`, method: "POST", handler: handleJobGroupAction, permission: NEOTMS_PERMISSION_JOB_UPDATE },
   // Acceptance. `PROJECT_READ` deliberately - see the handler for why the gate is the row and not
   // the permission.
   { path: `${PROJECTS}/:id/acceptance`, method: "POST", handler: handleSetProjectAcceptance, permission: NEOTMS_PERMISSION_PROJECT_READ },

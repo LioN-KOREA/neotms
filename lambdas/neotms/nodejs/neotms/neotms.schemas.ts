@@ -314,7 +314,19 @@ export const JobCreateSchema = v.object({
   jobEdayTime: settable(TimeSchema),
   jobMemo: settable(text(5000)),
   jobState: settable(text(50)),
+  /**
+   * 작업 그룹 (db/014). 새 작업에서 빼면 새 코드를 만든다. 주면 **같은 프로젝트에 이미 있는** 그룹이어야
+   * 한다 — 직접 지어 넣을 수는 없다 (팀장님 2026-11-25).
+   */
+  jobGroup: v.optional(v.pipe(v.string(), v.regex(/^[A-Z]\d{4,6}$/))),
 });
+
+/** 프로젝트 상세의 [작업 그룹] — 합치기(가장 낮은 번호로) 또는 새 코드 하나로 묶기. */
+export const JobGroupActionSchema = v.object({
+  mode: v.picklist(["merge", "new"]),
+  jobIds: v.pipe(v.array(IdSchema), v.minLength(1), v.maxLength(500)),
+});
+export type JobGroupActionInput = v.InferOutput<typeof JobGroupActionSchema>;
 
 /**
  * Editing a job.

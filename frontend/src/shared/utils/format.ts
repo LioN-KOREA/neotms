@@ -308,17 +308,22 @@ export function parseDateField(text: string): DateFieldParse {
     .replace(SEPARATORS, '-')
     .replace(/-+$/, '')
 
-  const digits = /^(\d{6}|\d{8})$/.exec(bare)
+  // 연도 없이 mmdd · mm-dd (mm/dd) 도 받는다 — 올해(한국 시간)로 (팀장님 2026-11-25).
+  const thisYear = todayKst().slice(0, 4)
+  const digits = /^(\d{4}|\d{6}|\d{8})$/.exec(bare)
   const parts = digits
-    ? digits[1].length === 6
-      ? [bare.slice(0, 2), bare.slice(2, 4), bare.slice(4, 6)]
-      : [bare.slice(0, 4), bare.slice(4, 6), bare.slice(6, 8)]
-    : /^(\d{2}|\d{4})-(\d{1,2})-(\d{1,2})$/.exec(bare)?.slice(1)
+    ? digits[1].length === 4
+      ? [thisYear, bare.slice(0, 2), bare.slice(2, 4)]
+      : digits[1].length === 6
+        ? [bare.slice(0, 2), bare.slice(2, 4), bare.slice(4, 6)]
+        : [bare.slice(0, 4), bare.slice(4, 6), bare.slice(6, 8)]
+    : (/^(\d{2}|\d{4})-(\d{1,2})-(\d{1,2})$/.exec(bare)?.slice(1) ??
+      (/^(\d{1,2})-(\d{1,2})$/.exec(bare) ? [thisYear, ...bare.split('-')] : undefined))
 
   if (!parts) {
     return {
       ok: false,
-      reason: '날짜를 yymmdd, yy-mm-dd 또는 yyyy-mm-dd 형식으로 적어 주세요.',
+      reason: '날짜를 yymmdd, mmdd, yy-mm-dd, mm/dd 또는 yyyy-mm-dd 형식으로 적어 주세요.',
     }
   }
 

@@ -19,6 +19,7 @@ import type { PickerOption } from '@/shared/ui/RecordPicker'
 import { formatDate, todayKst, toDateInputValue } from '@/shared/utils/format'
 import { decimalSum, formatMoney, krwToShow, toDecimalInput } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 /**
  * 한 번에 읽어 올 PO 수. 인쇄 양식의 칸이 열 개이므로 서른은 충분히 여유롭고, 그보다 많은
@@ -274,13 +275,7 @@ export function InvoiceFormModal({ invoice, onClose, onSaved }: Props) {
           <label className={ui.label} htmlFor="inv-day">
             발행일
           </label>
-          <input
-            id="inv-day"
-            className={ui.input}
-            type="date"
-            value={form.invDay}
-            onChange={(e) => set('invDay', e.target.value)}
-          />
+          <DateTextInput id="inv-day" value={form.invDay} onChange={(v) => set('invDay', v)} />
         </div>
 
         <div className={ui.field}>
@@ -326,13 +321,7 @@ export function InvoiceFormModal({ invoice, onClose, onSaved }: Props) {
           <label className={ui.label} htmlFor="inv-mo-pday">
             지급 예정일
           </label>
-          <input
-            id="inv-mo-pday"
-            className={ui.input}
-            type="date"
-            value={form.invMoPday}
-            onChange={(e) => set('invMoPday', e.target.value)}
-          />
+          <DateTextInput id="inv-mo-pday" value={form.invMoPday} onChange={(v) => set('invMoPday', v)} />
           <span className={ui.hint}>인보이스의 PAYMENT DATE 줄에 인쇄됩니다.</span>
         </div>
 
@@ -402,13 +391,7 @@ export function InvoiceFormModal({ invoice, onClose, onSaved }: Props) {
           <label className={ui.label} htmlFor="inv-mo-day">
             실지급일
           </label>
-          <input
-            id="inv-mo-day"
-            className={ui.input}
-            type="date"
-            value={form.invMoDay}
-            onChange={(e) => set('invMoDay', e.target.value)}
-          />
+          <DateTextInput id="inv-mo-day" value={form.invMoDay} onChange={(v) => set('invMoDay', v)} />
         </div>
 
         <div className={ui.field}>

@@ -61,7 +61,7 @@ import ui from './ui.module.css'
  * 그래서 placeholder 도 지웠다. 빈 날짜칸은 그냥 비어 있고, 규칙이 필요한 사람은 칸 위에 마우스를
  * 올리면 된다 — 이 안내는 한 번 배우면 끝인 것이지 매번 읽어야 하는 것이 아니다.
  */
-export const DATE_INPUT_HINT = '이렇게 적어도 됩니다 — 261111 · 26-11-11 · 2026-11-11 · 2026. 11. 11.'
+export const DATE_INPUT_HINT = '이렇게 적어도 됩니다 — 261111 · 1111 · 26-11-11 · 26/11/11 · 11/11 · 2026-11-11'
 
 interface TextProps {
   /** `YYYY-MM-DD` 또는 빈 문자열. */

@@ -19,6 +19,7 @@ import { Amount } from '@/shared/ui/Amount'
 import { toDateInputValue } from '@/shared/utils/format'
 import { decimalCompare, formatMoney, krwToShow, toDecimalInput } from '@/shared/utils/money'
 import ui from '@/shared/ui/ui.module.css'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 interface Props {
   purchaseOrder: PurchaseOrderRow
@@ -215,13 +216,7 @@ export function SettlementModal({ purchaseOrder: po, onClose, onSaved }: Props) 
           <label className={ui.label} htmlFor="st-money-day">
             지급일
           </label>
-          <input
-            id="st-money-day"
-            className={ui.input}
-            type="date"
-            value={form.poMoneyDay}
-            onChange={(e) => set('poMoneyDay', e.target.value)}
-          />
+          <DateTextInput id="st-money-day" value={form.poMoneyDay} onChange={(v) => set('poMoneyDay', v)} />
           <span className={ui.hint}>실제로 송금한 날입니다. 인보이스의 예정일과 다를 수 있습니다.</span>
         </div>
 

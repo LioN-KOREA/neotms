@@ -166,6 +166,8 @@ function Shell({ onLogout }: { onLogout: () => void }) {
    */
   const current = activeNavItem(profile, location.pathname)
   const activeGroup = groups.find((g) => g.id === current?.group) ?? groups[0]!
+  /** 업무 워크시트는 화면을 꽉 채운다 — 2차 메뉴 판·경로 줄 없이 머리줄 바로 밑부터 시트 (팀장님 2026-11-25). */
+  const full = location.pathname.startsWith('/workspace')
 
   const name = profile?.name || '—'
 
@@ -209,7 +211,8 @@ function Shell({ onLogout }: { onLogout: () => void }) {
         </div>
       </nav>
 
-      {/* 2차 메뉴 패널 — 열려 있는 묶음의 메뉴만. */}
+      {/* 2차 메뉴 패널 — 열려 있는 묶음의 메뉴만. 꽉 찬 화면(업무 워크시트)에서는 없다. */}
+      {full ? null : (
       <div className={styles.nav}>
         <div className={styles.navGroupLabel}>{activeGroup.label}</div>
 
@@ -252,6 +255,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
           </p>
         ) : null}
       </div>
+      )}
 
       <div className={styles.mainCol}>
         <header className={styles.top}>
@@ -284,6 +288,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
          * `aria-label` 을 붙인 `nav` 인 것은 스크린 리더 때문이다 — 지금 위치를 읽어 주는
          * 영역이라는 사실이 글자만으로는 전달되지 않는다.
          */}
+        {full ? null : (
         <nav className={styles.crumb} aria-label="현재 위치">
           <span>{activeGroup.label}</span>
           {current ? (
@@ -295,8 +300,9 @@ function Shell({ onLogout }: { onLogout: () => void }) {
             </>
           ) : null}
         </nav>
+        )}
 
-        <main className={styles.body}>
+        <main className={`${styles.body} ${full ? styles.bodyFull : ''}`}>
           <Outlet />
         </main>
       </div>

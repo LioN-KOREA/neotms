@@ -34,6 +34,7 @@ import {
   type JobFilters,
   type JobRow,
 } from "./NeotmsJob.dbops.js";
+import { JOB_GROUP_REFUSED, JobGroupRefused, JobGroupSetOps } from "./NeotmsJobGroup.js";
 
 function readFilters(request: RequestData): JobFilters {
   const read = (key: string): string | undefined => {
@@ -137,9 +138,13 @@ export async function createJob(
         // is also why the FK runs child-to-parent rather than the other way about.
         const detail = JobDetailUpsertOps(job.id, assigned.jobType ?? JOB_TYPE_LINGUISTIC, assigned);
         if (detail) await pgExecuteCount(detail, client);
+        // 작업 그룹 (db/014): 빼면 새 코드, 주면 같은 프로젝트에 있는 그룹이어야 한다.
+        const group = (await pgExecute(JobGroupSetOps(job.id, assigned.jobGroup ?? null, caller.staffId), client)).data;
+        if (assigned.jobGroup && !group) throw new JobGroupRefused();
         return job;
       });
     } catch (err) {
+      if (err instanceof JobGroupRefused) return badRequest(JOB_GROUP_REFUSED);
       const mismatch = typeMismatchMessage(sqlConstraint(err));
       if (mismatch) return badRequest(mismatch);
       throw err;
@@ -203,9 +208,14 @@ export async function updateJob(
 
         const detail = JobDetailUpsertOps(id, nextType, input);
         if (detail) await pgExecuteCount(detail, client);
+        if (input.jobGroup !== undefined) {
+          const group = (await pgExecute(JobGroupSetOps(id, input.jobGroup, caller.staffId), client)).data;
+          if (!group) throw new JobGroupRefused();
+        }
         return row;
       });
     } catch (err) {
+      if (err instanceof JobGroupRefused) return badRequest(JOB_GROUP_REFUSED);
       const mismatch = typeMismatchMessage(sqlConstraint(err));
       if (mismatch) return badRequest(mismatch);
       throw err;

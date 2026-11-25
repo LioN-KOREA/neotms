@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useCreateJob, useUpdateJob } from '@/apis/queries/neotms.mutation'
-import { useFxRate, useProfile } from '@/apis/queries/neotms.query'
+import { useFxRate, useJobs, useProfile } from '@/apis/queries/neotms.query'
+import { groupNumber, usePeekJobGroup } from '@/apis/jobGroup.api'
 import {
   CODE_DOMAIN,
   codeOptions,
@@ -193,6 +194,16 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
     jobMemo: job?.jobMemo ?? '',
   })
   const [dirty, setDirty] = useState(false)
+  /** 작업 그룹 — '' 는 새 코드 (저장할 때 정해진다). */
+  const [group, setGroup] = useState<string>(job?.jobGroup ?? '')
+  const peek = usePeekJobGroup(job ? null : (project?.id ?? null))
+  const projectJobs = useJobs({ limit: 100, projectId: project?.id ?? undefined }, !!project)
+  const groupChoices = useMemo(() => {
+    const all = new Set<string>()
+    for (const p of projectJobs.data?.pages ?? []) for (const r of p.items) if (r.jobGroup) all.add(r.jobGroup)
+    if (job?.jobGroup) all.add(job.jobGroup)
+    return [...all].sort((a, b) => groupNumber(a) - groupNumber(b))
+  }, [projectJobs.data, job])
 
   /*
    * 언어별 설정 (팀장님 2026-11-25). 등록 창은 도착어마다 한 줄 → 저장하면 줄마다 작업 하나.
@@ -584,10 +595,10 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
     }
 
     if (job) {
-      await updateJob.mutateAsync({ id: job.id, input: common })
+      await updateJob.mutateAsync({ id: job.id, input: { ...common, ...(group && group !== job.jobGroup ? { jobGroup: group } : {}) } })
       onSaved(`${name} 작업을 수정했습니다.`)
     } else {
-      const input: JobInput = { ...common, projectId: project.id, jobName: name }
+      const input: JobInput = { ...common, projectId: project.id, jobName: name, ...(group ? { jobGroup: group } : {}) }
       const created = await createJob.mutateAsync(input)
       onSaved(`${name} 작업을 등록했습니다. (코드: ${created.jobCode})`)
     }
@@ -647,16 +658,22 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
     }
 
     if (job) {
-      await updateJob.mutateAsync({ id: job.id, input: inputOf(targets[0]!, 0) })
+      await updateJob.mutateAsync({ id: job.id, input: { ...inputOf(targets[0]!, 0), ...(group && group !== job.jobGroup ? { jobGroup: group } : {}) } })
       onSaved(`${name} 작업을 수정했습니다.`)
       onClose()
       return
     }
     const made: string[] = []
+    // 첫 작업이 새 그룹 코드를 받으면 나머지도 그 코드로 (한 창 = 한 그룹, 팀장님 2026-11-25).
+    let shared = group
     try {
       for (const [i, t] of targets.entries()) {
-        const created = await createJob.mutateAsync({ ...inputOf(t, i), projectId: project.id, jobName: name } as JobInput)
+        const created = await createJob.mutateAsync({ ...inputOf(t, i), projectId: project.id, jobName: name, ...(shared ? { jobGroup: shared } : {}) } as JobInput)
         made.push(created.jobCode)
+        if (!shared && created.jobGroup) {
+          shared = created.jobGroup
+          setGroup(shared)
+        }
       }
     } catch (err) {
       if (made.length > 0) {
@@ -739,7 +756,7 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
 
 
         {/* 작업명(절반) · 작업 종류 · 진행 상태 · 업무 구분 — 한 줄 (팀장님 2026-11-25). */}
-        <div className={ui.formRow} style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr' }}>
+        <div className={ui.formRow} style={{ gridTemplateColumns: '4fr 1fr 1fr 1fr 1fr' }}>
           <div className={ui.field}>
             <label className={`${ui.label} ${ui.required}`} htmlFor="job-name">
               작업명
@@ -803,6 +820,23 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
               onChange={(v) => set('jobType', v)}
               placeholder={null}
             />
+          </div>
+          {/*
+           * 작업 그룹 (팀장님 2026-11-25) — 직접 쓸 수 없다. 새 코드(예정)이거나, 같은 프로젝트에 이미
+           * 있는 그룹 중 하나. 이 창에서 만드는 작업(도착어마다)은 모두 같은 코드를 받는다.
+           */}
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="job-group">
+              작업 그룹
+            </label>
+            <select id="job-group" className={ui.select} value={group} onChange={(e) => { setDirty(true); setGroup(e.target.value) }} disabled={pending || !project}>
+              {job ? null : <option value="">{peek.data?.code ? `${peek.data.code} (새 그룹)` : '새 그룹'}</option>}
+              {groupChoices.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 

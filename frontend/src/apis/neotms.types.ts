@@ -964,6 +964,8 @@ export interface WorkspaceSheet extends ListPage<WorkspaceRow> {
 export interface JobRow {
   id: string
   jobCode: string
+  /** 작업 그룹 코드 (db/014) — J6000 처럼. */
+  jobGroup?: string | null
   projectId: string
   prjCode: string | null
   prjName: string | null
@@ -1062,6 +1064,8 @@ export interface JobInput {
   jobEdayTime?: string | null
   jobMemo?: string | null
   jobState?: string | null
+  /** 작업 그룹 — 빼면 새 코드, 주면 같은 프로젝트에 있는 그룹 (db/014). */
+  jobGroup?: string
 }
 
 /** 수정에는 `projectId` 가 없다. 작업을 다른 프로젝트로 옮기는 것은 매출 이동이므로 막혀 있다. */

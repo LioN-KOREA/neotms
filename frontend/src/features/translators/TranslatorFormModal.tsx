@@ -7,6 +7,7 @@ import { ErrorNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import { toDateInputValue, todayKst } from '@/shared/utils/format'
 import ui from '@/shared/ui/ui.module.css'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 interface Props {
   /** null 이면 신규. */
@@ -57,7 +58,7 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
     tranAcc: translator?.tranAcc ?? '',
     tranPaypal: translator?.tranPaypal ?? '',
     /*
-     * `<input type="date">` 는 YYYY-MM-DD 만 받는다. 서버가 주는 날짜 문자열을 그 형태로 맞춘다.
+     * 날짜 칸은 YYYY-MM-DD 값을 쓴다. 서버가 주는 날짜 문자열을 그 형태로 맞춘다.
      *
      * 신규 등록에서는 **오늘**이다. 번역가를 등록하는 날이 곧 등록일인 경우가 사실상 전부이고,
      * 비워 두면 등록일이 없는 번역가가 쌓인다 — 그 값은 뒤에 와서 채울 방법이 없다(그 사람이
@@ -376,13 +377,7 @@ export function TranslatorFormModal({ translator, onClose, onSaved }: Props) {
           <label className={ui.label} htmlFor="tran-regday">
             등록일
           </label>
-          <input
-            id="tran-regday"
-            className={ui.input}
-            type="date"
-            value={form.tranRegDay}
-            onChange={(e) => set('tranRegDay', e.target.value)}
-          />
+          <DateTextInput id="tran-regday" value={form.tranRegDay} onChange={(v) => set('tranRegDay', v)} />
         </div>
 
         <div className={ui.fieldWide}>

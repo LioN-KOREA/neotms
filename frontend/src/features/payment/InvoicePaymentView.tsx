@@ -22,6 +22,7 @@ import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { InvoiceFormModal } from './InvoiceFormModal'
 import { InvoicePrintModal } from './print/InvoicePrintModal'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 /**
  * 결제 — 번역가 인보이스. 청구서 한 장이 한 행이다.
@@ -316,20 +317,8 @@ export function InvoicePaymentView() {
                 {draft.basis === 'paid' ? '지급일' : '발행일'} 범위
               </label>
               <div className={ui.inputRow}>
-                <input
-                  id="inv-f-from"
-                  className={ui.input}
-                  type="date"
-                  value={draft.from}
-                  onChange={(e) => setDraft((p) => ({ ...p, from: e.target.value }))}
-                />
-                <input
-                  className={ui.input}
-                  type="date"
-                  aria-label={`${draft.basis === 'paid' ? '지급일' : '발행일'} 종료`}
-                  value={draft.to}
-                  onChange={(e) => setDraft((p) => ({ ...p, to: e.target.value }))}
-                />
+                <DateTextInput id="inv-f-from" value={draft.from} onChange={(v) => setDraft((p) => ({ ...p, from: v }))} />
+                <DateTextInput ariaLabel={`${draft.basis === 'paid' ? '지급일' : '발행일'} 종료`} value={draft.to} onChange={(v) => setDraft((p) => ({ ...p, to: v }))} />
               </div>
             </div>
           )}

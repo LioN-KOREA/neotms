@@ -5578,7 +5578,7 @@ describe("date defaults, bulk operations and in-place editing", () => {
      * these are the two tables that keep gaining columns.
      */
     // 2026-11-25: the job table gained 인계 여부 and 작업 종류, so thirteen.
-    expect(view.match(/colSpan=\{13\}/g)).toHaveLength(1);
+    expect(view.match(/colSpan=\{14\}/g)).toHaveLength(1); // + JOB 그룹 (2026-11-25)
     expect(view.match(/colSpan=\{10\}/g)).toHaveLength(1);
     // `indeterminate` is a DOM property with no HTML attribute, so it can only be set through a ref.
     // Without it a partial selection renders as an empty box, and the header reads "nothing selected"

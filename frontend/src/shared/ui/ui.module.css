@@ -2197,3 +2197,13 @@
 .catInput:focus { outline: 2px solid #EC9820; outline-offset: -2px; }
 .catFixed td { background: #fafbfc; color: var(--nt-ink2, #555); }
 .catTotalRow td { font-weight: 700; color: #b06a00; background: #fdf3e3; }
+
+/* 인계 작업 선택 창의 [작업 목록 | 그룹 목록] 탭 (팀장님 2026-11-25) */
+.hoTabs { display: flex; gap: 2px; border-bottom: 1px solid #d9dde3; margin: 0 0 8px; }
+.hoTab { padding: 6px 16px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: transparent; font: inherit; font-size: 13px; color: #5f6368; cursor: pointer; margin-bottom: -1px; }
+.hoTab:hover { background: #f1f3f4; }
+.hoTabOn, .hoTabOn:hover { background: #fff; border-color: #d9dde3; color: #EC9820; font-weight: 700; }
+
+/* 언어별 설정 표 — 본문 칸 사이에도 옅은 회색 세로선 (팀장님 2026-11-25) */
+.tgLine > .tgCell { border-right: 1px solid rgba(0, 0, 0, 0.08); }
+.tgLine > .tgCell:last-child { border-right: 0; }

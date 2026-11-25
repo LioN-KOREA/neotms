@@ -250,3 +250,60 @@ describe("PO form — CAT table, pickers, finance-only fields", () => {
     expect(read("db/013_po_cat_detail.sql")).toContain("ADD COLUMN IF NOT EXISTS po_cat_detail jsonb");
   });
 });
+
+describe("work sheet fills the screen", () => {
+  it("no side panel / breadcrumb on /workspace, tabs at the bottom, zoom reaches the text", () => {
+    const app = read("frontend/src/NeotmsApp.tsx");
+    expect(app).toContain("const full = location.pathname.startsWith('/workspace')");
+    expect(app).toContain("{full ? null : (\n        <nav className={styles.crumb}");
+    const view = read("frontend/src/features/pmsheet/PmSheetView.tsx");
+    expect(view.indexOf("css.fullBody")).toBeLessThan(view.indexOf("{tabs}"));
+    expect(view).not.toContain("<h1");
+    const cssText = read("frontend/src/features/pmsheet/PmSheet.module.css");
+    expect(cssText).toContain(".gridWrap :global(.reactgrid-content .rg-pane .rg-cell) { font-size: calc(13px * var(--pm-zoom, 1)); }");
+  });
+});
+
+describe("date fields accept short forms", () => {
+  it("mmdd and mm/dd take this year; output stays yyyy-mm-dd(ddd)", async () => {
+    const f = await import("../frontend/src/shared/utils/format");
+    const year = f.todayKst().slice(0, 4);
+    expect(f.parseDateField("1203")).toEqual({ ok: true, value: `${year}-12-03` });
+    expect(f.parseDateField("12/3")).toEqual({ ok: true, value: `${year}-12-03` });
+    expect(f.parseDateField("26/12/03")).toEqual({ ok: true, value: "2026-12-03" });
+    expect(f.parseDateField("261203")).toEqual({ ok: true, value: "2026-12-03" });
+    expect(f.parseDateField("1340").ok).toBe(false);
+    expect(f.formatDateField("2026-12-03")).toBe("2026-12-03(목)");
+  });
+
+  it("no native date pickers are left in the screens", () => {
+    for (const file of ["payment/InvoiceFormModal.tsx", "payment/PoPaymentView.tsx", "projects/ProjectsView.tsx", "reports/ReportsView.tsx", "translators/TranslatorFormModal.tsx", "projects/JobHandoverFlow.tsx"]) {
+      expect(read("frontend/src/features", ...file.split("/"))).not.toMatch(/<input[^>]*type="date"/);
+    }
+  });
+});
+
+describe("job groups", () => {
+  it("db/014 adds the columns, the company-wide sequence from 6000 and the letter rules", () => {
+    const sql = read("db/014_job_group.sql");
+    expect(sql).toContain("CREATE SEQUENCE IF NOT EXISTS job_group_seq START WITH 6000");
+    expect(sql).toContain("WHEN '조선미' THEN 'J' WHEN '유나경' THEN 'N' WHEN '조수현' THEN 'H' WHEN '이하경' THEN 'L'");
+    expect(sql).toContain("NEOTMS_USER_ATTRIBUTE_SALES_MANAGER");
+  });
+
+  it("a given group must already be in the project; a form shares one code across its jobs", () => {
+    const ops = read("lambdas/neotms/nodejs/neotms/jobs/NeotmsJobGroup.ts");
+    expect(ops).toContain("o.project_id = j.project_id AND o.id <> j.id");
+    const form = read("frontend/src/features/jobs/JobFormModal.tsx");
+    expect(form).toContain("if (!shared && created.jobGroup) {");
+    expect(form).not.toMatch(/<input[^>]*id="job-group"/);
+  });
+
+  it("merge picks the lowest number; the group list joins values", async () => {
+    const g = await import("../frontend/src/apis/jobGroupCode");
+    expect(["N6010", "J6003", "X6100"].sort((a, b) => g.groupNumber(a) - g.groupNumber(b))[0]).toBe("J6003");
+    const flow = read("frontend/src/features/projects/JobHandoverFlow.tsx");
+    expect(flow).toContain("domain={CODE_DOMAIN.WORK} value={d.workCode}");
+    expect(flow).toContain("`${src.join(', ') || '-'} → ${tgt.join(', ') || '-'}`");
+  });
+});

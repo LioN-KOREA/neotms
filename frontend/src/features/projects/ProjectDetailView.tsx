@@ -63,6 +63,8 @@ import { useProjectHandovers } from '@/apis/pmsheet.api'
 import { HandoverStateCell } from './HandoverStateCell'
 import { latestHandoverByJob, tidyNumber } from './handoverState'
 import { JobHandoverFlow } from './JobHandoverFlow'
+import { JobGroupModal } from './JobGroupModal'
+import { useApplyJobGroup } from '@/apis/jobGroup.api'
 import { ProjectAcceptanceModal } from './ProjectAcceptanceModal'
 import { JobPmName, JobPmSwapModal } from '@/features/jobs/JobPmSwapModal'
 import { JobTypeSwapModal } from '@/features/jobs/JobTypeSwapModal'
@@ -183,6 +185,7 @@ export function ProjectDetailView() {
   const [bulkError, setBulkError] = useState<unknown>(null)
   /** 인계 창 — 열려 있으면 미리 고른 작업 번호들(빈 배열이면 작업 선택 창부터). */
   const [handingOver, setHandingOver] = useState<string[] | null>(null)
+  const [groupingOpen, setGroupingOpen] = useState(false)
 
   const project = projectQuery.data
   const jobs = useMemo(() => jobsQuery.data?.pages.flatMap((p) => p.items) ?? [], [jobsQuery.data])
@@ -226,6 +229,33 @@ export function ProjectDetailView() {
    * 삭제가 지우고 '더 보기' 가 늘린다).
    */
   const jobSel = useRowSelection(jobs)
+  const applyGroup = useApplyJobGroup()
+  /** [작업 그룹] 단추 — 고른 개수에 따라 (팀장님 2026-11-25). */
+  const onGroupButton = async () => {
+    if (!project) return
+    const picked = jobSel.selected
+    if (picked.length === 0) {
+      setGroupingOpen(true)
+      return
+    }
+    if (picked.length === 1) {
+      const one = picked[0]!
+      const shared = !!one.jobGroup && jobs.some((j) => j.id !== one.id && j.jobGroup === one.jobGroup)
+      if (!shared) {
+        setGroupingOpen(true)
+        return
+      }
+      if (!window.confirm(`해당 작업을 별도의 작업 그룹으로 분리하시겠습니까?
+(${one.jobCode} · 지금 그룹 ${one.jobGroup ?? ''})`)) return
+      const res = await applyGroup.mutateAsync({ projectId: project.id, mode: 'new', jobIds: [one.id] })
+      setNotice(`${one.jobCode} 작업을 새 작업 그룹 ${res.code} 으로 분리했습니다.`)
+      jobSel.clear()
+      return
+    }
+    const res = await applyGroup.mutateAsync({ projectId: project.id, mode: 'merge', jobIds: picked.map((j) => j.id) })
+    setNotice(`작업 ${picked.length}건을 작업 그룹 ${res.code} 으로 합쳤습니다.`)
+    jobSel.clear()
+  }
   const handoversQuery = useProjectHandovers(id ?? '')
   const handoverOf = useMemo(() => latestHandoverByJob(handoversQuery.data), [handoversQuery.data])
   const poSel = useRowSelection(pos)
@@ -776,6 +806,18 @@ export function ProjectDetailView() {
               인계
             </button>
           ) : null}
+          {/* 작업 그룹 (팀장님 2026-11-25) — 여럿: 합치기, 하나: 분리 또는 조정 창, 없음: 조정 창. */}
+          {mayUpdateJob && project ? (
+            <button
+              type="button"
+              className={`${ui.btn} ${ui.btnSm}`}
+              disabled={applyGroup.isPending}
+              onClick={() => void onGroupButton().catch((e: unknown) => setNotice(`작업 그룹을 바꾸지 못했습니다: ${e instanceof Error ? e.message : String(e)}`))}
+              title="고른 작업을 한 그룹으로 합치거나, 분리하거나, 그룹을 조정합니다"
+            >
+              작업 그룹
+            </button>
+          ) : null}
           {mayCreateJob ? (
             <button
               type="button"
@@ -817,6 +859,7 @@ export function ProjectDetailView() {
                         onChange={jobSel.toggleAll}
                       />
                     </th>
+                    <th>JOB 그룹</th>
                     <th>JOB코드</th>
                     <th>작업명</th>
                     {/* 작업 목록 화면과 같은 열이다 — `JobPmName` 머리말 참고. */}
@@ -842,7 +885,7 @@ export function ProjectDetailView() {
                     error={jobsQuery.error}
                     isEmpty={jobs.length === 0}
                     emptyText="이 프로젝트에는 작업이 없습니다. 작업을 추가하면 매출이 잡힙니다."
-                    colSpan={13}
+                    colSpan={14}
                   />
                   {jobs.map((job) => {
                     const poCount = poCountByJob.get(job.id) ?? 0
@@ -857,6 +900,7 @@ export function ProjectDetailView() {
                             onChange={() => jobSel.toggle(job.id)}
                           />
                         </td>
+                        <td className={ui.cellMono}>{job.jobGroup ?? '-'}</td>
                         <td className={ui.cellMono}>{job.jobCode}</td>
                         {/*
                          * 두 번 눌러 고치는 칸 셋 중 첫째 — 작업명. 권한이 없으면 평범한
@@ -1006,6 +1050,10 @@ export function ProjectDetailView() {
           </>
         )}
       </div>
+
+      {groupingOpen && project ? (
+        <JobGroupModal projectId={project.id} jobs={jobs} onClose={() => setGroupingOpen(false)} onNotice={setNotice} />
+      ) : null}
 
       {handingOver && project ? (
         <JobHandoverFlow

@@ -12,7 +12,7 @@
  * 2단계: 진행 상태, 서식 확장(테두리·세로정렬·소수 자리·메모), 조건부 서식, 필터 즐겨찾기,
  * 단축키 사용자 지정, 별도 관리 묶음·월별 머리행, 행 통합.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -119,13 +119,17 @@ interface Props {
   ownerId?: string
   onNotice: (message: string) => void
   onError: (message: string) => void
+  /** 도구막대 맨 왼쪽에 붙일 것 (타PM 업무의 PM 고르기). */
+  toolbarStart?: ReactNode
+  /** 시트 아래에 남길 높이 — 아래 탭 줄 자리 (px). */
+  bottomGap?: number
 }
 
 type GridCell = SheetCell | SheetHeaderCell
 type HistoryEntry = { label: string; undo: () => Promise<void>; redo: () => Promise<void> }
 type Target = { jobId: string; colKey: string }
 
-export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
+export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, bottomGap = 12 }: Props) {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const updateJob = useUpdateJob()
@@ -197,7 +201,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     const fit = () => {
       const el = gridBox.current
       if (!el) return
-      const h = Math.max(320, Math.floor(window.innerHeight - el.getBoundingClientRect().top - 12))
+      const h = Math.max(240, Math.floor(window.innerHeight - el.getBoundingClientRect().top - bottomGap))
       setGridHeight((old) => (old === h ? old : h))
     }
     fit()
@@ -208,7 +212,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
       window.removeEventListener('resize', fit)
       ro.disconnect()
     }
-  }, [])
+  }, [bottomGap])
   const [colMenu, setColMenu] = useState<{ key: string; x: number; y: number; jobId: string | null } | null>(null)
   const [swapping, setSwapping] = useState<SwappableTranslatorPo | null>(null)
   const [suggestFor, setSuggestFor] = useState<{ jobId: string; which: 'tr' | 'rv'; x: number; y: number } | null>(null)
@@ -1290,6 +1294,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError }: Props) {
     <div onKeyDownCapture={onKeyDownCapture} onMouseMove={(e) => (mouse.current = { x: e.clientX, y: e.clientY })}>
       {/* 도구막대 */}
       <div className={css.toolbar}>
+        {toolbarStart ? <span className={css.group}>{toolbarStart}</span> : null}
         <span className={css.group}>
           <button type="button" className={css.tool} disabled={!can.undo} title={`실행취소 (${shortcuts.undo ?? ''})`} onClick={() => void undo()}>↶</button>
           <button type="button" className={css.tool} disabled={!can.redo} title={`재실행 (${shortcuts.redo ?? ''})`} onClick={() => void redo()}>↷</button>

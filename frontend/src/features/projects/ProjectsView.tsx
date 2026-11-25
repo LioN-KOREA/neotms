@@ -26,6 +26,7 @@ import { RecentSearchHints } from '@/shared/ui/RecentSearchHints'
 import ui from '@/shared/ui/ui.module.css'
 import { JobHandoverFlow } from './JobHandoverFlow'
 import { ProjectFormModal } from './ProjectFormModal'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 /**
  * 프로젝트 목록.
@@ -359,26 +360,14 @@ export function ProjectsView() {
             <label className={ui.label} htmlFor="pf-from">
               기간 시작
             </label>
-            <input
-              id="pf-from"
-              className={ui.input}
-              type="date"
-              value={draft.from}
-              onChange={(e) => setDraft((p) => ({ ...p, from: e.target.value }))}
-            />
+            <DateTextInput id="pf-from" value={draft.from} onChange={(v) => setDraft((p) => ({ ...p, from: v }))} />
           </div>
 
           <div className={ui.filterField}>
             <label className={ui.label} htmlFor="pf-to">
               기간 종료
             </label>
-            <input
-              id="pf-to"
-              className={ui.input}
-              type="date"
-              value={draft.to}
-              onChange={(e) => setDraft((p) => ({ ...p, to: e.target.value }))}
-            />
+            <DateTextInput id="pf-to" value={draft.to} onChange={(v) => setDraft((p) => ({ ...p, to: v }))} />
           </div>
 
           <div className={ui.spacer} />

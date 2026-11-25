@@ -16,7 +16,8 @@ import type { JobRow, JobUpdate } from '@/apis/neotms.types'
 import { HANDOVER_FORMATS, HANDOVER_LAYOUTS } from '@/apis/neotms.types'
 import { useSendJobHandover } from '@/apis/pmsheet.api'
 import { useUpdateJob } from '@/apis/queries/neotms.mutation'
-import { useJobs, useProfile } from '@/apis/queries/neotms.query'
+import { useCodeNames, useJobs, useProfile } from '@/apis/queries/neotms.query'
+import { groupNumber } from '@/apis/jobGroup.api'
 import { DETAIL_PAGE_SIZE } from '@/shared/config'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { LangCombo } from '@/shared/ui/LangCombo'
@@ -27,10 +28,12 @@ import { Modal } from '@/shared/ui/Modal'
 import ui from '@/shared/ui/ui.module.css'
 import { toDateInputValue } from '@/shared/utils/format'
 import { PmPickCell } from '@/features/jobs/TargetLanguages'
+import { DateTextInput } from '@/shared/ui/DateField'
 
 type Draft = {
   jobName: string
-  jobType: string
+  /** 작업 종류 (번역·감수·편집·DTP…) — 업무 구분이 아니다 (팀장님 2026-11-25). */
+  workCode: string
   jobSlang: string
   jobElang: string
   pmId: string | null
@@ -41,7 +44,7 @@ type Draft = {
 
 const draftOf = (job: JobRow): Draft => ({
   jobName: job.jobName ?? '',
-  jobType: job.jobType ?? '',
+  workCode: job.workCode ?? '',
   jobSlang: job.jobSlang ?? '',
   jobElang: job.jobElang ?? '',
   pmId: job.jobPmId ?? null,
@@ -55,7 +58,7 @@ function changesOf(job: JobRow, d: Draft): Partial<JobUpdate> | null {
   const o = draftOf(job)
   const out: Partial<JobUpdate> = {}
   if (d.jobName !== o.jobName && d.jobName.trim()) out.jobName = d.jobName.trim()
-  if (d.jobType !== o.jobType) out.jobType = d.jobType || null
+  if (d.workCode !== o.workCode) out.workCode = d.workCode || null
   if (d.jobSlang !== o.jobSlang) out.jobSlang = d.jobSlang || null
   if (d.jobElang !== o.jobElang) out.jobElang = d.jobElang || null
   if (d.pmId !== o.pmId) out.jobPmId = d.pmId
@@ -147,6 +150,7 @@ function PickJobs(props: {
   const dirty = jobs.some((j) => changesOf(j, draft(j)) !== null)
   const allOn = jobs.length > 0 && jobs.every((j) => checked.has(j.id))
 
+  const [view, setView] = useState<'jobs' | 'groups'>('jobs')
   const toggle = (id: string) => {
     const next = new Set(checked)
     if (next.has(id)) next.delete(id)
@@ -197,10 +201,24 @@ function PickJobs(props: {
     >
       <ErrorNotice error={props.error} />
       {props.pmNotice ? <InfoNotice>골라 둔 작업 중 담당PM 이 비어 있는 것이 있어 작업 선택 창을 열었습니다.</InfoNotice> : null}
-      <p className={ui.hint} style={{ marginTop: 0 }}>
+      {/* 작업 목록 | 그룹 목록 (팀장님 2026-11-25). 그룹 목록은 보기만 한다 — 고르는 것은 작업 목록에서. */}
+      <div className={ui.hoTabs} role="tablist">
+        {(
+          [
+            ['jobs', '작업 목록'],
+            ['groups', '그룹 목록'],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} type="button" role="tab" aria-selected={view === id} className={`${ui.hoTab} ${view === id ? ui.hoTabOn : ''}`} onClick={() => setView(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {view === 'groups' ? <GroupList jobs={jobs} /> : null}
+      <p className={ui.hint} style={{ marginTop: 0, display: view === 'jobs' ? undefined : 'none' }}>
         인계할 작업을 고르세요. 이 창에서 고친 값은 <strong>확인</strong>을 누를 때 작업에 저장됩니다.
       </p>
-      <div className={ui.tableWrap}>
+      <div className={ui.tableWrap} style={view === 'jobs' ? undefined : { display: 'none' }}>
         <table className={ui.hoTable}>
           <thead>
             <tr>
@@ -243,10 +261,10 @@ function PickJobs(props: {
                       <div className={ui.hint} style={{ marginTop: 2 }}>{job.jobCode}</div>
                     </td>
                     <td>
-                      <CodeSelect ariaLabel={`${job.jobCode} 작업종류`} domain={CODE_DOMAIN.JOBTYPE} value={d.jobType} onChange={(v) => set({ jobType: v })} placeholder={null} disabled={saving} silent />
+                      <CodeSelect ariaLabel={`${job.jobCode} 작업종류`} domain={CODE_DOMAIN.WORK} value={d.workCode} onChange={(v) => set({ workCode: v })} placeholder="-" disabled={saving} silent />
                     </td>
                     <td>
-                      {isLinguistic(d.jobType) ? (
+                      {isLinguistic(job.jobType) ? (
                         <div className={ui.hoLang}>
                           <LangCombo ariaLabel={`${job.jobCode} 출발어`} value={d.jobSlang} onChange={(v) => set({ jobSlang: v })} placeholder="-" disabled={saving} />
                           <span>→</span>
@@ -267,7 +285,7 @@ function PickJobs(props: {
                     </td>
                     <td>
                       <div className={ui.hoDue}>
-                        <input className={ui.input} type="date" aria-label={`${job.jobCode} 납기`} value={d.jobEday} disabled={saving} onChange={(e) => set({ jobEday: e.target.value })} />
+                        <DateTextInput ariaLabel={`${job.jobCode} 납기`} value={d.jobEday} disabled={saving} onChange={(v) => set({ jobEday: v })} />
                         <input className={ui.input} type="time" aria-label={`${job.jobCode} 납기 시각`} style={{ width: 92 }} value={d.jobEdayTime} disabled={saving} onChange={(e) => set({ jobEdayTime: e.target.value })} />
                       </div>
                     </td>
@@ -440,5 +458,68 @@ function HandoverInfo(props: {
         </div>
       </div>
     </Modal>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* 그룹 목록 — 보기만 (팀장님 2026-11-25)                                       */
+/* -------------------------------------------------------------------------- */
+
+const uniq = (xs: (string | null | undefined)[]) => [...new Set(xs.filter((x): x is string => !!x && x.trim() !== ''))]
+
+function GroupList(props: { jobs: readonly JobRow[] }) {
+  const workName = useCodeNames(CODE_DOMAIN.WORK)
+  const groups = new Map<string, JobRow[]>()
+  for (const j of props.jobs) {
+    const key = j.jobGroup ?? '-'
+    groups.set(key, [...(groups.get(key) ?? []), j])
+  }
+  const keys = [...groups.keys()].sort((a, b) => groupNumber(a) - groupNumber(b))
+  return (
+    <div className={ui.tableWrap}>
+      <table className={ui.hoTable}>
+        <thead>
+          <tr>
+            <th style={{ width: 90 }}>JOB 그룹</th>
+            <th>작업명</th>
+            <th style={{ width: 140 }}>작업종류</th>
+            <th style={{ width: 240 }}>언어</th>
+            <th style={{ width: 150 }}>담당PM</th>
+            <th style={{ width: 150 }}>납기</th>
+          </tr>
+        </thead>
+        <tbody>
+          {keys.length === 0 ? (
+            <tr>
+              <td colSpan={6} className={ui.hint}>이 프로젝트에는 작업이 없습니다.</td>
+            </tr>
+          ) : (
+            keys.map((key) => {
+              const list = groups.get(key) ?? []
+              const src = uniq(list.map((j) => j.jobSlang))
+              const tgt = uniq(list.map((j) => j.jobElang))
+              const due = list
+                .map((j) => (j.jobEday ? `${toDateInputValue(j.jobEday)} ${(j.jobEdayTime ?? '').slice(0, 5)}`.trim() : ''))
+                .filter(Boolean)
+                .sort()
+                .pop()
+              return (
+                <tr key={key}>
+                  <td className={ui.cellMono}>{key}</td>
+                  <td>
+                    {list[0]?.jobName ?? list[0]?.jobCode ?? '-'}
+                    {list.length > 1 ? <span className={ui.hint}> 외 {list.length - 1}건</span> : null}
+                  </td>
+                  <td>{uniq(list.map((j) => workName(j.workCode))).join(', ') || '-'}</td>
+                  <td>{src.length || tgt.length ? `${src.join(', ') || '-'} → ${tgt.join(', ') || '-'}` : '-'}</td>
+                  <td>{uniq(list.map((j) => j.jobPmName)).join(', ') || '-'}</td>
+                  <td>{due ?? '-'}</td>
+                </tr>
+              )
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
   )
 }
