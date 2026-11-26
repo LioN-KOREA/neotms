@@ -34,6 +34,7 @@ import {
   orderPmRows,
   patchPmRow,
   archivePmRows,
+  undoArchivePmRows,
   pmKeys,
   writePmCells,
   writePmPref,
@@ -54,8 +55,10 @@ import { CODE_DOMAIN } from '@/apis/neotms.codes'
 import { ConfirmDialog } from '@/shared/ui/ConfirmDialog'
 import { conditionalStyle } from './conditional'
 import {
+  APPEND_KEYS,
   FIXED_COLUMNS,
   ROW_FIELD_KEYS,
+  appendKey,
   buildColumns,
   isCustomKey,
   mergeStyle,
@@ -95,6 +98,7 @@ import {
   applySlots,
   columnLetter,
   freePosOf,
+  freeRowId,
   insertSlots,
   isFreeRowId,
   layoutPositions,
@@ -107,6 +111,8 @@ import {
   slotsOf,
 } from './freeRows'
 import css from './PmSheet.module.css'
+import { SheetPoModal } from './SheetPoModal'
+import { fetchProjects } from '@/apis/neotms.api'
 
 /** 칸 글자 기본 크기(px) — 글자 크기 `− 13 +` 의 기준. */
 const DEFAULT_SIZE = 13
@@ -247,7 +253,17 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   })
   const overrides = edits.values
 
-  /* 실행취소·재실행 */
+  /*
+   * 실행취소·재실행 (2026-11-26 고침): 기록에 담긴 되돌리기 함수는 그 수정을 한 때의 화면을 보고 있어서,
+   * '지금 값' 을 수정 전 값으로 읽고 "이미 같다" 며 건너뛰었다 — 그래서 값 수정이 되돌려지지 않았다.
+   * 이제 되돌리기는 `latest`(매 화면마다 갱신되는 최신 함수·행)를 거치고, 같은지 비교도 하지 않는다.
+   */
+  const latest = useRef<{
+    applyValues: typeof applyValues
+    writeFree: typeof writeFree
+    rowById: ReadonlyMap<string, PmSheetRow>
+    columnOf: typeof columnOf
+  } | null>(null)
   const history = useRef<{ undo: HistoryEntry[]; redo: HistoryEntry[] }>({ undo: [], redo: [] })
   const [histSize, setHistSize] = useState({ undo: 0, redo: 0 })
   const syncHistory = () => setHistSize({ undo: history.current.undo.length, redo: history.current.redo.length })
@@ -294,16 +310,29 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   })
 
   /** 빈 줄 글 고치기 (여러 칸 한꺼번에). */
-  const writeFree = (changes: { pos: number; colKey: string; text: string }[]) => {
+  const writeFree = (changes: { pos: number; colKey: string; text: string }[], record = true) => {
     let next = freeRows
+    const before = changes.map((c) => ({ ...c, text: freeRows.find((f) => f.pos === c.pos)?.values[c.colKey] ?? '' }))
     for (const c of changes) next = setFreeValue(next, c.pos, c.colKey, c.text)
     void savePref('view', { ...(prefs.view ?? {}), freeRows: next })
+    // 직접 입력한 행도 실행취소 (2026-11-26). 되돌릴 때는 그때의 최신 화면 함수로(`latest`).
+    if (record && before.some((b, i) => b.text !== changes[i]!.text)) {
+      pushHistory({
+        label: changes.length === 1 ? '칸 수정' : `칸 ${String(changes.length)}개 수정`,
+        undo: async () => latest.current?.writeFree(before, false),
+        redo: async () => latest.current?.writeFree(changes, false),
+      })
+    }
   }
 
   if (edits.source !== sheet.rows) {
     const next = new Map(edits.values)
     for (const [key, value] of edits.values) {
       const [jobId, colKey] = key.split('|') as [string, string]
+      if (colKey.endsWith('+')) {
+        if ((cells.get(cellKey(jobId, colKey.slice(0, -1)))?.value ?? '') === value) next.delete(key)
+        continue
+      }
       const row = rowById.get(jobId)
       const column = columns.find((c) => c.key === colKey)
       if (!row || !column) {
@@ -341,7 +370,8 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       .filter(([jobId, pos]) => all || (layout.posOf.get(jobId) ?? rowById.get(jobId)?.ordNo ?? null) !== pos)
       .map(([jobId, ordNo]) => ({ jobId, ordNo }))
     if (items.length > 0) await orderPmRows(ownerId, items)
-    if (JSON.stringify(result.freeRows) !== JSON.stringify(freeRows)) {
+    // `all`(실행취소·재실행)이면 늘 저장 — 되돌리는 함수는 예전 화면의 `freeRows` 를 보고 있어서 비교가 틀릴 수 있다.
+    if (all || JSON.stringify(result.freeRows) !== JSON.stringify(freeRows)) {
       await savePref('view', { ...(prefs.view ?? {}), freeRows: result.freeRows })
     }
   }
@@ -364,6 +394,10 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   /* ----------------------------------------------------------------------- */
 
   const columnOf = (key: string) => columns.find((c) => c.key === key) ?? null
+
+  /** 고칠 수 없는 열에 덧붙인 글 (저장 중이면 그 값). */
+  const extraOf = (jobId: string, key: string): string =>
+    overrides.get(cellKey(jobId, appendKey(key))) ?? cells.get(cellKey(jobId, key))?.value ?? ''
 
   const currentRaw = (row: PmSheetRow, column: SheetColumn): string =>
     cellValue(row, column, { columns, cells, merged: [], inGroup: false, rowNo: 0, overrides }, null).raw
@@ -397,7 +431,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   }
 
   /** 저장된 값 `value` 를 서버에 쓴다. 실패하면 throw. */
-  const writeValue = async (row: PmSheetRow, column: SheetColumn, value: string, tid?: string | null) => {
+  const writeValue = async (row: PmSheetRow, column: SheetColumn, value: string, tid?: string | null, restore?: Record<string, string>) => {
     const key = column.key
     const src = column.spec.source
     if (src === 'custom') {
@@ -420,8 +454,11 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
        */
       const po = poOfGroup(row, src)
       const poField = key.endsWith('Volume') ? 'poVolume' : key.endsWith('Eday') ? 'poEday' : key.endsWith('Time') ? 'poEdayTime' : null
-      if (po && poField) {
+      if (po && poField && !(restore && (restore[key] ?? '') !== '' && (restore[`${src}For`] ?? '') === po.poId)) {
         await updatePo.mutateAsync({ id: po.poId, input: { [poField]: value || null } })
+      } else if (restore) {
+        // 실행취소: 묶음의 시트 값을 수정 전 그대로.
+        await patchPmRow({ staffId: ownerId, jobId: row.jobId, fields: restore })
       } else {
         const bind = po?.poId ?? ''
         const fields: Record<string, string> = { [key]: value, [`${src}For`]: bind }
@@ -434,24 +471,58 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
     }
   }
 
+  /** 실행취소·재실행 — 최신 행·함수로 다시 쓴다(같은지 비교하지 않음). */
+  const replay = async (items: { jobId: string; colKey: string; text: string; tid?: string | null; restore?: Record<string, string> }[]) => {
+    const cur = latest.current
+    if (!cur) return
+    const list = items.flatMap((it) => {
+      const row = cur.rowById.get(it.jobId)
+      const column = cur.columnOf(it.colKey)
+      return row && column ? [{ row, column, text: it.text, tid: it.tid, restore: it.restore }] : []
+    })
+    if (list.length > 0) await cur.applyValues(list, false, true)
+  }
+
   /**
    * 여러 칸을 한 번에 (붙여넣기·지우기·채우기도 여기로). 한 번의 실행취소로 되돌아간다.
    * 가제 열은 한 요청으로 묶고, 나머지는 칸마다 보낸다.
    */
-  const applyValues = async (changes: { row: PmSheetRow; column: SheetColumn; text: string; tid?: string | null }[], record = true) => {
-    const done: { row: PmSheetRow; column: SheetColumn; before: string; after: string }[] = []
+  const applyValues = async (
+    changes: { row: PmSheetRow; column: SheetColumn; text: string; tid?: string | null; restore?: Record<string, string> }[],
+    record = true,
+    force = false,
+  ) => {
+    type Done = { row: PmSheetRow; column: SheetColumn; before: string; after: string; tid?: string | null; beforeFields?: Record<string, string> }
+    const done: Done[] = []
     const customBatch: PmCellWrite[] = []
     const customDone: typeof done = []
     const errors: string[] = []
 
-    for (const { row, column, text, tid } of changes) {
+    for (const { row, column, text, tid, restore } of changes) {
+      if (APPEND_KEYS.has(column.key)) {
+        // 고칠 수 없는 열의 덧붙임 — 시트 칸 값으로만 (프로젝트에는 쓰지 않는다).
+        const value = text.trim()
+        const before = extraOf(row.jobId, column.key)
+        if (!force && before === value) continue
+        put(row.jobId, appendKey(column.key), value)
+        customBatch.push({ jobId: row.jobId, colKey: column.key, value: value || null })
+        customDone.push({ row, column, before, after: value })
+        continue
+      }
       const parsed = normalize(column, text)
       if (!parsed.ok) {
         errors.push(parsed.reason)
         continue
       }
       const before = currentRaw(row, column)
-      if (before === parsed.value && !(column.spec.kind === 'picker' && tid)) continue
+      if (!force && before === parsed.value && !(column.spec.kind === 'picker' && tid)) continue
+      // 번역가·감수자 묶음의 시트 값은 묶음 전체(이름·id·PO 묶임)를 그대로 되돌려야 한다 — 이름만 되돌리면
+      // 고른 번역가 id 가 남거나 PO 이름이 시트 값으로 굳는다.
+      const src = column.spec.source
+      const beforeFields =
+        src === 'tr' || src === 'rv'
+          ? Object.fromEntries([...PO_GROUP_KEYS[src], `${src}For`].map((k) => [k, row.fields[k] ?? '']))
+          : undefined
       put(row.jobId, column.key, parsed.value)
       if (column.spec.source === 'custom') {
         customBatch.push({ jobId: row.jobId, colKey: column.key, value: parsed.value || null })
@@ -459,8 +530,8 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
         continue
       }
       try {
-        await writeValue(row, column, parsed.value, tid)
-        done.push({ row, column, before, after: parsed.value })
+        await writeValue(row, column, parsed.value, tid, restore)
+        done.push({ row, column, before, after: parsed.value, tid, beforeFields })
       } catch (err) {
         drop(row.jobId, column.key)
         errors.push(messageOf(err))
@@ -471,7 +542,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
         await writePmCells(ownerId, customBatch)
         done.push(...customDone)
       } catch (err) {
-        for (const c of customBatch) drop(c.jobId, c.colKey)
+        for (const c of customBatch) drop(c.jobId, APPEND_KEYS.has(c.colKey) ? appendKey(c.colKey) : c.colKey)
         errors.push(messageOf(err))
       }
     }
@@ -480,8 +551,8 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       if (record) {
         pushHistory({
           label: done.length === 1 ? `${done[0]!.column.label} 수정` : `칸 ${String(done.length)}개 수정`,
-          undo: () => applyValues(done.map((d) => ({ row: d.row, column: d.column, text: d.before })), false),
-          redo: () => applyValues(done.map((d) => ({ row: d.row, column: d.column, text: d.after })), false),
+          undo: () => replay(done.map((d) => ({ jobId: d.row.jobId, colKey: d.column.key, text: d.before, restore: d.beforeFields }))),
+          redo: () => replay(done.map((d) => ({ jobId: d.row.jobId, colKey: d.column.key, text: d.after, tid: d.tid }))),
         })
       }
     }
@@ -493,9 +564,30 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   /* ----------------------------------------------------------------------- */
 
   /**
-   * 그 프로젝트 화면으로 가서 PO 창을 연다. 발행 = 새 PO(이 행의 값을 미리 채움), 보기 = 그 PO,
+   * 시트 위에 PO 창을 띄운다(프로젝트 화면으로 넘어가지 않는다, 2026-11-26). 발행 = 새 PO(이 행의 값을 미리 채움), 보기 = 그 PO,
    * 변경 = 그 PO 의 수정 창에 바꿔 적은 사람을 넣어서. 발행·변경이 저장되면 T·PO 칸·번역가 칸은 PO 를 따라간다.
    */
+  /** PRCODE 로 프로젝트를 찾아 연다 — 직접 입력한 행용. 코드가 정확히 같은 프로젝트만. */
+  const openProjectByCode = async (code: string) => {
+    try {
+      const page = await fetchProjects({ q: code, limit: 20 })
+      const hit = page.items.find((p) => p.prjCode.trim().toLowerCase() === code.toLowerCase())
+      if (hit) void navigate(`/projects/${encodeURIComponent(hit.id)}`)
+      else onError(`PRCODE '${code}' 인 프로젝트를 찾지 못했습니다.`)
+    } catch (err) {
+      onError(messageOf(err))
+    }
+  }
+
+  /** 경로 칸의 복사 단추 (팀장님 2026-11-26). */
+  const copyText = (text: string) => {
+    void navigator.clipboard.writeText(text).then(
+      () => onNotice('경로를 복사했습니다. 탐색기 주소창에 붙여 넣으세요.'),
+      () => onError('복사하지 못했습니다. 칸을 고르고 Ctrl+C 를 눌러 주세요.'),
+    )
+  }
+
+  const [sheetPo, setSheetPo] = useState<{ action: PoAction; projectId: string } | null>(null)
   const openPoFor = (row: PmSheetRow, group: PoGroup) => {
     const action = personAction(row, group)
     const po = poOfGroup(row, group)
@@ -525,17 +617,28 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
     } else {
       poAction = { mode: 'edit', poId: po.poId }
     }
-    void navigate(`/projects/${encodeURIComponent(row.projectId)}`, { state: { poAction } })
+    setSheetPo({ action: poAction, projectId: row.projectId })
   }
 
   /** 업무 칸 목록에서 고른 작업 종류 — 프로젝트의 작업(통합 행이면 합쳐진 작업까지)에도 반영. 직접 입력한 글자는 지운다. */
   const pickTask = async (row: PmSheetRow, code: string) => {
-    try {
-      for (const r of [row, ...sheet.rows.filter((x) => x.mergedInto === row.jobId)]) {
-        await updateJob.mutateAsync({ id: r.jobId, input: { workCode: code } })
-      }
-      if (row.fields.task) await patchPmRow({ staffId: ownerId, jobId: row.jobId, fields: { task: '' } })
+    const targets = [row, ...sheet.rows.filter((x) => x.mergedInto === row.jobId)]
+    const before = targets.map((r) => ({ id: r.jobId, workCode: r.workCode ?? null }))
+    const beforeTask = row.fields.task ?? ''
+    const write = async (codes: { id: string; workCode: string | null }[], task: string | null) => {
+      for (const c of codes) await updateJob.mutateAsync({ id: c.id, input: { workCode: c.workCode } })
+      if (task !== null) await patchPmRow({ staffId: ownerId, jobId: row.jobId, fields: { task } })
       refresh()
+    }
+    try {
+      const after = targets.map((r) => ({ id: r.jobId, workCode: code }))
+      await write(after, beforeTask ? '' : null)
+      // 업무 목록으로 고른 것도 실행취소 (2026-11-26).
+      pushHistory({
+        label: '업무 수정',
+        undo: () => write(before, beforeTask ? beforeTask : null),
+        redo: () => write(after, beforeTask ? '' : null),
+      })
     } catch (err) {
       onError(messageOf(err))
     }
@@ -561,7 +664,9 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       const ctx = { columns: all, cells, merged, inGroup: false, rowNo: 0, overrides }
       const out: Record<string, PmArchiveCell> = {}
       for (const column of all) {
-        const shown = cellValue(row, column, ctx, null).shown
+        const base = cellValue(row, column, ctx, null).shown
+        const add = APPEND_KEYS.has(column.key) ? extraOf(row.jobId, column.key) : ''
+        const shown = add ? `${base} ${add}`.trim() : base
         const own = cells.get(cellKey(row.jobId, column.key))?.style
         const hasStyle = !!own && Object.keys(own).length > 0
         if (shown || hasStyle) out[column.key] = hasStyle ? { t: shown, s: own } : { t: shown }
@@ -578,17 +683,37 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       items.push({ jobId: null, handoverAt: isYmd(h) ? `${h}T00:00:00+09:00` : null, cells: out })
     }
     if (items.length === 0) return
-    setArchiving(true)
-    try {
-      await archivePmRows(ownerId, items, alsoHide)
-      if (archiveFrees.length > 0) {
-        const gone = new Set(archiveFrees.map((f) => f.pos))
-        await savePref('view', { ...(prefs.view ?? {}), freeRows: freeRows.filter((f) => !gone.has(f.pos)) })
-      }
+    // 옮긴 행이 있던 자리는 지운다 — 아래 행이 올라와 빈 줄이 남지 않게 (팀장님 2026-11-26).
+    // 직접 만든 행도 이 자리 목록에서 빠지면서 개인 설정의 빈 줄 목록에서 지워진다.
+    const before = slotsOf(layout.posOf, freeRows)
+    const baseFree = freeRows
+    const jobIds = [...archiveHeads.map((r) => r.jobId), ...alsoHide]
+    const after = removeSlots(before, [...jobIds, ...archiveFrees.map((f) => freeRowId(f.pos))])
+    const doArchive = async () => {
+      const r = await archivePmRows(ownerId, items, alsoHide)
+      await saveSlots(after, baseFree, true)
       refresh()
       void qc.invalidateQueries({ queryKey: pmKeys.archive(ownerId ?? null) })
-      onNotice(`납품 완료 ${String(items.length)}행을 '완료 업무' 시트로 옮겼습니다.`)
+      return r.ids
+    }
+    setArchiving(true)
+    try {
+      let made = await doArchive()
+      onNotice(`납품 완료 ${String(items.length)}행을 '완료 업무' 시트로 옮겼습니다. (실행취소로 되돌릴 수 있습니다)`)
       setArchiveAsk(false)
+      // 실행취소: 그때 만든 보관 행을 지우고, 작업 행을 다시 보이게 한 뒤 자리·빈 줄을 옮기기 전으로.
+      pushHistory({
+        label: '아카이빙',
+        undo: async () => {
+          await undoArchivePmRows(ownerId, made, jobIds)
+          await saveSlots(before, baseFree, true)
+          refresh()
+          void qc.invalidateQueries({ queryKey: pmKeys.archive(ownerId ?? null) })
+        },
+        redo: async () => {
+          made = await doArchive()
+        },
+      })
     } catch (err) {
       onError(messageOf(err))
     } finally {
@@ -908,6 +1033,10 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   /* Grid wiring                                                             */
   /* ----------------------------------------------------------------------- */
 
+  useEffect(() => {
+    latest.current = { applyValues, writeFree, rowById, columnOf }
+  })
+
   const onCellsChanged = (changes: CellChange<GridCell>[]) => {
     const list: { row: PmSheetRow; column: SheetColumn; text: string; tid?: string | null }[] = []
     const free: { pos: number; colKey: string; text: string }[] = []
@@ -1080,6 +1209,15 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
             raw: entry.values[c.key] ?? '',
             nonEditable: false,
             person: c.spec.kind === 'picker' ? { jobId: null, which: c.spec.source === 'rv' ? 'rv' : 'tr' } : undefined,
+            onCopyText: c.key === 'path' && (entry.values.path ?? '').trim() ? () => copyText((entry.values.path ?? '').trim()) : undefined,
+            // 직접 입력한 행의 PRCODE 도 그 프로젝트 화면으로 (팀장님 2026-11-26) — 누를 때 코드로 찾는다.
+            ...(c.key === 'prjCode' && (entry.values.prjCode ?? '').trim()
+              ? {
+                  href: `/projects?q=${encodeURIComponent((entry.values.prjCode ?? '').trim())}`,
+                  internal: true,
+                  onNavigate: () => void openProjectByCode((entry.values.prjCode ?? '').trim()),
+                }
+              : {}),
             onMenu: (x: number, y: number) => setColMenu({ key: c.key, x, y, jobId: null }),
           }),
         ),
@@ -1136,7 +1274,9 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
         })
         let style = mergeStyle(cf, stateStyleFor(row.pmState, column.key, columnOrder, stateDefs), manual)
         if (isGroupMarker) style = mergeStyle({ bg: GROUP_COLOR, fg: '#FFFFFF', bold: true }, style)
-        const editable = isEditable(column, row)
+        const appendable = APPEND_KEYS.has(column.key)
+        const extra = appendable ? extraOf(row.jobId, column.key) : ''
+        const editable = appendable || isEditable(column, row)
         const po = column.spec.source === 'tr' ? row.tr : column.spec.source === 'rv' ? row.rv : null
         const cellStyle = toCellStyle(style, {
           groupEdge: entry.inGroup ? (ci === 0 ? 'l' : ci === columns.length - 1 ? 'r' : null) : null,
@@ -1159,13 +1299,20 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           : innerStyle(style)
         return {
           type: 'sheet',
-          text: column.spec.kind === 'picker' ? v.shown : v.shown,
-          raw: v.raw,
+          text: v.shown,
+          // 덧붙일 수 있는 열은 입력기에 덧붙인 글만 띄운다 — 원래 글자는 고칠 수 없다.
+          raw: appendable ? extra : v.raw,
+          extra: extra || undefined,
+          onCopyText: column.key === 'path' && v.shown.trim() ? () => copyText(v.shown.trim()) : undefined,
           href: v.href,
           internal: v.internal,
           onNavigate: (href) => void navigate(href),
           note: own?.note ?? undefined,
-          tooltip: isChanged ? '다른 사람이 바꾼 칸입니다 — 눌러서 확인' : v.tooltip,
+          tooltip: isChanged
+            ? '다른 사람이 바꾼 칸입니다 — 눌러서 확인'
+            : appendable
+              ? `${v.shown}${extra ? `\n덧붙인 글(시트에만): ${extra}` : ''}\n(글을 쳐서 덧붙일 수 있습니다 — 프로젝트에는 반영되지 않습니다)`
+              : v.tooltip,
           nonEditable: !editable,
           choices: column.key === 'pmState' ? stateNames : undefined,
           // 진행 상태·업무는 한 번 눌러 바로 목록을 연다 (팀장님 2026-11-25, 업무 2026-11-26). 업무를 더블클릭하면 직접 입력.
@@ -1739,6 +1886,18 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           }}
         />
       ) : null}
+      {sheetPo ? (
+        <SheetPoModal
+          action={sheetPo.action}
+          projectId={sheetPo.projectId}
+          onClose={() => setSheetPo(null)}
+          onSaved={(message) => {
+            onNotice(message)
+            refresh()
+          }}
+        />
+      ) : null}
+
       {archiveAsk ? (
         <ConfirmDialog
           title="아카이빙"

@@ -2150,7 +2150,11 @@
 .hoTable tr.hoOff td { opacity: .55; }
 .hoMissing select { border-color: #d93025 !important; }
 .hoLang { display: flex; align-items: center; gap: 4px; }
-.hoDue { display: flex; gap: 4px; }
+.hoDue { display: flex; gap: 4px; align-items: flex-start; }
+/* 인계 납기 시각 — 24시간 칸 아래 12시·18시 (팀장님 2026-11-26) */
+.hoTime { display: flex; flex-direction: column; gap: 4px; width: 112px; flex: none; }
+.hoTimeBtns { display: flex; gap: 4px; }
+.hoTimeBtns button { flex: 1; padding-left: 0; padding-right: 0; }
 .hoCustom { margin-top: 6px; }
 
 /* 언어 고르기 (LangCombo) — 입력하며 좁히기, 회색 자동완성 */

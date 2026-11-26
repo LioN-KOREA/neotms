@@ -194,6 +194,14 @@ export const PmArchiveSchema = v.object({
   alsoHide: v.optional(v.pipe(v.array(IdSchema), v.maxLength(2000))),
 });
 
+/** Undo an archive (2026-11-26): the archived row ids it made, and the jobs it took off the sheet. */
+export const PmArchiveUndoSchema = v.object({
+  ...SheetOwner,
+  ids: v.pipe(v.array(IdSchema), v.maxLength(2000)),
+  jobIds: v.optional(v.pipe(v.array(IdSchema), v.maxLength(4000))),
+});
+
+export type PmArchiveUndoInput = v.InferOutput<typeof PmArchiveUndoSchema>;
 export type PmRowPatch = v.InferOutput<typeof PmRowPatchSchema>;
 export type PmArchiveInput = v.InferOutput<typeof PmArchiveSchema>;
 export type PmCellsInput = v.InferOutput<typeof PmCellsSchema>;

@@ -61,6 +61,10 @@ export interface SheetCell extends Cell {
   stepShown?: boolean
   /** 번역가·감수자 칸: 더블클릭하면 찾기 입력기 (팀장님 2026-11-26). */
   person?: { jobId: string | null; which: 'tr' | 'rv' }
+  /** 경로 칸: 마우스를 올리면 오른쪽에 복사 단추 (팀장님 2026-11-26). */
+  onCopyText?: () => void
+  /** 고칠 수 없는 열에 덧붙인 글 — 원래 글자 뒤에 파란색으로 (팀장님 2026-11-26). */
+  extra?: string
   /** 입력기에서 목록으로 고른 번역가 id (고친 결과에 실려 시트로 간다). */
   pickedId?: string | null
 }
@@ -94,6 +98,11 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
     capsLock?: boolean,
   ): { cell: Compatible<SheetCell>; enableEditMode: boolean } {
     if (cell.nonEditable) return { cell, enableEditMode: false }
+    if (keyCode === 229 && !ctrl && !alt && !cell.choices) {
+      // 한글 입력(IME) 첫 키 (팀장님 2026-11-26) — 조합이 시작되기 전에 빈 입력칸을 열어 둔다. 그래야 조합이
+      // 숨은 칸이 아니라 입력칸에서 일어나 'ㄱ' 부터 글자가 보인다(전에는 한 글자가 끝나야 보였다).
+      return { cell: this.getCompatibleCell({ ...cell, text: '', raw: '' }), enableEditMode: true }
+    }
     if (!ctrl && !alt && isAlphaNumericKey(keyCode) && !(shift && keyCode === keyCodes.SPACE) && !cell.choices) {
       // 글자를 치면 그 글자로 새로 쓰기 시작 — 엑셀과 같다.
       const char = getCharFromKey(key ?? '', shift, capsLock)
@@ -148,6 +157,7 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
           }
         >
           {cell.text || (cell.placeholder ? <i className={css.placeholder}>{cell.placeholder}</i> : '')}
+          {cell.extra ? <span style={{ color: '#1a73e8' }}>{cell.text ? ' ' : ''}{cell.extra}</span> : null}
         </span>
       )
       return (
@@ -219,6 +229,24 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
               }}
             >
               ›
+            </button>
+          ) : null}
+          {cell.onCopyText ? (
+            <button
+              type="button"
+              className={`${css.stepBtn} ${css.stepNext} ${css.copyBtn} ${cell.stepShown ? css.stepOn : ''}`}
+              title="경로 복사"
+              aria-label="경로 복사"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                cell.onCopyText?.()
+              }}
+            >
+              <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+                <rect x="5.5" y="5.5" width="8" height="9" rx="1.3" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M10.5 3.2V2.8c0-.7-.6-1.3-1.3-1.3H3.8c-.7 0-1.3.6-1.3 1.3v6.4c0 .7.6 1.3 1.3 1.3h.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+              </svg>
             </button>
           ) : null}
           {cell.onOpen ? (

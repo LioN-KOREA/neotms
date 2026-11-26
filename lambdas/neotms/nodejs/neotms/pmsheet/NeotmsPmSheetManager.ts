@@ -35,9 +35,11 @@ import { badRequest, notFound, ok, runDb } from "../NeotmsResult.js";
 import type { WriteContext } from "../NeotmsWrite.js";
 import {
   LastPoPriceOps,
+  PmArchiveDeleteOps,
   PmArchiveInsertOps,
   PmArchiveRowsOps,
   PmRowsHideOps,
+  PmRowsUnhideOps,
   type PmArchiveRow,
   HandoverAnswerOps,
   HandoverGetOps,
@@ -87,6 +89,7 @@ import {
   type PmRowOrderInput,
   type PmRowPatch,
   type PmArchiveInput,
+  type PmArchiveUndoInput,
   type PmSeenInput,
 } from "./NeotmsPmSheet.schemas.js";
 import type { PoolClient } from "pg";
@@ -580,7 +583,7 @@ export async function archivePmRows(
   caller: NeotmsCaller,
   input: PmArchiveInput,
   ctx: WriteContext,
-): Promise<ResponseData<{ archived: number } | string>> {
+): Promise<ResponseData<{ archived: number; ids: string[] } | string>> {
   const owner = ownerOf(caller, input.staffId);
   if (!owner) return badRequest("staffId must be a record id");
   return runDb("archive pm rows", async () => {
@@ -594,7 +597,7 @@ export async function archivePmRows(
       if (item.handoverAt && Number.isNaN(Date.parse(item.handoverAt))) return badRequest("handoverAt must be a date");
     }
     return pgTransaction(async (client) => {
-      await pgExecute(
+      const made = await pgExecute(
         PmArchiveInsertOps(
           owner,
           input.items.map((i) => ({
@@ -608,9 +611,30 @@ export async function archivePmRows(
         client,
       );
       if (jobIds.length > 0) await pgExecute(PmRowsHideOps(owner, jobIds, ctx.actor), client);
-      return ok({ archived: input.items.length });
+      return ok({ archived: input.items.length, ids: made.data });
     });
   });
+}
+
+/**
+ * POST pm-sheet/archive/undo (2026-11-26) - the sheet's undo of [아카이빙]: deletes the archived rows that
+ * archive made (only this sheet's own rows) and puts its jobs back on the live sheet.
+ */
+export async function undoArchivePmRows(
+  caller: NeotmsCaller,
+  input: PmArchiveUndoInput,
+  ctx: WriteContext,
+): Promise<ResponseData<{ removed: number; restored: number } | string>> {
+  const owner = ownerOf(caller, input.staffId);
+  if (!owner) return badRequest("staffId must be a record id");
+  const jobIds = [...new Set(input.jobIds ?? [])];
+  return runDb("undo pm archive", async () =>
+    pgTransaction(async (client) => {
+      const removed = input.ids.length > 0 ? (await pgExecute(PmArchiveDeleteOps(owner, input.ids), client)).data : 0;
+      const restored = jobIds.length > 0 ? (await pgExecute(PmRowsUnhideOps(owner, jobIds, ctx.actor), client)).data : 0;
+      return ok({ removed, restored });
+    }),
+  );
 }
 
 /** GET pm-sheet/last-price?translatorId&slang&elang&workCode - see `LastPoPriceOps`. */

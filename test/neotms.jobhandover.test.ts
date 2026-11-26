@@ -93,7 +93,7 @@ describe("handover mail — typed options and per-job deadlines", () => {
     expect(mail.html).toContain("편집포맷 직접입력");
     expect(mail.html).toContain(">PDF</td>");
     expect(mail.html).toContain("원본 그대로");
-    expect(mail.html).toContain("12/03 (목) 5:00");
+    expect(mail.html).toContain("12/03 (목) 17:00");
     expect(mail.html).not.toContain("12/31");
   });
 
@@ -500,7 +500,10 @@ describe("work sheet: translator group, PO buttons, task menu, archive (2026-11-
     expect(m).toContain("(row.fields[`${group}For`] ?? '') === (poOfGroup(row, group)?.poId ?? '') ? value : undefined");
     expect(m).toContain("return sheetOverride(row, key) ?? (row.tr ? '발행' : '-')");
     expect(sheet()).toContain("{ issue: '발행', change: '변경', view: '보기' }[personAction(");
-    expect(sheet()).toContain("void navigate(`/projects/${encodeURIComponent(row.projectId)}`, { state: { poAction } })");
+    // 2026-11-26: 프로젝트 화면으로 넘어가지 않고 시트 위에 PO 창을 띄운다.
+    expect(sheet()).toContain("setSheetPo({ action: poAction, projectId: row.projectId })");
+    expect(sheet()).toContain("<SheetPoModal");
+    expect(sheet()).not.toContain("state: { poAction }");
   });
   it("column labels T·PO / E·PO / T·시간 / E·시간 / D·시간", () => {
     const c = read("frontend/src/features/pmsheet/sheetColumns.ts");
@@ -508,7 +511,7 @@ describe("work sheet: translator group, PO buttons, task menu, archive (2026-11-
   });
   it("task: one click opens work codes (updates the job), double click / 직접 입력 stays on the sheet", () => {
     const s = sheet();
-    expect(s).toContain("await updateJob.mutateAsync({ id: r.jobId, input: { workCode: code } })");
+    expect(s).toContain("await updateJob.mutateAsync({ id: c.id, input: { workCode: c.workCode } })");
     expect(s).toContain("✎ 직접 입력…");
     expect(read("frontend/src/features/pmsheet/sheetCells.tsx")).toContain("if (e.detail > 1) return");
   });
@@ -544,5 +547,83 @@ describe("자주쓰는 참조 메일 (2026-11-26)", () => {
   it("sits under the cc field and is personal (prefs.view.ccFav)", () => {
     expect(read("frontend/src/features/projects/JobHandoverFlow.tsx")).toContain("<CcFavorites value={cc} onChange={setCc} disabled={busy} />");
     expect(read("frontend/src/apis/pmsheet.api.ts")).toContain("await writePmPref(undefined, 'view', { ...(fresh.view ?? {}), ccFav })");
+  });
+});
+
+describe("sheet: PO window over the sheet, IME first key, free-row PRCODE link (2026-11-26)", () => {
+  const read = (rel: string) => require("fs").readFileSync(require("path").join(__dirname, "..", rel), "utf8") as string;
+  it("PO window opens over the sheet for new and existing POs", () => {
+    const m = read("frontend/src/features/pmsheet/SheetPoModal.tsx");
+    expect(m).toContain("PurchaseOrderFormModal");
+    expect(m).toContain("usePurchaseOrder(action.mode === 'edit' ? action.poId : null)");
+  });
+  it("Korean IME: key 229 opens an empty editor before composition starts", () => {
+    const c = read("frontend/src/features/pmsheet/sheetCells.tsx");
+    expect(c).toContain("keyCode === 229 && !ctrl && !alt && !cell.choices");
+  });
+  it("free rows: PRCODE text links to the project found by that code", () => {
+    const s = read("frontend/src/features/pmsheet/PmSheet.tsx");
+    expect(s).toContain("onNavigate: () => void openProjectByCode(");
+    expect(s).toContain("p.prjCode.trim().toLowerCase() === code.toLowerCase()");
+  });
+});
+
+describe("sheet undo + archive undo/compaction + past-year month colour (2026-11-26)", () => {
+  const read = (rel: string) => require("fs").readFileSync(require("path").join(__dirname, "..", rel), "utf8") as string;
+  const sheet = () => read("frontend/src/features/pmsheet/PmSheet.tsx");
+  it("undo replays through the latest render and skips the 'already equal' check", () => {
+    const s = sheet();
+    expect(s).toContain("latest.current = { applyValues, writeFree, rowById, columnOf }");
+    expect(s).toContain("if (!force && before === parsed.value");
+    expect(s).toContain("await cur.applyValues(list, false, true)");
+    expect(s).toContain("text: d.before, restore: d.beforeFields");
+  });
+  it("translator/reviewer undo restores the whole group of sheet values", () => {
+    const s = sheet();
+    expect(s).toContain("[...PO_GROUP_KEYS[src], `${src}For`]");
+    expect(s).toContain("await patchPmRow({ staffId: ownerId, jobId: row.jobId, fields: restore })");
+  });
+  it("free-row edits and the task menu are undoable", () => {
+    const s = sheet();
+    expect(s).toContain("undo: async () => latest.current?.writeFree(before, false)");
+    expect(s).toContain("label: '업무 수정'");
+  });
+  it("archive removes the emptied slots and can be undone", () => {
+    const s = sheet();
+    expect(s).toContain("const after = removeSlots(before, [...jobIds, ...archiveFrees.map((f) => freeRowId(f.pos))])");
+    expect(s).toContain("await undoArchivePmRows(ownerId, made, jobIds)");
+    const h = read("lambdas/neotms/nodejs/neotms/neotms.handler.ts");
+    expect(h).toContain('path: "/api/v0/pm-sheet/archive/undo"');
+    const ops = read("lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmSheet.dbops.ts");
+    expect(ops).toContain("DELETE FROM pm_sheet_archive\n     WHERE staff_id = :staff_id");
+  });
+  it("past-year month labels use their own colour", () => {
+    const a = read("frontend/src/features/pmsheet/ArchiveSheet.tsx");
+    expect(a).toContain("line.kind === 'month' && line.parent ? PAST_MONTH_COLOR : MONTH_COLOR");
+  });
+});
+
+describe("sheet: sheet-only text appended to read-only columns (2026-11-26)", () => {
+  const read = (rel: string) => require("fs").readFileSync(require("path").join(__dirname, "..", rel), "utf8") as string;
+  it("appendable columns, stored as sheet cell values, shown in blue, original text kept for filters", () => {
+    const cols = read("frontend/src/features/pmsheet/sheetColumns.ts");
+    expect(cols).toContain("export const APPEND_KEYS = new Set(['cusCodeName', 'cusMgrName', 'prjMgrName', 'lang'])");
+    const s = read("frontend/src/features/pmsheet/PmSheet.tsx");
+    expect(s).toContain("customBatch.push({ jobId: row.jobId, colKey: column.key, value: value || null })");
+    expect(s).toContain("raw: appendable ? extra : v.raw,");
+    expect(s).toContain("text: v.shown,");
+    const c = read("frontend/src/features/pmsheet/sheetCells.tsx");
+    expect(c).toContain("{cell.extra ? <span style={{ color: '#1a73e8' }}>");
+  });
+});
+
+describe("sheet: copy button on path cells (2026-11-26)", () => {
+  const read = (rel: string) => require("fs").readFileSync(require("path").join(__dirname, "..", rel), "utf8") as string;
+  it("hover copy icon on the right of path cells copies the path", () => {
+    const c = read("frontend/src/features/pmsheet/sheetCells.tsx");
+    expect(c).toContain("css.copyBtn");
+    const s = read("frontend/src/features/pmsheet/PmSheet.tsx");
+    expect(s).toContain("onCopyText: column.key === 'path' && v.shown.trim() ? () => copyText(v.shown.trim()) : undefined");
+    expect(s).toContain("void navigator.clipboard.writeText(text)");
   });
 });

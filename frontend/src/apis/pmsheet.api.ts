@@ -513,7 +513,11 @@ export const fetchPmArchive = (staffId: string | null, signal?: AbortSignal) =>
   neotmsApi<PmArchiveRow[]>(`/api/v0/pm-sheet/archive${qs(staffId)}`, { signal })
 
 export const archivePmRows = (staffId: string | undefined, items: PmArchiveItem[], alsoHide: string[]) =>
-  neotmsApi<{ archived: number }>('/api/v0/pm-sheet/archive', { method: 'POST', body: { staffId, items, alsoHide } })
+  neotmsApi<{ archived: number; ids: string[] }>('/api/v0/pm-sheet/archive', { method: 'POST', body: { staffId, items, alsoHide } })
+
+/** [아카이빙] 실행 취소 (팀장님 2026-11-26) — 그때 만든 보관 행을 지우고 작업 행을 시트로 되돌린다. */
+export const undoArchivePmRows = (staffId: string | undefined, ids: string[], jobIds: string[]) =>
+  neotmsApi<{ removed: number; restored: number }>('/api/v0/pm-sheet/archive/undo', { method: 'POST', body: { staffId, ids, jobIds } })
 
 export function usePmArchive(staffId: string | null) {
   return useQuery({

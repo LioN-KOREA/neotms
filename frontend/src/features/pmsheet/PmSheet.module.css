@@ -301,6 +301,9 @@
 /* 칸에 마우스를 올렸을 때, 그리고 고른 칸이면 늘 (팀장님 2026-11-26: 단추로 가는 사이에 사라지던 문제). */
 .cellInner:hover .stepBtn, .stepBtn:hover, .stepBtn.stepOn { display: block; }
 .stepBtn:hover { background: #e8f0fe; border-color: #1a73e8; }
+/* 경로 칸 복사 단추 — 시간 ‹ › 처럼 마우스를 올리면 칸 오른쪽에 (팀장님 2026-11-26). */
+.copyBtn { width: 19px; color: #5f6368; }
+.copyBtn svg { display: block; margin: auto; }
 
 .confirmPop {
   position: fixed; z-index: 60; display: flex; gap: 4px; padding: 4px; border-radius: 6px;

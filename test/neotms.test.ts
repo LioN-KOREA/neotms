@@ -6180,9 +6180,9 @@ describe("the handover mail", () => {
       [job({ jobEday: "2026-11-20" })],
       WORD,
     );
-    expect(mail.html).toContain("11/13 (금) 3:00");
+    expect(mail.html).toContain("11/13 (금) 15:00"); // 24-hour (2026-11-26)
     expect(mail.html).not.toContain("11/20");
-    expect(mail.html).not.toMatch(/3:00[^<]*오후/);
+    expect(mail.html).not.toMatch(/15:00[^<]*오후/);
     // Afternoon is filled in, morning is not.
     expect(mail.html).toMatch(/background:#92d050[^>]*>오후</);
     expect(mail.html).toMatch(/background:#ffffff[^>]*>오전</);
@@ -6193,7 +6193,7 @@ describe("the handover mail", () => {
       [],
       WORD,
     );
-    expect(midnight.html).toContain("11/13 (금) 12:30");
+    expect(midnight.html).toContain("11/13 (금) 00:30");
     expect(midnight.html).toMatch(/background:#92d050[^>]*>오전</);
     const noon = composeHandoverMail(
       project({ prjEday: "2026-11-13", prjEdayTime: "12:00:00" }),

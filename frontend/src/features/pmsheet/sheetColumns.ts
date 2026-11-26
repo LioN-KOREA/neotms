@@ -63,6 +63,15 @@ export const FIXED_COLUMNS: readonly SheetColumnSpec[] = [
 /** 행 값(`fields`)에 저장되는 기본 열. */
 export const ROW_FIELD_KEYS = new Set(['task', 'remark', 'backup', 'path'])
 
+/**
+ * 고칠 수 없는 열에 덧붙이는 글 (팀장님 2026-11-26). 원래 글자는 그대로 두고, 시트에만 남는 덧붙임
+ * (파란 글씨)을 칸 값(`pm_sheet_cell.value`, 열 키 그대로)에 둔다. 프로젝트에는 쓰지 않고, 정렬·필터는
+ * 원래 글자로만 한다.
+ */
+export const APPEND_KEYS = new Set(['cusCodeName', 'cusMgrName', 'prjMgrName', 'lang'])
+/** 저장 중인 덧붙임을 담는 `overrides` 키의 열 이름 — 원래 값의 키와 섞이지 않게. */
+export const appendKey = (key: string) => `${key}+`
+
 export const CUSTOM_PREFIX = 'c:'
 export const isCustomKey = (key: string) => key.startsWith(CUSTOM_PREFIX)
 

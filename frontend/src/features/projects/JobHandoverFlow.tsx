@@ -29,6 +29,7 @@ import ui from '@/shared/ui/ui.module.css'
 import { toDateInputValue } from '@/shared/utils/format'
 import { PmPickCell } from '@/features/jobs/TargetLanguages'
 import { DateTextInput } from '@/shared/ui/DateField'
+import { TimeInput } from '@/shared/ui/TimeInput'
 import { CcFavorites } from './CcFavorites'
 
 type Draft = {
@@ -289,7 +290,18 @@ function PickJobs(props: {
                     <td>
                       <div className={ui.hoDue}>
                         <DateTextInput ariaLabel={`${job.jobCode} 납기`} value={d.jobEday} disabled={saving} onChange={(v) => set({ jobEday: v })} />
-                        <input className={ui.input} type="time" aria-label={`${job.jobCode} 납기 시각`} style={{ width: 92 }} value={d.jobEdayTime} disabled={saving} onChange={(e) => set({ jobEdayTime: e.target.value })} />
+                        {/* 24시간 칸 ‹ › + 아래 12시·18시 (팀장님 2026-11-26) — 작업 등록 창의 납기 시각과 같은 부품. */}
+                        <div className={ui.hoTime}>
+                          <TimeInput ariaLabel={`${job.jobCode} 납기 시각`} value={d.jobEdayTime} disabled={saving} onChange={(v) => set({ jobEdayTime: v })} />
+                          <div className={ui.hoTimeBtns}>
+                            <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} disabled={saving} onClick={() => set({ jobEdayTime: '12:00' })}>
+                              12시
+                            </button>
+                            <button type="button" className={`${ui.btn} ${ui.btnGhost} ${ui.btnSm}`} disabled={saving} onClick={() => set({ jobEdayTime: '18:00' })}>
+                              18시
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </td>
                   </tr>

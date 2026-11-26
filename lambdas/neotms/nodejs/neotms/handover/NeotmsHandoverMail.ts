@@ -269,17 +269,14 @@ const choiceCells = (all: readonly string[], picked: readonly string[]): string 
     .join("");
 
 /**
- * `15:00:00` on a twelve-hour clock, without the meridiem - `3:00`.
+ * `15:00:00` becomes `15:00` - a 24-hour clock (팀장님 2026-11-26; it used to be `3:00`).
  *
- * The meridiem is NOT part of this string: the form carries 오전 and 오후 as two cells of their
- * own, and one of them is filled in. Printing it in both places would be the only thing on the
- * form that says the same thing twice, and the two could then disagree.
+ * The 오전/오후 cells of the form are still filled in from the same time, so the two can not disagree.
  */
-function twelveHour(time: string | null): string | null {
+function clock24(time: string | null): string | null {
   const match = /^(\d{2}):(\d{2})/.exec(time ?? "");
   if (!match) return null;
-  const hour = Number(match[1]) % 12;
-  return `${hour === 0 ? 12 : hour}:${match[2]}`;
+  return `${match[1]}:${match[2]}`;
 }
 
 /**
@@ -363,12 +360,12 @@ export function composeHandoverMail(
   const single = deadlines.length === 1 ? deadlines[0]! : null;
   const edayDay = single ? single.eday : (project.prjEday ?? "").trim();
   const edayTime = single ? single.time : project.prjEdayTime;
-  const clock = twelveHour(edayTime);
+  const clock = clock24(edayTime);
   const due =
     deadlines.length > 1
       ? deadlines
           .map((d) => {
-            const c = twelveHour(d.time);
+            const c = clock24(d.time);
             const when = `${shortDate(d.eday)}${c ? ` ${c}` : ""}`;
             return d.langs.length > 0 ? `${when} ${d.langs.join(", ")}` : when;
           })

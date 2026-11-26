@@ -1049,14 +1049,37 @@ export const PmArchiveInsertOps = (
   staffId: string,
   items: readonly { jobId: string | null; handoverAt: string | null; cells: unknown; rowStyle: unknown }[],
   actor: string,
-): SqlOps<number> => ({
+): SqlOps<string[]> => ({
   sql: `
     INSERT INTO pm_sheet_archive (staff_id, job_id, handover_at, cells, row_style, archived_by)
     SELECT :staff_id, NULLIF(x->>'jobId', '')::bigint, NULLIF(x->>'handoverAt', '')::timestamptz,
            COALESCE(x->'cells', '{}'::jsonb), COALESCE(x->'rowStyle', '{}'::jsonb), :actor
       FROM jsonb_array_elements(:items) AS x
+    RETURNING id
   `,
   parameters: [param("staff_id", staffId, "id"), param("items", items, "json"), param("actor", actor, "text")],
+  mapper: (rows) => rows.map((row) => readId(row, "id") ?? ""),
+});
+
+/** Undo an archive (2026-11-26): drop those archived rows (only this sheet's own). */
+export const PmArchiveDeleteOps = (staffId: string, ids: readonly string[]): SqlOps<number> => ({
+  sql: `
+    DELETE FROM pm_sheet_archive
+     WHERE staff_id = :staff_id AND id IN (SELECT x::bigint FROM jsonb_array_elements_text(:ids) AS x)
+    RETURNING id
+  `,
+  parameters: [param("staff_id", staffId, "id"), param("ids", ids, "json")],
+  mapper: (rows) => rows.length,
+});
+
+/** Undo an archive: put those jobs back on the live sheet. */
+export const PmRowsUnhideOps = (staffId: string, jobIds: readonly string[], actor: string): SqlOps<number> => ({
+  sql: `
+    UPDATE pm_sheet_row SET hidden = false, updated_at = now(), updated_by = :actor
+     WHERE staff_id = :staff_id AND job_id IN (SELECT x::bigint FROM jsonb_array_elements_text(:ids) AS x)
+    RETURNING job_id
+  `,
+  parameters: [param("staff_id", staffId, "id"), param("ids", jobIds, "json"), param("actor", actor, "text")],
   mapper: (rows) => rows.length,
 });
 

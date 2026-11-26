@@ -13,6 +13,8 @@ import css from './PmSheet.module.css'
 
 const STORE = 'neotms.pmArchive.collapsed'
 const MONTH_COLOR = '#FF6D01'
+/** 지난해의 월 라벨 — 올해 달과 다른 색 (팀장님 2026-11-26). */
+const PAST_MONTH_COLOR = '#3D85C6'
 const HALF_COLOR = '#5F6368'
 
 function readStored(): string[] | null {
@@ -116,7 +118,7 @@ export function ArchiveSheet(props: { staffId: string | null }) {
                   const isHalf = line.kind === 'half'
                   return (
                     <tr key={line.id} className={css.archiveLabel}>
-                      <td colSpan={columns.length} style={{ background: isHalf ? HALF_COLOR : MONTH_COLOR }}>
+                      <td colSpan={columns.length} style={{ background: isHalf ? HALF_COLOR : line.kind === 'month' && line.parent ? PAST_MONTH_COLOR : MONTH_COLOR }}>
                         <button
                           type="button"
                           className={css.archiveToggle}

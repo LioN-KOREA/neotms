@@ -193,6 +193,7 @@ import {
   orderPmRows,
   listPmArchive,
   archivePmRows,
+  undoArchivePmRows,
   lastPoPrice,
 } from "./pmsheet/NeotmsPmSheetManager.js";
 import {
@@ -203,6 +204,7 @@ import {
   PmPrefSchema,
   PmRowPatchSchema,
   PmArchiveSchema,
+  PmArchiveUndoSchema,
   PmRowOrderSchema,
   PmSeenSchema,
 } from "./pmsheet/NeotmsPmSheet.schemas.js";
@@ -820,6 +822,10 @@ const handleArchivePmRows: RRHandler = async (request) => {
   const parsed = parseBody(PmArchiveSchema, request.body);
   return parsed.ok ? archivePmRows(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
 };
+const handleUndoArchivePmRows: RRHandler = async (request) => {
+  const parsed = parseBody(PmArchiveUndoSchema, request.body);
+  return parsed.ok ? undoArchivePmRows(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
+};
 const handleLastPoPrice: RRHandler = async (request) => lastPoPrice(request);
 
 /*
@@ -1352,6 +1358,7 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: "/api/v0/pm-sheet/handovers/:id/answer", method: "POST", handler: handleAnswerHandover, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/archive", method: "GET", handler: handleListPmArchive, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/archive", method: "POST", handler: handleArchivePmRows, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/archive/undo", method: "POST", handler: handleUndoArchivePmRows, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/last-price", method: "GET", handler: handleLastPoPrice, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/translator-suggestions", method: "GET", handler: handleTranslatorSuggestions, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: `${PROJECTS}/:id/job-handovers`, method: "GET", handler: handleListProjectHandovers, permission: NEOTMS_PERMISSION_PROJECT_READ },
