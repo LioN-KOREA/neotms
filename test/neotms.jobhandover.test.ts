@@ -392,3 +392,66 @@ describe("2026-11-26 fixes", () => {
     expect(cell).toContain("setPending(next)");
   });
 });
+
+describe("language favourites inside the dropdown (2026-11-26)", () => {
+  it("every row has a star; no star button outside the field; all language pickers use LangCombo", () => {
+    const combo = read("frontend/src/shared/ui/LangCombo.tsx");
+    expect(combo).toContain("{o.star ? '★' : '☆'}");
+    expect(combo).toContain("useSaveLangFav()");
+    expect(combo).not.toContain("pinned?: readonly string[]");
+    const pickers = read("frontend/src/features/jobs/TargetLanguages.tsx");
+    expect(pickers).not.toContain("ui.langStar");
+    expect(pickers).not.toContain("pinned={");
+    for (const f of ["frontend/src/features/jobs/JobsView.tsx", "frontend/src/features/jobs/JobTypeSwapModal.tsx"]) {
+      expect(read(f)).not.toContain("domain={CODE_DOMAIN.LANG}");
+      expect(read(f)).toContain("<LangCombo");
+    }
+  });
+});
+
+describe("job form templates, menus and layout (2026-11-26)", () => {
+  const tl = () => read("frontend/src/features/jobs/TargetLanguages.tsx");
+  const form = () => read("frontend/src/features/jobs/JobFormModal.tsx");
+  it("template naming: customer·language, or customer·NL for two or more", () => {
+    const src = tl();
+    expect(src).toContain("targetNames.length === 1 ? targetNames[0]! : `${String(targetNames.length)}L`");
+    expect(src).toContain("cus ? `${cus}·${langs}` : langs");
+    expect(src).toContain("+ 현재 언어·PM 설정 저장");
+  });
+  it("template sits between the language pickers and the target table and replaces target rows", () => {
+    const f = form();
+    const pick = f.indexOf("<LanguagePickers");
+    const tpl = f.indexOf("<LangTemplates");
+    const table = f.indexOf("<TargetTable");
+    expect(pick).toBeGreaterThan(0);
+    expect(tpl).toBeGreaterThan(pick);
+    expect(table).toBeGreaterThan(tpl);
+    expect(f).toContain("updateTargets(\n      t.targets.map(");
+  });
+  it("name menu closes on outside click inside a modal (capture phase)", () => {
+    expect(tl()).toContain("window.addEventListener('mousedown', onDown, true)");
+  });
+  it("job name column is exactly half, like the date pair", () => {
+    expect(form()).toContain("gridTemplateColumns: 'calc(50% - 7px) repeat(4, minmax(0, 1fr))'");
+  });
+  it("project detail shows the path right after 분야", () => {
+    const d = read("frontend/src/features/projects/ProjectDetailView.tsx");
+    const field = d.indexOf('<span className={ui.detailLabel}>분야</span>');
+    const path = d.indexOf('<span className={ui.detailLabel}>경로</span>');
+    const updated = d.indexOf('<span className={ui.detailLabel}>최종 수정</span>');
+    expect(path).toBeGreaterThan(field);
+    expect(path).toBeLessThan(updated);
+  });
+});
+
+describe("PO form layout (2026-11-26)", () => {
+  it("job candidates show the start date; translator/work/type on one row; wider volume number", () => {
+    expect(read("frontend/src/features/purchaseorders/PoPickers.tsx")).toContain("`시작 ${formatDateField(toDateInputValue(r.jobSday))}`");
+    const f = read("frontend/src/features/purchaseorders/PurchaseOrderFormModal.tsx");
+    const row = f.indexOf("gridTemplateColumns: 'calc(50% - 7px) repeat(2, minmax(0, 1fr))'");
+    expect(row).toBeGreaterThan(0);
+    expect(f.indexOf("<PoTranslatorPicker")).toBeGreaterThan(row);
+    expect(f.indexOf('htmlFor="po-type"')).toBeGreaterThan(f.indexOf('htmlFor="po-work"'));
+    expect(f).toContain("${ui.inputRow} ${ui.volRow}");
+  });
+});

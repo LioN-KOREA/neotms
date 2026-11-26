@@ -3,6 +3,7 @@ import { useUpdateJob } from '@/apis/queries/neotms.mutation'
 import { CODE_DOMAIN, isLinguistic, unsetPlaceholder } from '@/apis/neotms.codes'
 import type { JobRow, JobUpdate } from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
+import { LangCombo } from '@/shared/ui/LangCombo'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
 import ui from '@/shared/ui/ui.module.css'
@@ -180,9 +181,9 @@ export function JobTypeSwapModal({ job, onClose, onSaved }: Props) {
             <label className={ui.label} htmlFor="jts-slang">
               출발어
             </label>
-            <CodeSelect
+            <LangCombo
               id="jts-slang"
-              domain={CODE_DOMAIN.LANG}
+              ariaLabel="출발어"
               value={slang}
               onChange={setSlang}
               placeholder={unsetPlaceholder(true, job.jobSlang)}
@@ -193,9 +194,9 @@ export function JobTypeSwapModal({ job, onClose, onSaved }: Props) {
             <label className={ui.label} htmlFor="jts-elang">
               도착어
             </label>
-            <CodeSelect
+            <LangCombo
               id="jts-elang"
-              domain={CODE_DOMAIN.LANG}
+              ariaLabel="도착어"
               value={elang}
               onChange={setElang}
               placeholder={unsetPlaceholder(true, job.jobElang)}

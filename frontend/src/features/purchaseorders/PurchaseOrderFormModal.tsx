@@ -580,56 +580,62 @@ export function PurchaseOrderFormModal({
           )}
         </div>
 
-        <div className={ui.fieldWide}>
-          <PoTranslatorPicker
-            value={translator}
-            disabled={pending}
-            onChange={(option) => {
-              setDirty(true)
-              setTranslator(option)
-              // 번역가에 따라 CAT 가중치가 바뀐다 — 물량도 다시 계산.
-              setForm((prev) => withCat(prev, prev.catWords, catWeightsFor(option?.title)))
-            }}
-          />
-        </div>
-
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-work">
-            작업 종류
-          </label>
-          <CodeSelect
-            id="po-work"
-            domain={CODE_DOMAIN.WORK}
-            value={form.poWorkCode}
-            onChange={(v) => set('poWorkCode', v)}
-            placeholder={unsetWork}
-          />
-        </div>
-
         {/*
-         * 업무 구분이 아래 칸들을 결정하므로 먼저 온다.
-         *
-         * 작업에서 가져온 값이 기본으로 보이지만(`value={poType}`), 고정이 아니다 — MICE 행사에
-         * 통역 발주를 내는 것이 정상이고, 그때 담당자는 여기서 '언어 및 통번역' 으로 바꾼다.
+         * 번역가 · 작업 종류 · 업무 구분 — 한 줄 (팀장님 2026-11-26). 번역가 폭은 아래 출발어 칸과 같은 절반
+         * (LanguagePickers 의 '1fr 1fr' + gap 14px), 나머지 절반을 작업 종류 · 업무 구분이 나눈다.
          */}
-        <div className={ui.field}>
-          <label className={ui.label} htmlFor="po-type">
-            업무 구분
-          </label>
+        <div className={ui.formRow} style={{ gridTemplateColumns: 'calc(50% - 7px) repeat(2, minmax(0, 1fr))' }}>
+          <div className={ui.field}>
+            <PoTranslatorPicker
+              value={translator}
+              disabled={pending}
+              onChange={(option) => {
+                setDirty(true)
+                setTranslator(option)
+                // 번역가에 따라 CAT 가중치가 바뀐다 — 물량도 다시 계산.
+                setForm((prev) => withCat(prev, prev.catWords, catWeightsFor(option?.title)))
+              }}
+            />
+          </div>
+
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="po-work">
+              작업 종류
+            </label>
+            <CodeSelect
+              id="po-work"
+              domain={CODE_DOMAIN.WORK}
+              value={form.poWorkCode}
+              onChange={(v) => set('poWorkCode', v)}
+              placeholder={unsetWork}
+            />
+          </div>
+
           {/*
-           * `placeholder={null}` 이 `unsetPlaceholder` 가 아닌 이유는 위 주석의 마지막 문단에
-           * 있다 — `value` 가 `poType` 이고 그 값은 비어 있을 수가 없다.
+           * 업무 구분이 아래 칸들을 결정하므로 먼저 온다.
+           *
+           * 작업에서 가져온 값이 기본으로 보이지만(`value={poType}`), 고정이 아니다 — MICE 행사에
+           * 통역 발주를 내는 것이 정상이고, 그때 담당자는 여기서 '언어 및 통번역' 으로 바꾼다.
            */}
-          <CodeSelect
-            id="po-type"
-            domain={CODE_DOMAIN.JOBTYPE}
-            value={poType}
-            onChange={(v) => set('poType', v)}
-            placeholder={null}
-          />
-          {!isEdit && form.poType.trim() === '' ? (
-            <span className={ui.hint}>작업의 업무 구분을 따릅니다. 바꿀 수 있습니다.</span>
-          ) : null}
+          <div className={ui.field}>
+            <label className={ui.label} htmlFor="po-type">
+              업무 구분
+            </label>
+            {/*
+             * `placeholder={null}` 이 `unsetPlaceholder` 가 아닌 이유는 위 주석의 마지막 문단에
+             * 있다 — `value` 가 `poType` 이고 그 값은 비어 있을 수가 없다.
+             */}
+            <CodeSelect
+              id="po-type"
+              domain={CODE_DOMAIN.JOBTYPE}
+              value={poType}
+              onChange={(v) => set('poType', v)}
+              placeholder={null}
+            />
+            {!isEdit && form.poType.trim() === '' ? (
+              <span className={ui.hint}>작업의 업무 구분을 따릅니다. 바꿀 수 있습니다.</span>
+            ) : null}
+          </div>
         </div>
 
         {/* 출발어 · 도착어 — 그 둘만 한 줄, 한 쌍만 (작업 등록 창과 같은 입력 방식, 팀장님 2026-11-25). */}
@@ -658,12 +664,13 @@ export function PurchaseOrderFormModal({
 
         {/* 물량 + CAT 분량 표. 표에 단어를 넣으면 합계가 물량이 되고 단위는 '단어' 로 고정된다. */}
         {linguistic ? (
-          <div className={ui.formRow} style={{ gridTemplateColumns: 'minmax(170px, 210px) 1fr' }}>
+          <div className={ui.formRow} style={{ gridTemplateColumns: 'minmax(180px, 220px) 1fr' }}>
             <div className={ui.field}>
               <label className={ui.label} htmlFor="po-volume">
                 물량
               </label>
-              <div className={ui.inputRow}>
+              {/* 숫자 칸을 넓게, 단위 드롭다운은 좁게 (팀장님 2026-11-26). */}
+              <div className={`${ui.inputRow} ${ui.volRow}`}>
                 <input
                   id="po-volume"
                   className={`${ui.input} ${ui.inputNum}`}

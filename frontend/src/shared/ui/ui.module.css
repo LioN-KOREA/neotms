@@ -2222,3 +2222,14 @@
 .mailHead { display: grid; gap: 4px; margin-bottom: 10px; font-size: 13px; }
 .mailHead > div > span { display: inline-block; width: 68px; color: #5f6368; }
 .mailFrame { width: 100%; height: 560px; border: 1px solid #dadce0; border-radius: 6px; background: #fff; }
+
+/* 언어 목록 줄 안의 즐겨찾기 별 (팀장님 2026-11-26) */
+.comboItem { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; }
+.comboLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comboStar { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #b0b6bf; font-size: 15px; line-height: 22px; cursor: pointer; }
+.comboStar:hover { background: rgba(236, 152, 32, 0.12); color: #EC9820; }
+.comboStarOn { color: #EC9820; }
+
+/* PO 물량: 숫자 칸 넓게, 단위 드롭다운 좁게 (팀장님 2026-11-26) */
+.volRow > .input { flex: 1 1 auto; }
+.volRow > .select { flex: 0 0 68px; width: 68px; min-width: 0; padding-left: 6px; padding-right: 18px; }

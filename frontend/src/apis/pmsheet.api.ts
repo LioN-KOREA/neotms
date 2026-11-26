@@ -120,6 +120,18 @@ export interface LangFav {
   tgt?: { code: string; label?: string | null }[]
   pmPresets?: { label: string; staffId: string; name: string }[]
   pairs?: { s: string; e: string; label?: string | null }[]
+  /** 언어·PM 템플릿 (팀장님 2026-11-26) — 출발어 + 도착어별 담당PM 을 한 번에. 나만 보는 개인 설정. */
+  templates?: LangTemplate[]
+}
+
+export interface LangTemplate {
+  id: string
+  /** 우클릭으로 바꾼 이름. 없으면 `auto`. */
+  label?: string | null
+  /** 저장할 때 만든 이름 — `고객사명·언어명` (도착어 둘 이상이면 `고객사명·23L`). */
+  auto: string
+  src: string
+  targets: { lang: string; pmId: string | null; pmName: string | null }[]
 }
 
 export interface PmPrefs {

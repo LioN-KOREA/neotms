@@ -12,7 +12,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CODE_DOMAIN } from '@/apis/neotms.codes'
 import { ASSIGNABLE_ATTRIBUTES } from '@/apis/neotms.types'
 import { useAssignableStaff, useCodeOptions } from '@/apis/queries/neotms.query'
-import { useMyPmPrefs, useSaveLangFav, type LangFav } from '@/apis/pmsheet.api'
+import { useMyPmPrefs, useSaveLangFav, type LangFav, type LangTemplate } from '@/apis/pmsheet.api'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { Modal } from '@/shared/ui/Modal'
 import { LangCombo } from '@/shared/ui/LangCombo'
@@ -66,25 +66,9 @@ export function LanguagePickers(props: {
 }) {
   const { fav, save, ready, failed } = useFav()
   const nameOf = useLangNames()
-  const langs = fav.langs ?? []
   const [pending, setPending] = useState('')
 
-  const toggleStar = (code: string) => {
-    if (!code) return
-    save({ ...fav, langs: langs.includes(code) ? langs.filter((x) => x !== code) : [...langs, code] })
-  }
-  const star = (code: string, which: string) => (
-    <button
-      type="button"
-      className={`${ui.btn} ${ui.btnGhost} ${ui.langStar} ${langs.includes(code) ? ui.langStarOn : ''}`}
-      disabled={props.disabled || !code || !ready}
-      title={langs.includes(code) ? `${which} 즐겨찾기 해제` : `${which} 즐겨찾기 (목록 맨 위로)`}
-      aria-pressed={langs.includes(code)}
-      onClick={() => toggleStar(code)}
-    >
-      {langs.includes(code) ? '★' : '☆'}
-    </button>
-  )
+  // 즐겨찾기 ☆ 는 언어 목록의 줄 안으로 옮겼다 (LangCombo, 팀장님 2026-11-26).
 
   return (
     <div className={ui.formRow} style={{ gridTemplateColumns: '1fr 1fr' }}>
@@ -92,10 +76,7 @@ export function LanguagePickers(props: {
         <label className={ui.label} htmlFor="job-slang">
           출발어
         </label>
-        <div className={ui.langRow}>
-          <LangCombo id="job-slang" ariaLabel="출발어" value={props.source} onChange={props.onSource} placeholder={props.sourcePlaceholder ?? null} pinned={langs} disabled={props.disabled} />
-          {star(props.source, '출발어')}
-        </div>
+        <LangCombo id="job-slang" ariaLabel="출발어" value={props.source} onChange={props.onSource} placeholder={props.sourcePlaceholder ?? null} disabled={props.disabled} />
         <Shortcuts
           title="출발어 바로가기"
           scope="src"
@@ -114,10 +95,7 @@ export function LanguagePickers(props: {
           <label className={ui.label} htmlFor="po-elang">
             도착어
           </label>
-          <div className={ui.langRow}>
-            <LangCombo id="po-elang" ariaLabel="도착어" value={props.target ?? ''} onChange={props.onTarget} placeholder="도착어 고르기" pinned={langs} disabled={props.disabled} />
-            {star(props.target ?? '', '도착어')}
-          </div>
+          <LangCombo id="po-elang" ariaLabel="도착어" value={props.target ?? ''} onChange={props.onTarget} placeholder="도착어 고르기" disabled={props.disabled} />
           <Shortcuts
             title="도착어 바로가기"
             scope="tgt"
@@ -135,9 +113,8 @@ export function LanguagePickers(props: {
           <label className={ui.label} htmlFor="job-elang-pick">
             도착어 <span className={ui.hint}>(여러 개 — 고르거나 바로가기를 누르면 아래 표에 바로 들어갑니다)</span>
           </label>
-          {/* 고르면 바로 표에 추가 — 칸은 비우지 않는다(옆 ☆ 로 즐겨찾기할 수 있게) (팀장님 2026-11-25). */}
-          <div className={ui.langRow}>
-            <LangCombo
+          {/* 고르면 바로 표에 추가 — 칸은 비우지 않는다 (팀장님 2026-11-25). */}
+          <LangCombo
               id="job-elang-pick"
               ariaLabel="도착어"
               value={pending}
@@ -146,11 +123,8 @@ export function LanguagePickers(props: {
                 if (code) props.onAddTarget?.(code)
               }}
               placeholder="도착어 고르기"
-              pinned={langs}
               disabled={props.disabled}
             />
-            {star(pending, '도착어')}
-          </div>
           <Shortcuts
             title="도착어 바로가기"
             scope="tgt"
@@ -233,8 +207,113 @@ function Shortcuts(props: {
   )
 }
 
+/* -------------------------------------------------------------------------- */
+/* 언어·PM 템플릿 (팀장님 2026-11-26)                                           */
+/* -------------------------------------------------------------------------- */
+
+/** 템플릿 단추의 기본 이름 — `고객사명·언어명`, 도착어가 둘 이상이면 `고객사명·23L`. 고객사가 없으면 뒷부분만. */
+function templateName(customer: string | null | undefined, targetNames: readonly string[]): string {
+  const langs = targetNames.length === 1 ? targetNames[0]! : `${String(targetNames.length)}L`
+  const cus = (customer ?? '').trim()
+  return cus ? `${cus}·${langs}` : langs
+}
+
+/**
+ * 작업 등록 창의 '언어·PM 템플릿' 줄. [+ 현재 언어·PM 설정 저장] 으로 지금의 출발어 · 도착어 · 도착어별
+ * 담당PM 을 단추로 저장하고, 단추를 누르면 그대로 채운다(표의 도착어 줄은 템플릿 내용으로 **바뀐다**).
+ * 우클릭: 이름 바꾸기 · 삭제. 나만 보는 개인 설정(`langFav.templates`).
+ */
+export function LangTemplates(props: {
+  source: string
+  targets: readonly { lang: string; pmId: string | null; pmName: string | null }[]
+  customer: string | null | undefined
+  onApply: (t: LangTemplate) => void
+  disabled?: boolean
+}) {
+  const { fav, save, ready } = useFav()
+  const nameOf = useLangNames()
+  const list = fav.templates ?? []
+  const [menu, setMenu] = useState<{ index: number; x: number; y: number } | null>(null)
+  const write = (next: LangTemplate[]) => save({ ...fav, templates: next })
+  const targets = props.targets.filter((t) => t.lang)
+  const canSave = ready && targets.length > 0 && !props.disabled
+  const labelOf = (t: LangTemplate) => t.label || t.auto
+
+  const add = () => {
+    if (!canSave) return
+    write([
+      ...list,
+      {
+        id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+        auto: templateName(props.customer, targets.map((t) => nameOf(t.lang))),
+        src: props.source,
+        targets: targets.map((t) => ({ lang: t.lang, pmId: t.pmId, pmName: t.pmName })),
+      },
+    ])
+  }
+  const describe = (t: LangTemplate) =>
+    `${t.src ? `${nameOf(t.src)} → ` : ''}${t.targets.map((x) => `${nameOf(x.lang)}${x.pmName ? `(${x.pmName})` : ''}`).join(', ')}`
+
+  return (
+    <div className={ui.langFavBar}>
+      <span className={ui.langFavTitle}>언어·PM 템플릿</span>
+      {list.map((t, i) => (
+        <button
+          key={t.id}
+          type="button"
+          className={ui.langChip}
+          disabled={props.disabled}
+          title={`${describe(t)} (우클릭: 이름 바꾸기·삭제)`}
+          onClick={() => props.onApply(t)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setMenu({ index: i, x: e.clientX, y: e.clientY })
+          }}
+        >
+          {labelOf(t)}
+        </button>
+      ))}
+      <button
+        type="button"
+        className={ui.langChipAdd}
+        disabled={!canSave}
+        title={targets.length > 0 ? '지금의 출발어 · 도착어 · 도착어별 담당PM 을 단추로 저장합니다' : '도착어를 먼저 고르세요'}
+        onClick={add}
+      >
+        + 현재 언어·PM 설정 저장
+      </button>
+      {menu && list[menu.index] ? (
+        <NameMenu
+          x={menu.x}
+          y={menu.y}
+          label={labelOf(list[menu.index]!)}
+          defaultHint="고객사명·언어명 으로"
+          onClose={() => setMenu(null)}
+          onRename={(label) => {
+            write(list.map((t, i) => (i === menu.index ? { ...t, label: label.trim() || null } : t)))
+            setMenu(null)
+          }}
+          onDelete={() => {
+            write(list.filter((_, i) => i !== menu.index))
+            setMenu(null)
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 /** 바로가기 단추 우클릭 — 이름 바꾸기(비우면 언어 이름) · 삭제. */
-function NameMenu(props: { x: number; y: number; label: string; onClose: () => void; onRename: (label: string) => void; onDelete: () => void }) {
+function NameMenu(props: {
+  x: number
+  y: number
+  label: string
+  onClose: () => void
+  onRename: (label: string) => void
+  onDelete: () => void
+  /** '기본 이름' 단추의 안내. */
+  defaultHint?: string
+}) {
   const [text, setText] = useState(props.label)
   const box = useRef<HTMLDivElement>(null)
   const { onClose } = props
@@ -242,8 +321,10 @@ function NameMenu(props: { x: number; y: number; label: string; onClose: () => v
     const onDown = (e: MouseEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) onClose()
     }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
+    // 캡처 단계에서 듣는다 — 모달이 mousedown 을 막아서(stopPropagation) 창 밖을 눌러도 닫히지 않던 문제
+    // (팀장님 2026-11-26).
+    window.addEventListener('mousedown', onDown, true)
+    return () => window.removeEventListener('mousedown', onDown, true)
   }, [onClose])
   return (
     <div ref={box} className={ui.langMenu} style={{ left: Math.min(props.x, window.innerWidth - 240), top: Math.min(props.y, window.innerHeight - 120) }} onContextMenu={(e) => e.preventDefault()}>
@@ -269,7 +350,7 @@ function NameMenu(props: { x: number; y: number; label: string; onClose: () => v
         <button type="button" className={`${ui.btn} ${ui.btnPrimary} ${ui.btnSm}`} onClick={() => props.onRename(text)}>
           이름 저장
         </button>
-        <button type="button" className={`${ui.btn} ${ui.btnSm}`} onClick={() => props.onRename('')} title="언어 이름으로">
+        <button type="button" className={`${ui.btn} ${ui.btnSm}`} onClick={() => props.onRename('')} title={props.defaultHint ?? '언어 이름으로'}>
           기본 이름
         </button>
         <span className={ui.spacer} />
@@ -464,7 +545,7 @@ export function TargetTable(props: {
               <div key={l.key} className={ui.tgLine}>
                 {cell(
                   editMode ? (
-                    <LangCombo ariaLabel="도착어" value={l.lang} onChange={(v) => update(l.key, { lang: v })} placeholder={props.langPlaceholder ?? null} pinned={fav.langs} disabled={disabled} />
+                    <LangCombo ariaLabel="도착어" value={l.lang} onChange={(v) => update(l.key, { lang: v })} placeholder={props.langPlaceholder ?? null} disabled={disabled} />
                   ) : (
                     <>
                       <span className={ui.tgLang}>{nameOf(l.lang)}</span>

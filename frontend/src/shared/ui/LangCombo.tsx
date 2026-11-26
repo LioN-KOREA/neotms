@@ -4,11 +4,14 @@
  * - 칸을 누르면 목록이 열린다. 언어명을 치면 그 글자가 들어간 언어로 좁혀진다(앞이 맞는 것 먼저).
  * - 맨 위 후보는 입력한 글자 뒤에 회색으로 미리 보이고, Tab 이나 Enter 로 확정한다.
  * - ▾ 단추는 전체 목록을 연다. ↑↓ 로 후보를 옮긴다. Esc 는 닫고 원래 값으로.
- * - 즐겨찾기(`pinned`) 언어는 목록 맨 위에 ★ 와 함께.
+ * - 즐겨찾기: 목록의 줄마다 오른쪽 끝에 별표(팀장님 2026-11-26). ☆ 를 누르면 즐겨찾기, ★ 를 누르면 해제 —
+ *   언어를 고르는 것과는 별개라 칸 값은 그대로이고, 목록도 닫히지 않는다. 즐겨찾기는 목록 맨 위로 바로
+ *   올라간다. 목록은 개인 설정(`prefs.view.langFav.langs`) 하나를 모든 언어 칸이 함께 쓴다.
  */
 import { useMemo, useRef, useState } from 'react'
 import { CODE_DOMAIN } from '@/apis/neotms.codes'
 import { useCodeOptions } from '@/apis/queries/neotms.query'
+import { useMyPmPrefs, useSaveLangFav } from '@/apis/pmsheet.api'
 import ui from './ui.module.css'
 
 type Opt = { value: string; label: string; star: boolean }
@@ -20,12 +23,18 @@ export function LangCombo(props: {
   onChange: (code: string) => void
   /** 빈 값 항목의 이름. null 이면 빈 값을 고를 수 없다. */
   placeholder?: string | null
-  pinned?: readonly string[]
   disabled?: boolean
 }) {
   const { options: raw } = useCodeOptions(CODE_DOMAIN.LANG, props.value)
-  const pinnedProp = props.pinned
-  const pinned = useMemo(() => pinnedProp ?? [], [pinnedProp])
+  const prefs = useMyPmPrefs()
+  const saveFav = useSaveLangFav()
+  const fav = prefs.data?.view?.langFav
+  const pinned = useMemo(() => fav?.langs ?? [], [fav])
+  const favReady = !prefs.isLoading && !prefs.isError
+  const toggleFav = (code: string) => {
+    if (!favReady) return
+    saveFav.mutate({ ...(fav ?? {}), langs: pinned.includes(code) ? pinned.filter((x) => x !== code) : [...pinned, code] })
+  }
   const options: Opt[] = useMemo(
     () => [
       ...pinned.flatMap((v) => raw.filter((o) => o.value === v).map((o) => ({ value: o.value, label: o.label, star: true }))),
@@ -155,7 +164,26 @@ export function LangCombo(props: {
               }}
               onMouseEnter={() => setActive(i)}
             >
-              {o ? `${o.star ? '★ ' : ''}${o.label}` : props.placeholder}
+              <span className={ui.comboLabel}>{o ? o.label : props.placeholder}</span>
+              {o ? (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  className={`${ui.comboStar} ${o.star ? ui.comboStarOn : ''}`}
+                  title={o.star ? '즐겨찾기 해제' : '즐겨찾기 (목록 맨 위로)'}
+                  aria-label={`${o.label} ${o.star ? '즐겨찾기 해제' : '즐겨찾기'}`}
+                  aria-pressed={o.star}
+                  disabled={!favReady}
+                  onMouseDown={(e) => {
+                    // 줄을 고르지도, 칸에서 포커스를 빼지도 않는다 — 별만 바뀐다.
+                    e.preventDefault()
+                    e.stopPropagation()
+                    toggleFav(o.value)
+                  }}
+                >
+                  {o.star ? '★' : '☆'}
+                </button>
+              ) : null}
             </div>
           ))}
         </div>

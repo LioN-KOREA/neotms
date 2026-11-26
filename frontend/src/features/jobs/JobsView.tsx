@@ -14,6 +14,7 @@ import {
 } from '@/apis/neotms.authorities'
 import { Amount } from '@/shared/ui/Amount'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
+import { LangCombo } from '@/shared/ui/LangCombo'
 import { ErrorNotice, LoadMore, SuccessNotice, TableState } from '@/shared/ui/Feedback'
 import { Icon } from '@/shared/ui/Icon'
 import { InlinePickerCell } from '@/shared/ui/InlineEditCell'
@@ -318,13 +319,12 @@ export function JobsView() {
                  * 돌려준다 — '영어' 로 저장된 작업을 'English' 로 찾으면 결과가 없고, 화면은
                  * "검색한 작업이 없습니다" 라고만 말한다. 찾는 사람은 작업이 없다고 결론 낸다.
                  */}
-                <CodeSelect
+                <LangCombo
                   id="jf-slang"
-                  domain={CODE_DOMAIN.LANG}
+                  ariaLabel="출발어"
                   value={draft.slang}
                   onChange={(v) => setDraft((p) => ({ ...p, slang: v }))}
                   placeholder="전체"
-                  silent
                 />
               </div>
 
@@ -332,13 +332,12 @@ export function JobsView() {
                 <label className={ui.label} htmlFor="jf-elang">
                   도착어
                 </label>
-                <CodeSelect
+                <LangCombo
                   id="jf-elang"
-                  domain={CODE_DOMAIN.LANG}
+                  ariaLabel="도착어"
                   value={draft.elang}
                   onChange={(v) => setDraft((p) => ({ ...p, elang: v }))}
                   placeholder="전체"
-                  silent
                 />
               </div>
             </>

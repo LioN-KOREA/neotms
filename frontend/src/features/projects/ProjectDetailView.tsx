@@ -736,17 +736,17 @@ export function ProjectDetailView() {
                   .join(' · ') || '-'}
               </span>
             </div>
+            {/* 경로 — 분야 옆 (팀장님 2026-11-26). */}
+            <div className={ui.detailItem}>
+              <span className={ui.detailLabel}>경로</span>
+              <span className={ui.detailValue}>
+                {project.prjPath ? <PathCopy path={project.prjPath} onCopied={() => setNotice('경로를 복사했습니다. 탐색기 주소창에 붙여 넣으세요.')} /> : '-'}
+              </span>
+            </div>
             <div className={ui.detailItem}>
               <span className={ui.detailLabel}>최종 수정</span>
               <span className={ui.detailValue}>{formatDateTime(project.updatedAt)}</span>
             </div>
-          </div>
-
-          <div className={ui.detailItem}>
-            <span className={ui.detailLabel}>경로</span>
-            <span className={ui.detailValue}>
-              {project.prjPath ? <PathCopy path={project.prjPath} onCopied={() => setNotice('경로를 복사했습니다. 탐색기 주소창에 붙여 넣으세요.')} /> : '-'}
-            </span>
           </div>
 
           {project.prjContent ? (

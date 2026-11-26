@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useJobs, useProfile, useTranslators } from '@/apis/queries/neotms.query'
 import type { JobRow, TranslatorRow } from '@/apis/neotms.types'
 import type { PickerOption } from '@/shared/ui/RecordPicker'
+import { formatDateField, toDateInputValue } from '@/shared/utils/format'
 import { SuggestPicker } from '@/shared/ui/SuggestPicker'
 
 /** 치는 동안 매번 서버에 묻지 않게 — 잠깐 멈추면 그때 찾는다. */
@@ -58,6 +59,8 @@ export function PoJobPicker(props: {
         mine.includes(r) ? `★ ${r.jobPmName ?? ''}` : (r.jobPmName ?? '담당PM 없음'),
         jobPair(r) || '-',
         r.workCode ?? '-',
+        // 작업 시작일 — yyyy-mm-dd(요일) (팀장님 2026-11-26).
+        r.jobSday ? `시작 ${formatDateField(toDateInputValue(r.jobSday))}` : '시작일 없음',
         scoped ? null : r.prjCode,
       ]
         .filter((x) => x !== null)

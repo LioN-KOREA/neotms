@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useCreateJob, useUpdateJob } from '@/apis/queries/neotms.mutation'
-import { useFxRate, useJobs, useProfile } from '@/apis/queries/neotms.query'
+import { useFxRate, useJobs, useProfile, useProject } from '@/apis/queries/neotms.query'
+import type { LangTemplate } from '@/apis/pmsheet.api'
 import { groupNumber, usePeekJobGroup } from '@/apis/jobGroup.api'
 import {
   CODE_DOMAIN,
@@ -20,7 +21,7 @@ import {
 } from '@/apis/neotms.types'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
 import { NumberInput } from '@/shared/ui/NumberInput'
-import { LanguagePickers, TargetTable } from './TargetLanguages'
+import { LangTemplates, LanguagePickers, TargetTable } from './TargetLanguages'
 import { centsText, faceVolume, fitBasis, planJobs, refreshFace, toCents, type PriceMode, type TargetLine } from './targetPricing'
 import { ErrorNotice, InfoNotice } from '@/shared/ui/Feedback'
 import { Modal } from '@/shared/ui/Modal'
@@ -302,6 +303,31 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
       }),
     ])
   }
+
+  /**
+   * 언어·PM 템플릿 적용 (팀장님 2026-11-26) — 출발어를 바꾸고, 도착어 줄은 템플릿 내용으로 **바꾼다**.
+   * 물량·단가는 담지 않으므로 새 줄은 빈 칸(단위·기준은 지금 첫 줄 것, 없으면 단어·250).
+   */
+  const applyTemplate = (t: LangTemplate) => {
+    const first = targets[0]
+    set('jobSlang', t.src)
+    updateTargets(
+      t.targets.map((x, i) =>
+        refreshFace({
+          ...EMPTY_LINE,
+          key: `${x.lang}-${String(Date.now())}-${String(i)}`,
+          lang: x.lang,
+          pmId: x.pmId,
+          pmName: x.pmName,
+          unit: first?.unit ?? '단어',
+          basis: first?.basis ?? '250',
+        }),
+      ),
+    )
+  }
+  // 템플릿 단추 이름의 고객사명.
+  const projectRow = useProject(project?.id ?? null)
+  const customerName = projectRow.data?.cusCodeName ?? job?.cusCodeName ?? null
 
   const suggestedSum = computeSum(form)
   const targetsSubtotal = (() => {
@@ -756,7 +782,8 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
 
 
         {/* 작업명(절반) · 작업 종류 · 진행 상태 · 업무 구분 — 한 줄 (팀장님 2026-11-25). */}
-        <div className={ui.formRow} style={{ gridTemplateColumns: '4fr 1fr 1fr 1fr 1fr' }}>
+        {/* 작업명 폭 = 아래 시작일 칸(날짜+시간)과 같은 절반 — 오른쪽 끝을 맞춘다 (팀장님 2026-11-26). datePair 의 gap 14px 의 절반을 뺀다. */}
+        <div className={ui.formRow} style={{ gridTemplateColumns: 'calc(50% - 7px) repeat(4, minmax(0, 1fr))' }}>
           <div className={ui.field}>
             <label className={`${ui.label} ${ui.required}`} htmlFor="job-name">
               작업명
@@ -949,6 +976,11 @@ export function JobFormModal({ job, fixedProject = null, onClose, onSaved }: Pro
          * 적어 넣었고, 그 행은 "1 단어 번역" 과 생긴 것이 같아졌다. 칸을 없애는 것이 그 관행을
          * 없애는 유일한 방법이다 — 비워 두라고 안내하는 것으로는 안 된다.
          */}
+        {/* 언어·PM 템플릿 — 바로가기와 언어별 설정 사이 (팀장님 2026-11-26). 등록 창에만. */}
+        {linguistic && !isEdit ? (
+          <LangTemplates source={form.jobSlang} targets={targets} customer={customerName} onApply={applyTemplate} disabled={pending} />
+        ) : null}
+
         {/* 언어별 설정 표 (팀장님 2026-11-25). 할인·총 합산은 아래 금액 줄로. */}
         {linguistic ? (
           <TargetTable

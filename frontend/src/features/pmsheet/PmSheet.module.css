@@ -284,12 +284,18 @@
   flex: none; margin-left: 3px; border: 1px solid #1a73e8; background: #e8f0fe; color: #1a73e8; border-radius: 3px;
   font-size: 10px; font-weight: 700; line-height: 14px; padding: 0 3px; cursor: pointer;
 }
+/*
+ * 날짜 칸의 ‹ › (하루 앞·뒤). 자리를 차지하지 않고 마우스를 올렸을 때만 칸 양끝에 겹쳐 뜬다 —
+ * 숨은 채로 자리를 잡으면 날짜 글자 양옆이 비어 '12/…' 로 잘렸다 (팀장님 2026-11-26).
+ */
 .stepBtn {
-  flex: none; visibility: hidden; border: 1px solid #c6cbd2; background: #fff; color: #333; border-radius: 3px;
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 1; display: none;
+  border: 1px solid #c6cbd2; background: #fff; color: #333; border-radius: 3px;
   width: 15px; line-height: 15px; padding: 0; font-size: 12px; cursor: pointer;
 }
-.stepNext { margin-left: auto; }
-.cellInner:hover .stepBtn { visibility: visible; }
+.stepBtn:not(.stepNext) { left: 1px; }
+.stepNext { right: 1px; }
+.cellInner:hover .stepBtn { display: block; }
 .stepBtn:hover { background: #e8f0fe; border-color: #1a73e8; }
 
 .confirmPop {
