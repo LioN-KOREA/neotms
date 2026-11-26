@@ -184,7 +184,8 @@ export function DateTextInput({
      * 저장하고 닫는다 — `type="button"` 을 빠뜨린 버튼과 같은 함정이다.
      */
     e.preventDefault()
-    onDone?.(commit())
+    const ok = commit() // 같은 이유 — 위 onBlur 주석.
+    onDone?.(ok)
   }
 
   return (
@@ -220,7 +221,13 @@ export function DateTextInput({
           tookFocus.current = false
           // Escape 로 버린 직후의 blur. 커밋도 통보도 하지 않는다 — 위 `cancelled` 주석.
           if (cancelled.current) return
-          onBlur?.(commit())
+          /*
+           * commit 을 **먼저** 부른다. onBlur 의 인자 자리에서 commit 을 부르면 onBlur 를 넘기지 않는 칸(작업 등록 창의
+           * 날짜 등)에서 `?.` 가 인자까지 건너뛰어 확정이 아예 일어나지 않는다 (팀장님 2026-11-26 — 1126
+           * 이 2026-11-26(목) 으로 안 바뀌던 원인).
+           */
+          const ok = commit()
+          onBlur?.(ok)
         }}
         onKeyDown={onKeyDown}
       />

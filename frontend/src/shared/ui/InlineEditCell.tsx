@@ -8,7 +8,7 @@ import {
 import type { CodeOption } from '@/apis/neotms.codes'
 import { DateTextInput } from '@/shared/ui/DateField'
 import { StatusChip } from '@/shared/ui/StatusChip'
-import { formatDate, toDateInputValue } from '@/shared/utils/format'
+import { formatDateField, toDateInputValue } from '@/shared/utils/format'
 import ui from '@/shared/ui/ui.module.css'
 
 /**
@@ -223,6 +223,17 @@ export function InlineDateCell({
 }) {
   const current = toDateInputValue(value)
   const [editing, setEditing] = useState(false)
+  /*
+   * 방금 확정한 날짜 — 저장이 돌아오기 전에도 새 날짜를 yyyy-mm-dd(요일) 로 보인다 (팀장님 2026-11-26:
+   * 1126 을 넣고 벗어나도 서식이 안 바뀐다는 지적). 들어오는 값이 바뀌면 버린다.
+   */
+  const [pending, setPending] = useState<string | null>(null)
+  const [seen, setSeen] = useState(current)
+  if (seen !== current) {
+    setSeen(current)
+    setPending(null)
+  }
+  const shown = pending ?? current
 
   const props = editing ? {} : openProps(() => setEditing(true), editable)
   return (
@@ -240,7 +251,10 @@ export function InlineDateCell({
              * 빈 값은 null 로 보낸다. 납기를 지우는 것은 정상 조작이고, 빈 문자열은 `date` 컬럼이
              * 받지 않는다.
              */
-            onChange={(next) => onCommit(next || null)}
+            onChange={(next) => {
+              setPending(next)
+              onCommit(next || null)
+            }}
             ariaLabel={ariaLabel}
             autoFocus
             /*
@@ -257,7 +271,7 @@ export function InlineDateCell({
           />
         }
       >
-        {formatDate(value)}
+        {shown ? formatDateField(shown) : '-'}
       </CellSwap>
     </td>
   )

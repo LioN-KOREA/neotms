@@ -5441,8 +5441,8 @@ describe("date defaults, bulk operations and in-place editing", () => {
      */
     const field = frontendCode("shared", "ui", "DateField.tsx");
     expect(field).toContain("onBlur?: (ok: boolean) => void");
-    expect(field).toContain("onBlur?.(commit())");
-    expect(field).toContain("onDone?.(commit())");
+    expect(field).toMatch(/const ok = commit\(\)\s+onBlur\?\.\(ok\)/);
+    expect(field).toMatch(/const ok = commit\(\)[^\n]*\n\s+onDone\?\.\(ok\)/);
 
     const cell = frontendCode("shared", "ui", "InlineEditCell.tsx");
     expect(cell).toContain("if (ok) setEditing(false)");

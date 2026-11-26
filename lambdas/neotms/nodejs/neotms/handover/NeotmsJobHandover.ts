@@ -27,6 +27,7 @@ import { ProjectGetOps } from "../projects/NeotmsProject.dbops.js";
 import type { JobHandoverInput } from "../neotms.schemas.js";
 import { createHandovers, type HandoverCreateResult } from "../pmsheet/NeotmsPmSheetManager.js";
 import { hiworksLogin, hiworksSendEmail } from "./HiworksClient.js";
+import { resolveHiworksCredentials } from "../hiworks/NeotmsHiworksManager.js";
 import type { HandoverJob } from "./NeotmsHandover.dbops.js";
 import { composeHandoverMail } from "./NeotmsHandoverMail.js";
 import { composeHandoverRemark } from "./handoverRemark.js";
@@ -130,10 +131,10 @@ export async function sendJobHandover(
         const names = [...new Set(noMail.map((j) => j.jobPmName ?? j.pmId ?? ""))];
         return badRequest(`이메일 주소가 등록되지 않은 담당PM 이 있습니다: ${names.join(", ")}. 직원 정보에 이메일을 넣거나 '인계' 만 눌러 주세요.`);
       }
-      const id = (input.hiworksId ?? "").trim();
-      const pw = input.hiworksPassword ?? "";
-      if (!id || !pw) return badRequest("메일을 보내려면 하이웍스 ID 와 비밀번호를 넣어 주세요.");
-      const signedIn = await hiworksLogin(id, pw);
+      // 입력한 계정이 있으면 그것, 없으면 내 정보에 저장한 계정 (진우님 resolver, 팀장님 2026-11-26).
+      const credentials = await resolveHiworksCredentials(caller, input);
+      if (!credentials.ok) return credentials.response;
+      const signedIn = await hiworksLogin(credentials.credentials.id, credentials.credentials.password);
       if (!signedIn.result) {
         const credentialProblem = signedIn.status === 200 || (signedIn.status >= 400 && signedIn.status < 500);
         return credentialProblem

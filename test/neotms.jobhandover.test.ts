@@ -372,3 +372,23 @@ describe("path in the screens", () => {
     expect(read("frontend/src/features/pmsheet/PmSheet.tsx")).toContain("📋 경로 복사");
   });
 });
+
+describe("2026-11-26 fixes", () => {
+  it("handover window uses the saved Hiworks account", () => {
+    expect(read("lambdas/neotms/nodejs/neotms/handover/NeotmsJobHandover.ts")).toContain("await resolveHiworksCredentials(caller, input)");
+    const flow = read("frontend/src/features/projects/JobHandoverFlow.tsx");
+    expect(flow).toContain("useHiworksCredential()");
+    expect(flow).toContain("...(withMail && !useStored ? { hiworksId: id.trim(), hiworksPassword } : {}),");
+  });
+  it("date fields commit even when no onBlur/onDone is passed (optional call must not skip commit)", () => {
+    const f = read("frontend/src/shared/ui/DateField.tsx");
+    expect(f).not.toContain("onBlur?.(commit())");
+    expect(f).not.toContain("onDone?.(commit())");
+    expect(f).toMatch(/const ok = commit\(\)\s+onBlur\?\.\(ok\)/);
+  });
+  it("inline date cells show yyyy-mm-dd(ddd) right after commit", () => {
+    const cell = read("frontend/src/shared/ui/InlineEditCell.tsx");
+    expect(cell).toContain("{shown ? formatDateField(shown) : '-'}");
+    expect(cell).toContain("setPending(next)");
+  });
+});

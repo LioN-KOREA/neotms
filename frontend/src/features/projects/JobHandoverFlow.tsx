@@ -16,7 +16,7 @@ import type { JobRow, JobUpdate } from '@/apis/neotms.types'
 import { HANDOVER_FORMATS, HANDOVER_LAYOUTS } from '@/apis/neotms.types'
 import { previewJobHandover, useSendJobHandover, type JobHandoverInput } from '@/apis/pmsheet.api'
 import { useUpdateJob } from '@/apis/queries/neotms.mutation'
-import { useCodeNames, useJobs, useProfile } from '@/apis/queries/neotms.query'
+import { useCodeNames, useHiworksCredential, useJobs, useProfile } from '@/apis/queries/neotms.query'
 import { groupNumber } from '@/apis/jobGroup.api'
 import { DETAIL_PAGE_SIZE } from '@/shared/config'
 import { CodeSelect } from '@/shared/ui/CodeSelect'
@@ -336,12 +336,20 @@ function HandoverInfo(props: {
   const [hiworksId, setHiworksId] = useState<string | null>(null)
   const [hiworksPassword, setHiworksPassword] = useState('')
   const id = hiworksId ?? profile?.mgrId ?? ''
+  /*
+   * 내 정보에 저장한 하이웍스 계정 (팀장님 2026-11-26). 있으면 두 칸을 감추고 그 계정으로 보낸다.
+   * '직접 입력' 은 이번만 다른 계정으로 — 예전 인계메일 창(진우님)과 같은 규칙.
+   */
+  const credential = useHiworksCredential()
+  const hasStored = (credential.data?.registered ?? false) && (credential.data?.vaultConfigured ?? false)
+  const [manual, setManual] = useState(false)
+  const useStored = hasStored && !manual
 
   const pms = [...new Set(props.jobs.map((j) => j.pmName).filter(Boolean))]
   const choicesOk = (formats.length > 0 || formatText.trim().length > 0) && (layouts.length > 0 || layoutText.trim().length > 0)
   const ccBad = cc.some((c) => !c.valid)
   const canHandover = choicesOk && !send.isPending
-  const canSend = canHandover && !ccBad && id.trim().length > 0 && hiworksPassword.length > 0
+  const canSend = canHandover && !ccBad && (useStored || (id.trim().length > 0 && hiworksPassword.length > 0))
 
   const inputOf = (withMail: boolean): JobHandoverInput => ({
     jobIds: props.jobs.map((j) => j.id),
@@ -353,7 +361,8 @@ function HandoverInfo(props: {
     path: path.trim(),
     cc: withMail ? cc.map((c) => c.email) : [],
     send: withMail,
-    ...(withMail ? { hiworksId: id.trim(), hiworksPassword } : {}),
+    // 저장된 계정으로 보낼 때는 ID·비밀번호를 아예 보내지 않는다 — 서버가 저장된 계정을 쓴다.
+    ...(withMail && !useStored ? { hiworksId: id.trim(), hiworksPassword } : {}),
   })
 
   /** [미리보기] — 보낼 메일을 서버가 그대로 만들어 준다. 저장·발송은 하지 않는다. */
@@ -486,9 +495,17 @@ function HandoverInfo(props: {
 
       <InfoNotice>
         <strong>인계·발송</strong> 때만 쓰입니다. 메일은 <strong>본인의 하이웍스 계정</strong>에서 발송되며, 보낸메일함에도 저장됩니다.
-        입력한 ID 와 비밀번호는 발송에 한 번 쓰이고 저장되지 않습니다.
+        {useStored ? ' 내 정보에 저장한 계정으로 보냅니다.' : ' 입력한 ID 와 비밀번호는 발송에 한 번 쓰이고 저장되지 않습니다.'}
       </InfoNotice>
-      <div className={ui.datePair}>
+      {useStored ? (
+        <div className={ui.filterNote}>
+          저장된 계정: <strong>{credential.data?.hiworksIdHint ?? '-'}</strong>
+          <button type="button" className={ui.btnLink} onClick={() => setManual(true)} disabled={busy}>
+            직접 입력
+          </button>
+        </div>
+      ) : (
+        <div className={ui.datePair}>
         <div className={ui.field}>
           <label className={ui.label} htmlFor="ho-id">하이웍스 ID</label>
           <input id="ho-id" className={ui.input} autoComplete="username" value={id} onChange={(e) => setHiworksId(e.target.value)} disabled={busy} />
@@ -498,6 +515,7 @@ function HandoverInfo(props: {
           <input id="ho-pw" className={ui.input} type="password" autoComplete="current-password" value={hiworksPassword} onChange={(e) => setHiworksPassword(e.target.value)} disabled={busy} />
         </div>
       </div>
+      )}
       {preview ? (
         <Modal title="인계 메일 미리보기" width={560} onClose={() => setPreview(null)} footer={<button type="button" className={ui.btn} onClick={() => setPreview(null)}>닫기</button>}>
           <div className={ui.mailHead}>
