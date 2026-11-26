@@ -22,6 +22,7 @@ import {
   type UncertainCompatible,
 } from '@silevis/reactgrid'
 import { FunnelIcon } from './menuIcons'
+import { PersonEditor } from './PersonEditor'
 import css from './PmSheet.module.css'
 
 export interface SheetCell extends Cell {
@@ -56,7 +57,16 @@ export interface SheetCell extends Cell {
   badge?: { text: string; title: string; onClick?: () => void }
   /** 마우스를 올리면 보이는 ‹ › (납품일 하루씩). */
   step?: { onPrev: () => void; onNext: () => void; title: string }
+  /** 고른 칸이면 ‹ › 를 늘 보인다 — 마우스를 옮기는 사이에 사라지지 않게 (팀장님 2026-11-26). */
+  stepShown?: boolean
+  /** 번역가·감수자 칸: 더블클릭하면 찾기 입력기 (팀장님 2026-11-26). */
+  person?: { jobId: string | null; which: 'tr' | 'rv' }
+  /** 입력기에서 목록으로 고른 번역가 id (고친 결과에 실려 시트로 간다). */
+  pickedId?: string | null
 }
+
+/** 한 번 클릭 목록(onQuickPick)을 더블클릭과 가르는 타이머 — 더블클릭이면 목록 대신 직접 입력. */
+let quickTimer = 0
 
 let datalistSeq = 0
 
@@ -128,7 +138,7 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
         </a>
       ) : (
         <span
-          className={css.cellText}
+          className={`${css.cellText} ${cell.badge ? css.cellTextFit : ''}`}
           style={
             cell.wrap === 'wrap'
               ? { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', textOverflow: 'clip' }
@@ -158,8 +168,11 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
             cell.onQuickPick
               ? (e) => {
                   // 끌어서 범위를 고른 것이 아니라 한 칸을 누른 것일 때만 (click 은 같은 칸에서 떼야 생긴다).
+                  // 두 번째 클릭(더블클릭)이면 목록을 열지 않는다 — 더블클릭은 직접 입력.
+                  window.clearTimeout(quickTimer)
+                  if (e.detail > 1) return
                   const r = e.currentTarget.getBoundingClientRect()
-                  cell.onQuickPick?.(r.left, r.bottom)
+                  quickTimer = window.setTimeout(() => cell.onQuickPick?.(r.left, r.bottom), 230)
                 }
               : undefined
           }
@@ -167,7 +180,7 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
           {cell.step ? (
             <button
               type="button"
-              className={css.stepBtn}
+              className={`${css.stepBtn} ${cell.stepShown ? css.stepOn : ''}`}
               title={`${cell.step.title} 하루 앞으로`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -197,7 +210,7 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
           {cell.step ? (
             <button
               type="button"
-              className={`${css.stepBtn} ${css.stepNext}`}
+              className={`${css.stepBtn} ${css.stepNext} ${cell.stepShown ? css.stepOn : ''}`}
               title={`${cell.step.title} 하루 뒤로`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -228,6 +241,17 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
     }
 
     const initial = cell.raw ?? cell.text
+    if (cell.person) {
+      return (
+        <PersonEditor
+          initial={initial}
+          jobId={cell.person.jobId}
+          which={cell.person.which}
+          onCommit={(name, id) => onCellChanged(this.getCompatibleCell({ ...cell, text: name, raw: name, pickedId: id }), true)}
+          onCancel={() => onCellChanged(cell, false)}
+        />
+      )
+    }
     if (cell.choices && !cell.free) {
       return (
         <select

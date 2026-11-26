@@ -16,6 +16,8 @@ import { composeHandoverMail } from "../lambdas/neotms/nodejs/neotms/handover/Ne
 import { JobHandoverSchema } from "../lambdas/neotms/nodejs/neotms/neotms.schemas";
 import { parseEmailChip, parseEmailList } from "../frontend/src/shared/ui/emailChipParse";
 import { DEFAULT_COLUMN_STYLES } from "../frontend/src/features/pmsheet/columnDefaults";
+import { archiveLines, visibleLines, defaultCollapsed, kstYearMonth } from "../frontend/src/features/pmsheet/archiveModel";
+import { PmArchiveSchema, PmRowPatchSchema } from "../lambdas/neotms/nodejs/neotms/pmsheet/NeotmsPmSheet.schemas";
 import { handoverStamp, latestHandoverByJob, tidyNumber } from "../frontend/src/features/projects/handoverState";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -453,5 +455,81 @@ describe("PO form layout (2026-11-26)", () => {
     expect(f.indexOf("<PoTranslatorPicker")).toBeGreaterThan(row);
     expect(f.indexOf('htmlFor="po-type"')).toBeGreaterThan(f.indexOf('htmlFor="po-work"'));
     expect(f).toContain("${ui.inputRow} ${ui.volRow}");
+  });
+});
+
+describe("완료 업무 sheet grouping (2026-11-26)", () => {
+  const row = (id: string, at: string) => ({ id, handoverAt: at, archivedAt: "2026-11-26T00:00:00Z" });
+  const rows = [
+    row("3", "2026-03-04T02:00:00Z"),
+    row("1", "2025-02-11T01:00:00Z"),
+    row("2", "2025-08-14T01:00:00Z"),
+    row("4", "2026-03-25T05:00:00Z"),
+    row("5", "2025-06-30T16:00:00Z"), // = 2025-07-01 KST
+  ];
+  it("reads the month in Korean time", () => {
+    expect(kstYearMonth("2025-06-30T16:00:00Z")).toEqual({ year: 2025, month: 7 });
+  });
+  it("past years get half-year labels above month labels; this year months only", () => {
+    const lines = archiveLines(rows, 2026);
+    const labels = lines.filter((l) => l.kind !== "row").map((l) => ("label" in l ? l.label : ""));
+    expect(labels).toEqual(["2025년 상반기", "2025년 02월", "2025년 하반기", "2025년 07월", "2025년 08월", "2026년 03월"]);
+    const march = lines.find((l) => l.kind === "month" && l.label === "2026년 03월");
+    expect(march && march.kind === "month" ? [march.count, march.parent] : null).toEqual([2, null]);
+    expect(lines.filter((l) => l.kind === "row").map((l) => (l.kind === "row" ? l.row.id : ""))).toEqual(["1", "5", "2", "3", "4"]);
+  });
+  it("collapsing a half hides its months and rows; past halves start collapsed", () => {
+    const lines = archiveLines(rows, 2026);
+    const shut = defaultCollapsed(lines);
+    expect([...shut].sort()).toEqual(["h:2025-1", "h:2025-2"]);
+    const shown = visibleLines(lines, shut);
+    expect(shown.map((l) => l.kind)).toEqual(["half", "half", "month", "row", "row"]);
+  });
+});
+
+describe("work sheet: translator group, PO buttons, task menu, archive (2026-11-26)", () => {
+  const sheet = () => read("frontend/src/features/pmsheet/PmSheet.tsx");
+  const model = () => read("frontend/src/features/pmsheet/sheetModel.ts");
+  it("row fields accept the translator group; archive schema accepts snapshots", () => {
+    expect(v.safeParse(PmRowPatchSchema, { jobId: "1", fields: { translator: "홍길동", trFor: "", trTid: "5" } }).success).toBe(true);
+    expect(v.safeParse(PmRowPatchSchema, { jobId: "1", fields: { nope: "x" } }).success).toBe(false);
+    expect(v.safeParse(PmArchiveSchema, { items: [{ jobId: null, handoverAt: null, cells: { remark: { t: "끝" } } }] }).success).toBe(true);
+  });
+  it("sheet values count only while bound to the current PO; buttons follow it", () => {
+    const m = model();
+    expect(m).toContain("(row.fields[`${group}For`] ?? '') === (poOfGroup(row, group)?.poId ?? '') ? value : undefined");
+    expect(m).toContain("return sheetOverride(row, key) ?? (row.tr ? '발행' : '-')");
+    expect(sheet()).toContain("{ issue: '발행', change: '변경', view: '보기' }[personAction(");
+    expect(sheet()).toContain("void navigate(`/projects/${encodeURIComponent(row.projectId)}`, { state: { poAction } })");
+  });
+  it("column labels T·PO / E·PO / T·시간 / E·시간 / D·시간", () => {
+    const c = read("frontend/src/features/pmsheet/sheetColumns.ts");
+    for (const label of ["'T·PO'", "'E·PO'", "'T·시간'", "'E·시간'", "'D·시간'"]) expect(c).toContain(`label: ${label}`);
+  });
+  it("task: one click opens work codes (updates the job), double click / 직접 입력 stays on the sheet", () => {
+    const s = sheet();
+    expect(s).toContain("await updateJob.mutateAsync({ id: r.jobId, input: { workCode: code } })");
+    expect(s).toContain("✎ 직접 입력…");
+    expect(read("frontend/src/features/pmsheet/sheetCells.tsx")).toContain("if (e.detail > 1) return");
+  });
+  it("archiving asks with a custom dialog and moves 납품 완료 rows (job and free rows)", () => {
+    const s = sheet();
+    expect(s).toContain('message="완료된 업무를 완료 업무 시트로 보내시겠습니까?"');
+    expect(s).toContain("const archiveFrees = freeRows.filter((f) => (f.values.pmState ?? '').trim() === DONE_STATE)");
+    expect(read("frontend/src/features/pmsheet/PmSheetView.tsx")).toContain("['archive', '완료 업무']");
+  });
+  it("project page opens the PO form from the sheet's state", () => {
+    expect(read("frontend/src/features/projects/ProjectDetailView.tsx")).toContain("draft={poDraft}");
+    expect(read("frontend/src/features/purchaseorders/PurchaseOrderFormModal.tsx")).toContain("fetchLastPoPrice({ translatorId: priceFor");
+  });
+});
+
+describe("handover group list: select groups and expand (2026-11-26)", () => {
+  it("group checkbox selects every job of the group; + expands indented job rows", () => {
+    const f = read("frontend/src/features/projects/JobHandoverFlow.tsx");
+    expect(f).toContain("<GroupList jobs={jobs} draft={draft} checked={checked} setChecked={setChecked} />");
+    expect(f).toContain("onChange={() => setMany(ids, !full)}");
+    expect(f).toContain("if (el) el.indeterminate = on > 0 && !full");
+    expect(f).toContain("className={`${ui.hoChild} ${sel ? '' : ui.hoOff}`}");
   });
 });

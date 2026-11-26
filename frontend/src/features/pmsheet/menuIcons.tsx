@@ -56,6 +56,8 @@ export const TOOL_ICONS = {
   unmerge: tool(<><path d="M3 9h5l2-5h5" /><path d="M8 9l2 5h5" /><path d="M13 2l2 2-2 2" /><path d="M13 12l2 2-2 2" /></>),
   /** 행 빼기: 줄에 빼기 */
   hide: tool(<><rect x="2.5" y="5.5" width="13" height="7" rx="1" /><path d="M6.5 9h5" /></>),
+  /** 아카이빙: 보관 상자 (팀장님 2026-11-26) */
+  archive: tool(<><rect x="2" y="3" width="14" height="4" rx="1" /><path d="M3.5 7v7.5h11V7" /><path d="M7 10h4" /></>),
   /** 필터 저장: 별 */
   favSave: tool(<path d="M9 2.5l1.9 4 4.3.5-3.2 3 .9 4.3L9 12.2l-3.9 2.1.9-4.3-3.2-3 4.3-.5z" />),
   /** 필터 해제: 깔때기에 × */

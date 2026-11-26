@@ -1010,3 +1010,100 @@ export const PendingRehandoverOps = (staffId: string, jobId: string): SqlOps<str
   parameters: [param("staff_id", staffId, "id"), param("job_id", jobId, "id")],
   mapper: (rows) => (rows[0] ? readId(rows[0], "id") : null),
 });
+
+/* -------------------------------------------------------------------------- */
+/* 완료 업무 (db/016)                                                          */
+/* -------------------------------------------------------------------------- */
+
+export type PmArchiveRow = {
+  id: string;
+  jobId: string | null;
+  handoverAt: string | null;
+  cells: Record<string, { t: string; s?: Record<string, unknown> }>;
+  rowStyle: Record<string, unknown>;
+  archivedAt: string;
+};
+
+export const PmArchiveRowsOps = (staffId: string): SqlOps<PmArchiveRow[]> => ({
+  sql: `
+    SELECT id, job_id, handover_at, cells, row_style, archived_at
+      FROM pm_sheet_archive
+     WHERE staff_id = :staff_id
+     ORDER BY COALESCE(handover_at, archived_at), id
+     LIMIT 20000
+  `,
+  parameters: [param("staff_id", staffId, "id")],
+  mapper: (rows) =>
+    rows.map((row) => ({
+      id: readId(row, "id") ?? "",
+      jobId: readId(row, "job_id"),
+      handoverAt: readTs(row, "handover_at"),
+      cells: readJson<PmArchiveRow["cells"]>(row, "cells", {}),
+      rowStyle: readJson<Record<string, unknown>>(row, "row_style", {}),
+      archivedAt: readTs(row, "archived_at") ?? "",
+    })),
+});
+
+/** Insert archived rows (one statement, a JSON array of rows). */
+export const PmArchiveInsertOps = (
+  staffId: string,
+  items: readonly { jobId: string | null; handoverAt: string | null; cells: unknown; rowStyle: unknown }[],
+  actor: string,
+): SqlOps<number> => ({
+  sql: `
+    INSERT INTO pm_sheet_archive (staff_id, job_id, handover_at, cells, row_style, archived_by)
+    SELECT :staff_id, NULLIF(x->>'jobId', '')::bigint, NULLIF(x->>'handoverAt', '')::timestamptz,
+           COALESCE(x->'cells', '{}'::jsonb), COALESCE(x->'rowStyle', '{}'::jsonb), :actor
+      FROM jsonb_array_elements(:items) AS x
+  `,
+  parameters: [param("staff_id", staffId, "id"), param("items", items, "json"), param("actor", actor, "text")],
+  mapper: (rows) => rows.length,
+});
+
+/** Take archived jobs off the live sheet (the same flag as "remove from sheet"). */
+export const PmRowsHideOps = (staffId: string, jobIds: readonly string[], actor: string): SqlOps<number> => ({
+  sql: `
+    INSERT INTO pm_sheet_row (staff_id, job_id, hidden, updated_at, updated_by)
+    SELECT :staff_id, x::bigint, true, now(), :actor FROM jsonb_array_elements_text(:ids) AS x
+    ON CONFLICT (staff_id, job_id) DO UPDATE SET hidden = true, updated_at = now(), updated_by = :actor
+  `,
+  parameters: [param("staff_id", staffId, "id"), param("ids", jobIds, "json"), param("actor", actor, "text")],
+  mapper: (rows) => rows.length,
+});
+
+/**
+ * The latest unit price this translator was paid for the same language pair and work (2026-11-26) -
+ * what the sheet's [발행] fills into a new PO when there is one. Null when nothing matches.
+ */
+export const LastPoPriceOps = (
+  translatorId: string,
+  slang: string | null,
+  elang: string | null,
+  workCode: string | null,
+): SqlOps<{ price: string; unit: string | null; coin: string | null } | null> => ({
+  sql: `
+    SELECT pdl.po_price, pdl.po_unit_code, po.po_coin_code
+      FROM purchase_order po
+      JOIN po_detail_linguistic pdl ON pdl.po_id = po.id
+     WHERE po.deleted = false
+       AND po.translator_id = :translator_id
+       AND pdl.po_price IS NOT NULL
+       AND pdl.po_slang IS NOT DISTINCT FROM :slang
+       AND pdl.po_elang IS NOT DISTINCT FROM :elang
+       AND (CAST(:work_code AS text) IS NULL OR po.po_work_code IS NOT DISTINCT FROM :work_code)
+     ORDER BY po.id DESC
+     LIMIT 1
+  `,
+  parameters: [
+    param("translator_id", translatorId, "id"),
+    param("slang", slang, "text"),
+    param("elang", elang, "text"),
+    param("work_code", workCode, "text"),
+  ],
+  mapper: (rows) => {
+    const row = rows[0];
+    if (!row) return null;
+    const price = readNum(row, "po_price");
+    return price === null ? null : { price, unit: readText(row, "po_unit_code"), coin: readText(row, "po_coin_code") };
+  },
+});

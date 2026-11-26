@@ -342,6 +342,7 @@ export const pmKeys = {
   notices: ['workspace', 'pm', 'notices'] as const,
   project: (id: string) => ['workspace', 'pm', 'project', id] as const,
   suggestions: (jobId: string) => ['workspace', 'pm', 'suggest', jobId] as const,
+  archive: (staffId: string | null) => ['workspace', 'pm', 'archive', staffId ?? 'me'] as const,
 }
 
 /** 내 개인 설정 문서들 (시트 없이). 시트 밖 화면(작업 등록의 언어 즐겨찾기)이 쓴다. */
@@ -453,4 +454,52 @@ export function useReadNotices() {
     mutationFn: (ids: string[] | null) => readNotices(ids),
     onSuccess: () => void qc.invalidateQueries({ queryKey: pmKeys.notices }),
   })
+}
+
+/* -------------------------------------------------------------------------- */
+/* 완료 업무 (db/016) · 발행 단가 (팀장님 2026-11-26)                            */
+/* -------------------------------------------------------------------------- */
+
+export interface PmArchiveCell {
+  /** 옮길 때 보이던 글자. */
+  t: string
+  s?: PmStyle
+}
+
+export interface PmArchiveRow {
+  id: string
+  jobId: string | null
+  handoverAt: string | null
+  cells: Record<string, PmArchiveCell>
+  rowStyle: PmStyle
+  archivedAt: string
+}
+
+export interface PmArchiveItem {
+  jobId: string | null
+  handoverAt: string | null
+  cells: Record<string, PmArchiveCell>
+  rowStyle?: PmStyle
+}
+
+export const fetchPmArchive = (staffId: string | null, signal?: AbortSignal) =>
+  neotmsApi<PmArchiveRow[]>(`/api/v0/pm-sheet/archive${qs(staffId)}`, { signal })
+
+export const archivePmRows = (staffId: string | undefined, items: PmArchiveItem[], alsoHide: string[]) =>
+  neotmsApi<{ archived: number }>('/api/v0/pm-sheet/archive', { method: 'POST', body: { staffId, items, alsoHide } })
+
+export function usePmArchive(staffId: string | null) {
+  return useQuery({
+    queryKey: pmKeys.archive(staffId),
+    queryFn: ({ signal }) => fetchPmArchive(staffId, signal),
+  })
+}
+
+/** 이 번역가가 같은 언어쌍·같은 작업 종류로 받은 가장 최근 단가 (없으면 null). */
+export const fetchLastPoPrice = (q: { translatorId: string; slang?: string | null; elang?: string | null; workCode?: string | null }) => {
+  const params = new URLSearchParams({ translatorId: q.translatorId })
+  if (q.slang) params.set('slang', q.slang)
+  if (q.elang) params.set('elang', q.elang)
+  if (q.workCode) params.set('workCode', q.workCode)
+  return neotmsApi<{ price: string; unit: string | null; coin: string | null } | null>(`/api/v0/pm-sheet/last-price?${params.toString()}`)
 }

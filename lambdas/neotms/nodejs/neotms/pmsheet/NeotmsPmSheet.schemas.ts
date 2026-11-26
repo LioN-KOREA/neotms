@@ -33,7 +33,19 @@ export const PM_STATES = [
 ] as const;
 
 /** Sheet-only values of fixed columns. Anything else is refused rather than stored silently. */
-export const PM_ROW_FIELDS = ["task", "remark", "backup", "path"] as const;
+/**
+ * Row values the sheet keeps itself. Besides the free columns: the translator / reviewer group
+ * (2026-11-26) - what the PM wrote BEFORE a PO exists (name, volume, due date, the PO cell), or a
+ * different person on an issued PO (shown with '변경'). `trFor` / `rvFor` is the PO id those values
+ * were written against ('' = no PO): they count only while the job's current PO is still that one,
+ * so issuing, swapping or cancelling a PO makes the PO's own values show again. `trTid` / `rvTid`
+ * is the translator id when the name was picked from the list.
+ */
+export const PM_ROW_FIELDS = [
+  "task", "remark", "backup", "path",
+  "translator", "trVolume", "trPo", "trEday", "trTime", "trFor", "trTid",
+  "reviewer", "rvVolume", "rvPo", "rvEday", "rvTime", "rvFor", "rvTid",
+] as const;
 
 const Colour = v.pipe(v.string(), v.regex(/^#[0-9A-Fa-f]{6}$/, "must be a colour like #FF9900"));
 
@@ -158,7 +170,32 @@ export const PmNoticesReadSchema = v.object({
   ids: v.optional(v.nullable(v.pipe(v.array(IdSchema), v.maxLength(200)))),
 });
 
+/**
+ * '완료 업무' 아카이빙 (db/016) - rows as the sheet showed them. A job row names its job (it leaves the
+ * live sheet); a free row has no job. `alsoHide` = rows merged into an archived row.
+ */
+export const PmArchiveSchema = v.object({
+  ...SheetOwner,
+  items: v.pipe(
+    v.array(
+      v.object({
+        jobId: v.optional(v.nullable(IdSchema)),
+        handoverAt: v.optional(v.nullable(v.pipe(v.string(), v.maxLength(40)))),
+        cells: v.pipe(
+          v.record(ColKey, v.object({ t: v.pipe(v.string(), v.maxLength(4000)), s: v.optional(PmStyleSchema) })),
+          v.check((value) => JSON.stringify(value).length <= 60_000, "row is too large"),
+        ),
+        rowStyle: v.optional(PmStyleSchema),
+      }),
+    ),
+    v.minLength(1),
+    v.maxLength(2000),
+  ),
+  alsoHide: v.optional(v.pipe(v.array(IdSchema), v.maxLength(2000))),
+});
+
 export type PmRowPatch = v.InferOutput<typeof PmRowPatchSchema>;
+export type PmArchiveInput = v.InferOutput<typeof PmArchiveSchema>;
 export type PmCellsInput = v.InferOutput<typeof PmCellsSchema>;
 export type PmPrefInput = v.InferOutput<typeof PmPrefSchema>;
 export type PmHandoverCreate = v.InferOutput<typeof PmHandoverCreateSchema>;

@@ -121,6 +121,9 @@
   display: flex; align-items: center; gap: 4px; width: 100%; height: 100%; padding: 0 5px; position: relative; overflow: hidden;
 }
 .cellText { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 행ID 의 M — 숫자 바로 뒤에 붙인다 (팀장님 2026-11-26). */
+.cellTextFit { flex: 0 1 auto; }
+.cellTextFit + .badgeBtn { margin-left: -2px; }
 .placeholder { color: #9aa3ae; font-style: normal; }
 .cellLink { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1a73e8; text-decoration: underline; }
 .cellInput { width: 100%; height: 100%; border: none; outline: none; padding: 0 5px; font: inherit; font-size: calc(13px * var(--pm-zoom, 1)); }
@@ -289,13 +292,14 @@
  * 숨은 채로 자리를 잡으면 날짜 글자 양옆이 비어 '12/…' 로 잘렸다 (팀장님 2026-11-26).
  */
 .stepBtn {
-  position: absolute; top: 50%; transform: translateY(-50%); z-index: 1; display: none;
+  position: absolute; top: 1px; bottom: 1px; z-index: 2; display: none;
   border: 1px solid #c6cbd2; background: #fff; color: #333; border-radius: 3px;
-  width: 15px; line-height: 15px; padding: 0; font-size: 12px; cursor: pointer;
+  width: 17px; padding: 0; font-size: 13px; line-height: 1; cursor: pointer;
 }
 .stepBtn:not(.stepNext) { left: 1px; }
 .stepNext { right: 1px; }
-.cellInner:hover .stepBtn { display: block; }
+/* 칸에 마우스를 올렸을 때, 그리고 고른 칸이면 늘 (팀장님 2026-11-26: 단추로 가는 사이에 사라지던 문제). */
+.cellInner:hover .stepBtn, .stepBtn:hover, .stepBtn.stepOn { display: block; }
 .stepBtn:hover { background: #e8f0fe; border-color: #1a73e8; }
 
 .confirmPop {
@@ -428,3 +432,39 @@
 .borderSwatchOn { outline: 2px solid #1a73e8; outline-offset: 1px; }
 .borderWeightOpt { display: flex; align-items: center; width: 100%; height: 22px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; cursor: pointer; color: #333; }
 .borderWeightOpt:hover { background: #f1f3f4; }
+
+/* 번역가·감수자 찾기 입력기 (팀장님 2026-11-26) */
+.personWrap { position: relative; width: 100%; height: 100%; }
+.personGhost {
+  position: absolute; inset: 0; display: flex; align-items: center; padding: 0 5px; pointer-events: none;
+  color: #9aa3ae; white-space: pre; overflow: hidden; font-size: calc(13px * var(--pm-zoom, 1));
+}
+.personTab { margin-left: 6px; border: 1px solid #c6cbd2; border-radius: 3px; font-size: 10px; padding: 0 3px; line-height: 14px; color: #6b7280; }
+.personList {
+  position: fixed; z-index: 80; max-height: 280px; overflow: auto; background: #fff; border: 1px solid #d6dae0;
+  border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14); font-size: 12.5px;
+}
+.personHead { padding: 6px 10px; border-bottom: 1px solid #eceef1; color: #5f6368; font-size: 11.5px; font-weight: 600; }
+.personEmpty { padding: 8px 10px; color: #6b7280; }
+.personItem {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 6px 10px; border: none;
+  border-top: 1px solid #f3f4f6; background: #fff; cursor: pointer; text-align: left; font: inherit; color: inherit;
+}
+.personItemOn, .personItem:hover { background: #f1f6fe; }
+
+.taskFree { width: calc(100% - 8px); margin: 4px; padding: 4px 6px; border: 1px solid #c6cbd2; border-radius: 4px; font: inherit; font-size: 12.5px; }
+
+/* 완료 업무 시트 (팀장님 2026-11-26) */
+.archivePane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.archiveBar { flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--border, #e3e6ea); background: #fafbfc; }
+.archiveScroll { flex: 1; min-height: 0; overflow: auto; }
+.archiveTable { border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.archiveTable th, .archiveTable td { border: 1px solid #e3e6ea; padding: 0 5px; height: 25px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.archiveTable th { background: #FFD966; position: sticky; top: 0; z-index: 1; text-align: center; font-weight: 700; }
+.archiveLabel td { color: #fff; font-weight: 700; padding: 0 6px; }
+.archiveToggle {
+  width: 18px; height: 18px; margin-right: 8px; padding: 0; line-height: 16px; border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 3px; background: rgba(255, 255, 255, 0.15); color: #fff; font-weight: 700; cursor: pointer; vertical-align: middle;
+}
+.archiveToggle:hover { background: rgba(255, 255, 255, 0.35); }
+.archiveCount { margin-left: 10px; font-weight: 400; opacity: 0.85; font-size: 11.5px; }

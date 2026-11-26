@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
+import { isPoAction, type PoAction, type PoDraft } from '@/features/purchaseorders/poDraft'
 import {
   useCodeNames,
   useJobs,
   useProfile,
   useProject,
+  usePurchaseOrder,
   usePurchaseOrders,
 } from '@/apis/queries/neotms.query'
 import {
@@ -164,6 +166,34 @@ export function ProjectDetailView() {
   const [editingPo, setEditingPo] = useState<PurchaseOrderRow | null | undefined>(undefined)
   /** 'PO 추가' 를 누른 작업. PO는 작업에 달리므로 어느 작업인지가 먼저 정해져야 한다. */
   const [poForJob, setPoForJob] = useState<PickerOption | null>(null)
+
+  /*
+   * '나의 업무' 시트의 [발행]·[보기]·[변경] 으로 왔을 때 (팀장님 2026-11-26) — 주소 이동에 실린 값으로
+   * PO 등록·수정 창을 바로 연다. 한 번 쓴 값은 기록에서 지워 새로고침·뒤로 가기에 다시 열리지 않게 한다.
+   */
+  const location = useLocation()
+  const navigate = useNavigate()
+  const incoming = (location.state as { poAction?: unknown } | null)?.poAction
+  const [poAction, setPoAction] = useState<PoAction | null>(() => (isPoAction(incoming) ? incoming : null))
+  const [poDraft, setPoDraft] = useState<PoDraft | null>(null)
+  const actionPo = usePurchaseOrder(poAction?.mode === 'edit' ? poAction.poId : null)
+  if (poAction) {
+    if (poAction.mode === 'new') {
+      setPoForJob({ id: poAction.jobId, title: poAction.jobTitle })
+      setPoDraft(poAction.draft)
+      setEditingPo(null)
+      setPoAction(null)
+    } else if (actionPo.data) {
+      setPoDraft(poAction.draft ?? null)
+      setEditingPo(actionPo.data)
+      setPoAction(null)
+    } else if (actionPo.isError) {
+      setPoAction(null)
+    }
+  }
+  useEffect(() => {
+    if (incoming !== undefined) void navigate(location.pathname, { replace: true, state: null })
+  }, [incoming, location.pathname, navigate])
   /** 지금 뽑으려는 PO 문서와 그 서식. 모달은 화면 밑단에 하나만 둔다 — `PoDocButtons` 주석. */
   const [printing, setPrinting] = useState<PoPrintRequest | null>(null)
   /** 번역가를 바꾸려고 연 발주. 같은 이유로 행이 아니라 화면이 들고 있다. */
@@ -1389,9 +1419,11 @@ export function ProjectDetailView() {
            * 이 있으면 폼이 작업 선택란 대신 정해진 작업을 글로 보여 주므로 쓰이지 않는다.
            */
           jobScopeProjectId={id}
+          draft={poDraft}
           onClose={() => {
             setEditingPo(undefined)
             setPoForJob(null)
+            setPoDraft(null)
           }}
           onSaved={setNotice}
         />

@@ -34,6 +34,11 @@ import type { RequestData, ResponseData } from "../../reqres/RequestResponse.js"
 import { badRequest, notFound, ok, runDb } from "../NeotmsResult.js";
 import type { WriteContext } from "../NeotmsWrite.js";
 import {
+  LastPoPriceOps,
+  PmArchiveInsertOps,
+  PmArchiveRowsOps,
+  PmRowsHideOps,
+  type PmArchiveRow,
   HandoverAnswerOps,
   HandoverGetOps,
   HandoverInsertOps,
@@ -81,6 +86,7 @@ import {
   type PmPrefInput,
   type PmRowOrderInput,
   type PmRowPatch,
+  type PmArchiveInput,
   type PmSeenInput,
 } from "./NeotmsPmSheet.schemas.js";
 import type { PoolClient } from "pg";
@@ -553,5 +559,69 @@ export async function orderPmRows(
       }
       return ok({ saved });
     }),
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 완료 업무 (db/016)                                                          */
+/* -------------------------------------------------------------------------- */
+
+export async function listPmArchive(
+  caller: NeotmsCaller,
+  request: RequestData,
+): Promise<ResponseData<PmArchiveRow[] | string>> {
+  const owner = ownerOf(caller, request.queryParams["staffId"]);
+  if (!owner) return badRequest("staffId must be a record id");
+  return runDb("read pm archive", async () => ok((await pgQuery(PmArchiveRowsOps(owner))).data));
+}
+
+/** Move rows to '완료 업무': insert the snapshots and take their jobs off the live sheet, together. */
+export async function archivePmRows(
+  caller: NeotmsCaller,
+  input: PmArchiveInput,
+  ctx: WriteContext,
+): Promise<ResponseData<{ archived: number } | string>> {
+  const owner = ownerOf(caller, input.staffId);
+  if (!owner) return badRequest("staffId must be a record id");
+  return runDb("archive pm rows", async () => {
+    const jobIds = [
+      ...new Set([...input.items.map((i) => i.jobId).filter((id): id is string => !!id), ...(input.alsoHide ?? [])]),
+    ];
+    for (const jobId of jobIds) {
+      if (!(await pgQuery(PmSheetHasJobOps(owner, jobId))).data) return notFound("sheet row");
+    }
+    for (const item of input.items) {
+      if (item.handoverAt && Number.isNaN(Date.parse(item.handoverAt))) return badRequest("handoverAt must be a date");
+    }
+    return pgTransaction(async (client) => {
+      await pgExecute(
+        PmArchiveInsertOps(
+          owner,
+          input.items.map((i) => ({
+            jobId: i.jobId ?? null,
+            handoverAt: i.handoverAt ?? null,
+            cells: i.cells,
+            rowStyle: i.rowStyle ?? {},
+          })),
+          ctx.actor,
+        ),
+        client,
+      );
+      if (jobIds.length > 0) await pgExecute(PmRowsHideOps(owner, jobIds, ctx.actor), client);
+      return ok({ archived: input.items.length });
+    });
+  });
+}
+
+/** GET pm-sheet/last-price?translatorId&slang&elang&workCode - see `LastPoPriceOps`. */
+export async function lastPoPrice(
+  request: RequestData,
+): Promise<ResponseData<{ price: string; unit: string | null; coin: string | null } | null | string>> {
+  const q = request.queryParams;
+  const translatorId = q["translatorId"] ?? "";
+  if (!ID.test(translatorId)) return badRequest("translatorId must be a record id");
+  const text = (key: string) => (q[key] ?? "").trim().slice(0, 50) || null;
+  return runDb("last po price", async () =>
+    ok((await pgQuery(LastPoPriceOps(translatorId, text("slang"), text("elang"), text("workCode")))).data),
   );
 }

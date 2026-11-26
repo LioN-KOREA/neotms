@@ -191,6 +191,9 @@ import {
   confirmPmSeen,
   keepOwnEditsSeen,
   orderPmRows,
+  listPmArchive,
+  archivePmRows,
+  lastPoPrice,
 } from "./pmsheet/NeotmsPmSheetManager.js";
 import {
   PmCellsSchema,
@@ -199,6 +202,7 @@ import {
   PmNoticesReadSchema,
   PmPrefSchema,
   PmRowPatchSchema,
+  PmArchiveSchema,
   PmRowOrderSchema,
   PmSeenSchema,
 } from "./pmsheet/NeotmsPmSheet.schemas.js";
@@ -810,6 +814,13 @@ const handleReadNotices: RRHandler = async (request) => {
   return parsed.ok ? readNotices(callerOf(request), parsed.value) : parsed.response;
 };
 const handleTranslatorSuggestions: RRHandler = async (request) => translatorSuggestions(request);
+/* 완료 업무 (db/016) · 발행 단가 (2026-11-26). */
+const handleListPmArchive: RRHandler = async (request) => listPmArchive(callerOf(request), request);
+const handleArchivePmRows: RRHandler = async (request) => {
+  const parsed = parseBody(PmArchiveSchema, request.body);
+  return parsed.ok ? archivePmRows(callerOf(request), parsed.value, writeContext(request)) : parsed.response;
+};
+const handleLastPoPrice: RRHandler = async (request) => lastPoPrice(request);
 
 /*
  * Codes - the code tables, in two halves.
@@ -1339,6 +1350,9 @@ export const NEOTMS_ROUTES: NeotmsRoute[] = [
   { path: "/api/v0/pm-sheet/handovers", method: "GET", handler: handleListPendingHandovers, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/handovers", method: "POST", handler: handleCreateHandovers, permission: NEOTMS_PERMISSION_PROJECT_UPDATE },
   { path: "/api/v0/pm-sheet/handovers/:id/answer", method: "POST", handler: handleAnswerHandover, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/archive", method: "GET", handler: handleListPmArchive, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/archive", method: "POST", handler: handleArchivePmRows, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
+  { path: "/api/v0/pm-sheet/last-price", method: "GET", handler: handleLastPoPrice, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: "/api/v0/pm-sheet/translator-suggestions", method: "GET", handler: handleTranslatorSuggestions, permission: NEOTMS_PERMISSION_WORKSPACE_READ },
   { path: `${PROJECTS}/:id/job-handovers`, method: "GET", handler: handleListProjectHandovers, permission: NEOTMS_PERMISSION_PROJECT_READ },
   { path: "/api/v0/me/notices", method: "GET", handler: handleListNotices, anyStaff: true },

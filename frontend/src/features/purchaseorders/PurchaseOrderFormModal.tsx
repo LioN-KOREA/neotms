@@ -1,4 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { fetchTranslators } from '@/apis/neotms.api'
+import { fetchLastPoPrice } from '@/apis/pmsheet.api'
+import type { PoDraft } from './poDraft'
 import {
   useCreatePurchaseOrder,
   useUpdatePurchaseOrder,
@@ -59,6 +62,8 @@ interface Props {
    * **고르게 하려면** 이것. 왜 한정해야 하는지는 `JobPicker` 주석에 있다.
    */
   jobScopeProjectId?: string | null
+  /** '나의 업무' 시트의 [발행]·[변경] 이 미리 채운 값 (팀장님 2026-11-26). */
+  draft?: PoDraft | null
   onClose: () => void
   onSaved: (message: string) => void
 }
@@ -104,6 +109,7 @@ export function PurchaseOrderFormModal({
   purchaseOrder: po,
   fixedJob = null,
   jobScopeProjectId = null,
+  draft = null,
   onClose,
   onSaved,
 }: Props) {
@@ -123,13 +129,15 @@ export function PurchaseOrderFormModal({
   )
 
   const [translator, setTranslator] = useState<PickerOption | null>(
-    po?.translatorId
-      ? { id: po.translatorId, title: po.poTranName ?? po.translatorId }
-      : null,
+    draft?.translatorId
+      ? { id: draft.translatorId, title: draft.translatorName ?? draft.translatorId }
+      : po?.translatorId
+        ? { id: po.translatorId, title: po.poTranName ?? po.translatorId }
+        : null,
   )
 
   const [form, setForm] = useState({
-    poWorkCode: po?.poWorkCode ?? '번역',
+    poWorkCode: po?.poWorkCode ?? draft?.poWorkCode ?? '번역',
     poCatUse: po?.poCatUse ?? false,
     poCatWord: po?.poCatWord ?? '',
     poCatMid: po?.poCatMid ?? '',
@@ -137,11 +145,11 @@ export function PurchaseOrderFormModal({
     /**
      * 업무 구분. 등록할 때는 **비워 둔 채 시작한다** — 아래 `inheritedType` 주석 참고.
      */
-    poType: po?.poType ?? '',
-    poSlang: po?.poSlang ?? '',
-    poElang: po?.poElang ?? '',
+    poType: po?.poType ?? draft?.poType ?? '',
+    poSlang: po?.poSlang ?? draft?.poSlang ?? '',
+    poElang: po?.poElang ?? draft?.poElang ?? '',
     poCategory: po?.poCategory ?? '',
-    poVolume: po?.poVolume ?? '',
+    poVolume: po?.poVolume ?? draft?.poVolume ?? '',
     poUnitCode: po?.poUnitCode ?? '단어',
     poPrice: po?.poPrice ?? '',
     poCoinCode: po?.poCoinCode ?? 'KRW',
@@ -162,8 +170,8 @@ export function PurchaseOrderFormModal({
      */
     poSday: po ? toDateInputValue(po.poSday) : todayKst(),
     poSdayTime: po ? (po.poSdayTime ?? '') : nowTimeKst(),
-    poEday: toDateInputValue(po?.poEday),
-    poEdayTime: po?.poEdayTime ?? '',
+    poEday: toDateInputValue(po?.poEday ?? draft?.poEday),
+    poEdayTime: po?.poEdayTime ?? draft?.poEdayTime ?? '',
     poState: po?.poState ?? PO_STATE_UNAPPROVED,
     poMoneyState: po?.poMoneyState ?? MONEY_STATE_UNPAID,
     poMoneyDay: toDateInputValue(po?.poMoneyDay),
@@ -175,7 +183,51 @@ export function PurchaseOrderFormModal({
       return n === null || n === undefined ? '' : String(n)
     }),
   })
-  const [dirty, setDirty] = useState(false)
+  // 시트에서 미리 채워 열었으면 닫을 때 확인을 받는다.
+  const [dirty, setDirty] = useState(!!draft)
+
+  /*
+   * 시트의 [발행]·[변경] (팀장님 2026-11-26): 번역가를 이름만 알면 그 이름으로 찾아 **하나만** 맞을 때 고른다.
+   * 등록이면 이어서 이 번역가가 같은 언어쌍·같은 작업 종류로 받은 최근 단가를 채운다(있을 때만).
+   */
+  const draftName = draft && !draft.translatorId ? (draft.translatorName ?? '').trim() : ''
+  useEffect(() => {
+    if (!draftName) return
+    let alive = true
+    fetchTranslators({ limit: 20, q: draftName })
+      .then((page) => {
+        const exact = page.items.filter((r) => (r.tranName ?? '').trim() === draftName)
+        if (alive && exact.length === 1) setTranslator({ id: exact[0]!.id, title: exact[0]!.tranName ?? draftName })
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [draftName])
+  const priceFor = draft && !po && translator ? translator.id : null
+  useEffect(() => {
+    if (!priceFor) return
+    let alive = true
+    fetchLastPoPrice({ translatorId: priceFor, slang: draft?.poSlang, elang: draft?.poElang, workCode: draft?.poWorkCode })
+      .then((hit) => {
+        if (!alive || !hit) return
+        setForm((prev) => {
+          if (prev.poPrice) return prev
+          const next = { ...prev, poPrice: hit.price }
+          if (hit.unit) next.poUnitCode = hit.unit
+          if (hit.coin && hit.coin !== prev.poCoinCode) {
+            next.poCoinCode = hit.coin
+            next.poCoinRate = hit.coin.toUpperCase() === 'KRW' ? '1' : ''
+          }
+          next.poPriceSum = decimalMultiply(next.poVolume, next.poPrice) ?? ''
+          return next
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [priceFor, draft?.poSlang, draft?.poElang, draft?.poWorkCode])
 
   /**
    * 등록할 때 업무 구분의 출발점이 되는 **작업의** 업무 구분.

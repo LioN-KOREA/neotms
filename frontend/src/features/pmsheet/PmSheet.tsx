@@ -33,10 +33,12 @@ import {
   confirmPmSeen,
   orderPmRows,
   patchPmRow,
+  archivePmRows,
   pmKeys,
-  useTranslatorSuggestions,
   writePmCells,
   writePmPref,
+  type PmArchiveCell,
+  type PmArchiveItem,
   type PmCellWrite,
   type PmCondRule,
   type PmPrefs,
@@ -46,19 +48,21 @@ import {
   type PmStyle,
 } from '@/apis/pmsheet.api'
 import { useUpdateJob, useUpdatePurchaseOrder } from '@/apis/queries/neotms.mutation'
-import { TranslatorSwapModal, type SwappableTranslatorPo } from '@/features/purchaseorders/TranslatorSwapModal'
+import type { PoAction } from '@/features/purchaseorders/poDraft'
+import { useCodeOptions } from '@/apis/queries/neotms.query'
+import { CODE_DOMAIN } from '@/apis/neotms.codes'
+import { ConfirmDialog } from '@/shared/ui/ConfirmDialog'
 import { conditionalStyle } from './conditional'
 import {
   FIXED_COLUMNS,
   ROW_FIELD_KEYS,
-  TASK_OPTIONS,
   buildColumns,
   isCustomKey,
   mergeStyle,
   type SheetColumn,
 } from './sheetColumns'
 import { SheetCellTemplate, SheetHeaderTemplate, type SheetCell, type SheetHeaderCell } from './sheetCells'
-import { asNumber, dayState, formatSheetDate, hourState, parseHour, parseSheetDate, todayYmd } from './sheetFormat'
+import { asNumber, dayState, formatSheetDate, hourState, isYmd, parseHour, parseSheetDate, todayYmd } from './sheetFormat'
 import { isFormula } from './sheetFormula'
 import {
   BLANK,
@@ -67,8 +71,14 @@ import {
   cellValue,
   distinctValues,
   indexCells,
-  isoToYmd,
+  fixedRaw,
   mergeProblem,
+  personAction,
+  poOfGroup,
+  PO_GROUP_KEYS,
+  sheetOverride,
+  shownOf,
+  type PoGroup,
   type DataEntry,
   type Filters,
   type SortState,
@@ -216,8 +226,12 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
     }
   }, [bottomGap])
   const [colMenu, setColMenu] = useState<{ key: string; x: number; y: number; jobId: string | null } | null>(null)
-  const [swapping, setSwapping] = useState<SwappableTranslatorPo | null>(null)
-  const [suggestFor, setSuggestFor] = useState<{ jobId: string; which: 'tr' | 'rv'; x: number; y: number } | null>(null)
+  /** 업무 칸 한 번 클릭 — 작업 종류 목록 (팀장님 2026-11-26). */
+  const [taskMenu, setTaskMenu] = useState<{ jobId: string; x: number; y: number } | null>(null)
+  const workOptions = useCodeOptions(CODE_DOMAIN.WORK).options
+  /** [아카이빙] 확인 창. */
+  const [archiveAsk, setArchiveAsk] = useState(false)
+  const [archiving, setArchiving] = useState(false)
   const mouse = useRef({ x: 200, y: 200 })
   /* 오늘/지금 색칠이 시간이 흐르면 바뀌도록 1분마다 시계를 다시 읽는다. */
   const [now, setNow] = useState(() => new Date())
@@ -383,7 +397,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   }
 
   /** 저장된 값 `value` 를 서버에 쓴다. 실패하면 throw. */
-  const writeValue = async (row: PmSheetRow, column: SheetColumn, value: string) => {
+  const writeValue = async (row: PmSheetRow, column: SheetColumn, value: string, tid?: string | null) => {
     const key = column.key
     const src = column.spec.source
     if (src === 'custom') {
@@ -399,10 +413,22 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       const input = key === 'jobEday' ? { jobEday: value || null } : { jobEdayTime: value || null }
       await updateJob.mutateAsync({ id: row.jobId, input })
     } else if (src === 'tr' || src === 'rv') {
-      const po = src === 'tr' ? row.tr : row.rv
-      if (!po) throw new Error('이 작업에는 아직 해당 PO 가 없습니다. 작업 화면에서 PO 를 먼저 발행해 주세요.')
-      const field = key.endsWith('Volume') ? 'poVolume' : key.endsWith('Eday') ? 'poEday' : 'poEdayTime'
-      await updatePo.mutateAsync({ id: po.poId, input: { [field]: value || null } })
+      /*
+       * PO 가 있으면 분량·도착일·시간은 그 PO 에 바로 쓴다(예전과 같다). 그 밖 — PO 가 없을 때의 모든 칸,
+       * PO 가 있어도 이름(다른 사람으로 바꾸면 [변경])·PO 칸 — 은 시트 값으로 둔다 (팀장님 2026-11-26).
+       * 시트 값은 적을 때의 PO 에 묶인다(`trFor`): PO 가 생기거나 바뀌면 PO 값이 다시 보인다.
+       */
+      const po = poOfGroup(row, src)
+      const poField = key.endsWith('Volume') ? 'poVolume' : key.endsWith('Eday') ? 'poEday' : key.endsWith('Time') ? 'poEdayTime' : null
+      if (po && poField) {
+        await updatePo.mutateAsync({ id: po.poId, input: { [poField]: value || null } })
+      } else {
+        const bind = po?.poId ?? ''
+        const fields: Record<string, string> = { [key]: value, [`${src}For`]: bind }
+        if (column.spec.kind === 'picker') fields[`${src}Tid`] = tid ?? ''
+        if ((row.fields[`${src}For`] ?? '') !== bind) for (const k of PO_GROUP_KEYS[src]) if (!(k in fields)) fields[k] = ''
+        await patchPmRow({ staffId: ownerId, jobId: row.jobId, fields })
+      }
     } else {
       throw new Error('이 칸은 고칠 수 없습니다.')
     }
@@ -412,20 +438,20 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
    * 여러 칸을 한 번에 (붙여넣기·지우기·채우기도 여기로). 한 번의 실행취소로 되돌아간다.
    * 가제 열은 한 요청으로 묶고, 나머지는 칸마다 보낸다.
    */
-  const applyValues = async (changes: { row: PmSheetRow; column: SheetColumn; text: string }[], record = true) => {
+  const applyValues = async (changes: { row: PmSheetRow; column: SheetColumn; text: string; tid?: string | null }[], record = true) => {
     const done: { row: PmSheetRow; column: SheetColumn; before: string; after: string }[] = []
     const customBatch: PmCellWrite[] = []
     const customDone: typeof done = []
     const errors: string[] = []
 
-    for (const { row, column, text } of changes) {
+    for (const { row, column, text, tid } of changes) {
       const parsed = normalize(column, text)
       if (!parsed.ok) {
         errors.push(parsed.reason)
         continue
       }
       const before = currentRaw(row, column)
-      if (before === parsed.value) continue
+      if (before === parsed.value && !(column.spec.kind === 'picker' && tid)) continue
       put(row.jobId, column.key, parsed.value)
       if (column.spec.source === 'custom') {
         customBatch.push({ jobId: row.jobId, colKey: column.key, value: parsed.value || null })
@@ -433,7 +459,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
         continue
       }
       try {
-        await writeValue(row, column, parsed.value)
+        await writeValue(row, column, parsed.value, tid)
         done.push({ row, column, before, after: parsed.value })
       } catch (err) {
         drop(row.jobId, column.key)
@@ -460,6 +486,114 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       }
     }
     if (errors.length > 0) onError([...new Set(errors)].join(' / '))
+  }
+
+  /* ----------------------------------------------------------------------- */
+  /* 번역가 칸 [발행]·[보기]·[변경] (팀장님 2026-11-26)                          */
+  /* ----------------------------------------------------------------------- */
+
+  /**
+   * 그 프로젝트 화면으로 가서 PO 창을 연다. 발행 = 새 PO(이 행의 값을 미리 채움), 보기 = 그 PO,
+   * 변경 = 그 PO 의 수정 창에 바꿔 적은 사람을 넣어서. 발행·변경이 저장되면 T·PO 칸·번역가 칸은 PO 를 따라간다.
+   */
+  const openPoFor = (row: PmSheetRow, group: PoGroup) => {
+    const action = personAction(row, group)
+    const po = poOfGroup(row, group)
+    const val = (k: string) => fixedRaw(row, k, { merged: [], inGroup: false, rowNo: 0 }).trim()
+    const name = val(group === 'tr' ? 'translator' : 'reviewer')
+    const tid = sheetOverride(row, `${group}Tid`) ?? null
+    let poAction: PoAction
+    if (action === 'issue' || !po) {
+      poAction = {
+        mode: 'new',
+        jobId: row.jobId,
+        jobTitle: row.jobName || row.jobCode,
+        draft: {
+          translatorId: tid,
+          translatorName: name || null,
+          poWorkCode: group === 'tr' ? '번역' : '감수',
+          poType: row.jobType,
+          poSlang: row.slang,
+          poElang: row.elang,
+          poVolume: val(`${group}Volume`).replace(/,/g, '') || null,
+          poEday: val(`${group}Eday`) || null,
+          poEdayTime: val(`${group}Time`) || null,
+        },
+      }
+    } else if (action === 'change') {
+      poAction = { mode: 'edit', poId: po.poId, draft: { translatorId: tid, translatorName: name } }
+    } else {
+      poAction = { mode: 'edit', poId: po.poId }
+    }
+    void navigate(`/projects/${encodeURIComponent(row.projectId)}`, { state: { poAction } })
+  }
+
+  /** 업무 칸 목록에서 고른 작업 종류 — 프로젝트의 작업(통합 행이면 합쳐진 작업까지)에도 반영. 직접 입력한 글자는 지운다. */
+  const pickTask = async (row: PmSheetRow, code: string) => {
+    try {
+      for (const r of [row, ...sheet.rows.filter((x) => x.mergedInto === row.jobId)]) {
+        await updateJob.mutateAsync({ id: r.jobId, input: { workCode: code } })
+      }
+      if (row.fields.task) await patchPmRow({ staffId: ownerId, jobId: row.jobId, fields: { task: '' } })
+      refresh()
+    } catch (err) {
+      onError(messageOf(err))
+    }
+  }
+
+  /* ----------------------------------------------------------------------- */
+  /* 아카이빙 — 납품 완료 행을 '완료 업무' 시트로 (팀장님 2026-11-26, db/016)      */
+  /* ----------------------------------------------------------------------- */
+
+  const DONE_STATE = '납품 완료'
+  const archiveHeads = topJobs.filter((r) => (r.pmState ?? '') === DONE_STATE)
+  const archiveFrees = freeRows.filter((f) => (f.values.pmState ?? '').trim() === DONE_STATE)
+  const archiveCount = archiveHeads.length + archiveFrees.length
+
+  const runArchive = async () => {
+    // 숨긴 열까지 — 완료 업무 시트는 나의 업무와 같은 열 구성이다. 행ID 는 그 시트에서 다시 매긴다.
+    const all = buildColumns({ ...(prefs.columns ?? {}), hidden: [] }).filter((c) => c.key !== 'rowNo')
+    const items: PmArchiveItem[] = []
+    const alsoHide: string[] = []
+    for (const row of archiveHeads) {
+      const merged = sheet.rows.filter((r) => r.mergedInto === row.jobId)
+      alsoHide.push(...merged.map((m) => m.jobId))
+      const ctx = { columns: all, cells, merged, inGroup: false, rowNo: 0, overrides }
+      const out: Record<string, PmArchiveCell> = {}
+      for (const column of all) {
+        const shown = cellValue(row, column, ctx, null).shown
+        const own = cells.get(cellKey(row.jobId, column.key))?.style
+        const hasStyle = !!own && Object.keys(own).length > 0
+        if (shown || hasStyle) out[column.key] = hasStyle ? { t: shown, s: own } : { t: shown }
+      }
+      items.push({ jobId: row.jobId, handoverAt: row.handoverAt, cells: out, rowStyle: row.rowStyle as PmStyle })
+    }
+    for (const f of archiveFrees) {
+      const out: Record<string, PmArchiveCell> = {}
+      for (const column of all) {
+        const raw = f.values[column.key] ?? ''
+        if (raw.trim()) out[column.key] = { t: shownOf(column, raw, null) }
+      }
+      const h = (f.values.handoverAt ?? '').trim()
+      items.push({ jobId: null, handoverAt: isYmd(h) ? `${h}T00:00:00+09:00` : null, cells: out })
+    }
+    if (items.length === 0) return
+    setArchiving(true)
+    try {
+      await archivePmRows(ownerId, items, alsoHide)
+      if (archiveFrees.length > 0) {
+        const gone = new Set(archiveFrees.map((f) => f.pos))
+        await savePref('view', { ...(prefs.view ?? {}), freeRows: freeRows.filter((f) => !gone.has(f.pos)) })
+      }
+      refresh()
+      void qc.invalidateQueries({ queryKey: pmKeys.archive(ownerId ?? null) })
+      onNotice(`납품 완료 ${String(items.length)}행을 '완료 업무' 시트로 옮겼습니다.`)
+      setArchiveAsk(false)
+    } catch (err) {
+      onError(messageOf(err))
+    } finally {
+      setArchiving(false)
+    }
   }
 
   /* ----------------------------------------------------------------------- */
@@ -775,7 +909,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   /* ----------------------------------------------------------------------- */
 
   const onCellsChanged = (changes: CellChange<GridCell>[]) => {
-    const list: { row: PmSheetRow; column: SheetColumn; text: string }[] = []
+    const list: { row: PmSheetRow; column: SheetColumn; text: string; tid?: string | null }[] = []
     const free: { pos: number; colKey: string; text: string }[] = []
     for (const change of changes) {
       if (String(change.columnId) === RH) continue
@@ -788,7 +922,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
       const column = columnOf(String(change.columnId))
       if (!row || !column || (change.newCell as { type: string }).type !== 'sheet') continue
       const next = change.newCell as unknown as SheetCell
-      list.push({ row, column, text: next.raw ?? next.text })
+      list.push({ row, column, text: next.raw ?? next.text, tid: next.pickedId ?? null })
     }
     if (list.length > 0) void applyValues(list)
     if (free.length > 0) writeFree(free)
@@ -828,9 +962,6 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
     const entry = entries.find((e): e is DataEntry => e.kind === 'data' && e.row.jobId === jobId)
     if (entry && changedSet(entry).has(colKey)) setConfirmAt({ jobId, colKey, x: mouse.current.x + 14, y: mouse.current.y - 12 })
     else setConfirmAt(null)
-    if (colKey === 'translator' || colKey === 'reviewer') {
-      setSuggestFor({ jobId, which: colKey === 'translator' ? 'tr' : 'rv', x: mouse.current.x + 14, y: mouse.current.y + 8 })
-    } else setSuggestFor(null)
   }
 
   const persistLayout = (order: string[] | null, widths: Record<string, number> | null) => {
@@ -948,6 +1079,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
             text: entry.values[c.key] ?? '',
             raw: entry.values[c.key] ?? '',
             nonEditable: false,
+            person: c.spec.kind === 'picker' ? { jobId: null, which: c.spec.source === 'rv' ? 'rv' : 'tr' } : undefined,
             onMenu: (x: number, y: number) => setColMenu({ key: c.key, x, y, jobId: null }),
           }),
         ),
@@ -1033,28 +1165,23 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           internal: v.internal,
           onNavigate: (href) => void navigate(href),
           note: own?.note ?? undefined,
-          tooltip: isChanged ? '다른 사람이 바꾼 칸입니다 — 눌러서 확인' : v.tooltip ?? (!editable && column.spec.source !== 'readonly' && !po && (column.spec.source === 'tr' || column.spec.source === 'rv') ? 'PO 가 없습니다 — 작업 화면에서 PO 를 발행하면 여기서 고칠 수 있습니다.' : undefined),
+          tooltip: isChanged ? '다른 사람이 바꾼 칸입니다 — 눌러서 확인' : v.tooltip,
           nonEditable: !editable,
-          choices: column.key === 'pmState' ? stateNames : column.key === 'task' ? TASK_OPTIONS : undefined,
-          // 진행 상태는 한 번 눌러 바로 목록을 연다 (팀장님 2026-11-25).
+          choices: column.key === 'pmState' ? stateNames : undefined,
+          // 진행 상태·업무는 한 번 눌러 바로 목록을 연다 (팀장님 2026-11-25, 업무 2026-11-26). 업무를 더블클릭하면 직접 입력.
           onQuickPick:
             column.key === 'pmState' && editable
               ? (x: number, y: number) => setStateMenu({ jobId: row.jobId, x, y })
-              : undefined,
-          free: column.key === 'task',
-          placeholder: column.spec.kind === 'picker' ? (po ? '미지정' : 'PO 없음') : undefined,
-          onOpen:
-            column.spec.kind === 'picker' && po
-              ? () =>
-                  setSwapping({
-                    id: po.poId,
-                    poCode: po.poCode,
-                    poTranName: po.tranName,
-                    translatorId: po.translatorId,
-                    poCoinCode: po.coinCode ?? 'KRW',
-                    poApproved: po.approved,
-                    poMoneyState: po.moneyState ?? '미정산',
-                  } as SwappableTranslatorPo)
+              : column.key === 'task' && editable
+                ? (x: number, y: number) => setTaskMenu({ jobId: row.jobId, x, y })
+                : undefined,
+          placeholder: column.spec.kind === 'picker' && po ? '미지정' : undefined,
+          // 번역가·감수자: 더블클릭하면 찾기 입력기, 오른쪽 단추는 발행 / 보기 / 변경 (팀장님 2026-11-26).
+          person: column.spec.kind === 'picker' ? { jobId: row.jobId, which: column.spec.source === 'rv' ? 'rv' : 'tr' } : undefined,
+          onOpen: column.spec.kind === 'picker' ? () => openPoFor(row, column.spec.source === 'rv' ? 'rv' : 'tr') : undefined,
+          openLabel:
+            column.spec.kind === 'picker'
+              ? { issue: '발행', change: '변경', view: '보기' }[personAction(row, column.spec.source === 'rv' ? 'rv' : 'tr')]
               : undefined,
           style: cellStyle,
           inner,
@@ -1074,6 +1201,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
             column.key === 'jobEday' && editable && v.raw
               ? { title: '납품일', onPrev: () => void shiftDay(row, entry.merged, column, -1), onNext: () => void shiftDay(row, entry.merged, column, 1) }
               : undefined,
+          stepShown: focus?.jobId === row.jobId && focus.colKey === column.key,
         }
       }),
     }
@@ -1451,6 +1579,14 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
             </label>
           ) : null}
           <button type="button" className={css.iconTool} title="고른 행을 이 시트에서 뺍니다" onClick={() => void hideRows()}>{TOOL_ICONS.hide}행 빼기</button>
+          <button
+            type="button"
+            className={css.iconTool}
+            title="진행 상태가 '납품 완료' 인 행을 모두 '완료 업무' 시트로 옮깁니다"
+            onClick={() => (archiveCount > 0 ? setArchiveAsk(true) : onNotice("진행 상태가 '납품 완료' 인 행이 없습니다."))}
+          >
+            {TOOL_ICONS.archive}아카이빙
+          </button>
         </span>
         <span className={css.group}>
           {favorites.map((f) => (
@@ -1583,26 +1719,35 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
         />
       ) : null}
 
-      {suggestFor ? (
-        <TranslatorSuggest
-          jobId={suggestFor.jobId}
-          x={suggestFor.x}
-          y={suggestFor.y}
-          which={suggestFor.which}
-          row={rowById.get(suggestFor.jobId)}
-          onPick={async (translatorId, name) => {
-            const row = rowById.get(suggestFor.jobId)
-            const po = suggestFor.which === 'tr' ? row?.tr : row?.rv
-            if (!po) return onError('PO 가 없어 번역가를 지정할 수 없습니다. 작업 화면에서 PO 를 먼저 발행해 주세요.')
-            try {
-              await updatePo.mutateAsync({ id: po.poId, input: { translatorId } })
-              onNotice(`${name} 님을 지정했습니다.`)
-              setSuggestFor(null)
-            } catch (err) {
-              onError(messageOf(err))
-            }
+      {taskMenu ? (
+        <TaskMenu
+          x={taskMenu.x}
+          y={taskMenu.y}
+          options={workOptions.map((o) => ({ value: o.value, label: o.label }))}
+          current={rowById.get(taskMenu.jobId) ? fixedRaw(rowById.get(taskMenu.jobId)!, 'task', { merged: [], inGroup: false, rowNo: 0 }) : ''}
+          onClose={() => setTaskMenu(null)}
+          onPick={(code) => {
+            const row = rowById.get(taskMenu.jobId)
+            setTaskMenu(null)
+            if (row) void pickTask(row, code)
           }}
-          onClose={() => setSuggestFor(null)}
+          onFree={(text) => {
+            const row = rowById.get(taskMenu.jobId)
+            const column = columnOf('task')
+            setTaskMenu(null)
+            if (row && column) void applyValues([{ row, column, text }])
+          }}
+        />
+      ) : null}
+      {archiveAsk ? (
+        <ConfirmDialog
+          title="아카이빙"
+          message="완료된 업무를 완료 업무 시트로 보내시겠습니까?"
+          detail={`진행 상태가 '납품 완료' 인 ${String(archiveCount)}행(프로젝트 행 ${String(archiveHeads.length)} · 직접 만든 행 ${String(archiveFrees.length)})이 '완료 업무' 시트로 옮겨지고, 이 시트에서는 빠집니다.`}
+          confirmLabel="보내기"
+          pending={archiving}
+          onConfirm={() => void runArchive()}
+          onCancel={() => setArchiveAsk(false)}
         />
       ) : null}
 
@@ -1801,26 +1946,13 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           }}
         />
       ) : null}
-      {swapping ? (
-        <TranslatorSwapModal
-          purchaseOrder={swapping}
-          onClose={() => setSwapping(null)}
-          onSaved={(m) => {
-            onNotice(m)
-            refresh()
-          }}
-        />
-      ) : null}
     </div>
   )
 
   function isEditable(column: SheetColumn, row: PmSheetRow): boolean {
     const src = column.spec.source
-    if (src === 'readonly') return false
-    if (column.spec.kind === 'picker') return false
-    if (src === 'tr') return !!row.tr
-    if (src === 'rv') return !!row.rv
-    return true
+    void row
+    return src !== 'readonly'
   }
 }
 
@@ -2179,50 +2311,69 @@ function StateMenu(props: {
   )
 }
 
-function TranslatorSuggest(props: {
-  jobId: string
-  which: 'tr' | 'rv'
+/** 업무 칸 목록 — 작업 등록창의 '작업 종류' 와 같은 목록, 맨 아래 '직접 입력' (팀장님 2026-11-26). */
+function TaskMenu(props: {
   x: number
   y: number
-  row: PmSheetRow | undefined
-  onPick: (translatorId: string, name: string) => Promise<void>
+  options: { value: string; label: string }[]
+  current: string
+  onPick: (code: string) => void
+  onFree: (text: string) => void
   onClose: () => void
 }) {
-  const q = useTranslatorSuggestions(props.jobId)
-  const items = q.data ?? []
-  const [busy, setBusy] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  const [typing, setTyping] = useState(false)
+  const [text, setText] = useState('')
+  const { onClose } = props
   useEffect(() => {
-    const t = window.setTimeout(props.onClose, 15000)
-    return () => window.clearTimeout(t)
-  }, [props.onClose])
-  if (q.isLoading || items.length === 0) return null
-  const left = Math.min(props.x, window.innerWidth - 300)
-  const top = Math.min(props.y, window.innerHeight - 260)
+    const onDown = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+  const height = Math.min(360, props.options.length * 30 + 44)
   return (
-    <div className={css.suggest} style={{ left, top }} onMouseDown={(e) => e.stopPropagation()}>
-      <div className={css.suggestHead}>
-        <span>💡 추천 {props.which === 'tr' ? '번역가' : '감수자'} — 같은 업체·같은 언어쌍</span>
-        <button type="button" className={css.tool} onClick={props.onClose}>×</button>
-      </div>
-      {items.map((s) => (
+    <div
+      ref={box}
+      className={css.stateMenu}
+      style={{ left: Math.min(props.x, window.innerWidth - 220), top: Math.min(props.y + 2, window.innerHeight - height - 8), minWidth: 180, maxHeight: 360, overflow: 'auto' }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      {props.options.map((o) => (
         <button
-          key={s.translatorId}
+          key={o.value}
           type="button"
-          className={css.suggestItem}
-          disabled={busy}
-          title={(props.which === 'tr' ? props.row?.tr : props.row?.rv) ? '누르면 이 PO 의 번역가로 지정합니다' : 'PO 가 없어 지정할 수 없습니다'}
-          onClick={async () => {
-            setBusy(true)
-            await props.onPick(s.translatorId, s.name)
-            setBusy(false)
-          }}
+          className={`${css.stateItem} ${o.value === props.current ? css.stateItemOn : ''}`}
+          onClick={() => props.onPick(o.value)}
+          title="프로젝트의 작업에도 반영됩니다"
         >
-          <b>{s.name}</b>
-          <span className={css.suggestSub}>
-            이전 인계일 {s.lastHandoverAt ? formatSheetDate(isoToYmd(s.lastHandoverAt)) : '-'} · {s.prjCode ?? ''} · {s.times}회
-          </span>
+          {o.label}
         </button>
       ))}
+      {typing ? (
+        <input
+          className={css.taskFree}
+          autoFocus
+          placeholder="직접 입력 후 Enter (시트에만)"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && text.trim()) props.onFree(text.trim())
+          }}
+        />
+      ) : (
+        <button type="button" className={css.stateItem} style={{ color: '#1a73e8' }} onClick={() => setTyping(true)} title="시트에만 남고 프로젝트에는 반영되지 않습니다">
+          ✎ 직접 입력…
+        </button>
+      )}
     </div>
   )
 }

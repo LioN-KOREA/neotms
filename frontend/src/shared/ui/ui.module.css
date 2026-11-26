@@ -2233,3 +2233,18 @@
 /* PO 물량: 숫자 칸 넓게, 단위 드롭다운 좁게 (팀장님 2026-11-26) */
 .volRow > .input { flex: 1 1 auto; }
 .volRow > .select { flex: 0 0 68px; width: 68px; min-width: 0; padding-left: 6px; padding-right: 18px; }
+
+/* 인계 — 그룹 목록 펼치기 (팀장님 2026-11-26) */
+.hoExpand {
+  width: 18px; height: 18px; margin-right: 6px; padding: 0; line-height: 15px; border: 1px solid #c6cbd2; border-radius: 3px;
+  background: #fff; color: #333; font-weight: 700; cursor: pointer; vertical-align: middle;
+}
+.hoExpand:hover { border-color: #EC9820; color: #EC9820; }
+.hoChild td { background: #fafbfc; }
+.hoBranch { color: #9aa3ae; margin-right: 6px; }
+
+/* 인계정보 입력 — 칸 사이 간격 (팀장님 2026-11-26: 직접 입력란과 다음 제목이 붙어 보이던 것) */
+.hoBlock { margin-bottom: 16px; }
+.hoAccount { margin-top: 10px; display: flex; align-items: center; gap: 4px; }
+/* '직접 입력' 은 오른쪽 끝으로 (팀장님 2026-11-26) */
+.hoAccountBtn { margin-left: auto; }

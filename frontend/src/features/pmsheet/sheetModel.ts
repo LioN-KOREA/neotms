@@ -21,6 +21,39 @@ export interface CellValue {
   internal?: boolean
 }
 
+/*
+ * 번역가·감수자 묶음 (팀장님 2026-11-26).
+ *
+ * PO 가 없을 때 적은 이름·분량·도착일·PO 칸, 그리고 발행된 PO 와 다른 사람으로 바꿔 적은 이름은 행 값
+ * (`fields`) 에 둔다. 그 값은 **적을 때의 PO** (`trFor`/`rvFor`, PO 없음 = '') 가 지금도 그 PO 일 때만
+ * 보인다 — PO 를 발행·교체·취소하면 PO 의 값이 다시 보이고, T·PO 칸은 '발행' 으로 덮어써진다.
+ */
+export type PoGroup = 'tr' | 'rv'
+export const PO_GROUP_KEYS: Record<PoGroup, readonly string[]> = {
+  tr: ['translator', 'trVolume', 'trPo', 'trEday', 'trTime', 'trTid'],
+  rv: ['reviewer', 'rvVolume', 'rvPo', 'rvEday', 'rvTime', 'rvTid'],
+}
+export const poGroupOf = (key: string): PoGroup | null =>
+  PO_GROUP_KEYS.tr.includes(key) ? 'tr' : PO_GROUP_KEYS.rv.includes(key) ? 'rv' : null
+export const poOfGroup = (row: PmSheetRow, group: PoGroup) => (group === 'tr' ? row.tr : row.rv)
+
+/** 지금도 유효한 행 값(적을 때의 PO 가 지금 PO 와 같을 때만). 없거나 빈 글자면 undefined. */
+export function sheetOverride(row: PmSheetRow, key: string): string | undefined {
+  const group = poGroupOf(key)
+  if (!group) return undefined
+  const value = row.fields?.[key]
+  if (value === undefined || value === '') return undefined
+  return (row.fields[`${group}For`] ?? '') === (poOfGroup(row, group)?.poId ?? '') ? value : undefined
+}
+
+/** 번역가 칸의 단추: PO 없음 → 발행, PO 와 다른 이름 → 변경, 그 밖 → 보기. */
+export function personAction(row: PmSheetRow, group: PoGroup): 'issue' | 'change' | 'view' {
+  const po = poOfGroup(row, group)
+  if (!po) return 'issue'
+  const typed = sheetOverride(row, group === 'tr' ? 'translator' : 'reviewer')
+  return typed !== undefined && typed.trim() !== (po.tranName ?? '').trim() ? 'change' : 'view'
+}
+
 export type CellMap = Map<string, PmSheetCell>
 export const cellKey = (jobId: string, colKey: string) => `${jobId}|${colKey}`
 
@@ -73,27 +106,28 @@ export function fixedRaw(row: PmSheetRow, key: string, ctx: Pick<DisplayContext,
     case 'lang':
       return langOf(row, ctx.merged)
     case 'task':
-      return row.fields.task ?? '번역'
+      // 직접 입력한 글자(시트에만)가 있으면 그것, 없으면 프로젝트 작업의 작업 종류 (팀장님 2026-11-26).
+      return row.fields.task || row.workCode || ''
     case 'translator':
-      return row.tr?.tranName ?? ''
+      return sheetOverride(row, key) ?? row.tr?.tranName ?? ''
     case 'trVolume':
-      return row.tr?.volume ?? ''
+      return sheetOverride(row, key) ?? row.tr?.volume ?? ''
     case 'trPo':
-      return row.tr ? '발행' : '-'
+      return sheetOverride(row, key) ?? (row.tr ? '발행' : '-')
     case 'trEday':
-      return row.tr?.eday ?? ''
+      return sheetOverride(row, key) ?? row.tr?.eday ?? ''
     case 'trTime':
-      return row.tr?.edayTime ?? ''
+      return sheetOverride(row, key) ?? row.tr?.edayTime ?? ''
     case 'reviewer':
-      return row.rv?.tranName ?? ''
+      return sheetOverride(row, key) ?? row.rv?.tranName ?? ''
     case 'rvVolume':
-      return row.rv?.volume ?? ''
+      return sheetOverride(row, key) ?? row.rv?.volume ?? ''
     case 'rvPo':
-      return row.rv ? '발행' : '-'
+      return sheetOverride(row, key) ?? (row.rv ? '발행' : '-')
     case 'rvEday':
-      return row.rv?.eday ?? ''
+      return sheetOverride(row, key) ?? row.rv?.eday ?? ''
     case 'rvTime':
-      return row.rv?.edayTime ?? ''
+      return sheetOverride(row, key) ?? row.rv?.edayTime ?? ''
     case 'jobEday':
       return row.jobEday ?? ''
     case 'jobTime':

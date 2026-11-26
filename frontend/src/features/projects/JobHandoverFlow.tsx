@@ -203,7 +203,7 @@ function PickJobs(props: {
     >
       <ErrorNotice error={props.error} />
       {props.pmNotice ? <InfoNotice>골라 둔 작업 중 담당PM 이 비어 있는 것이 있어 작업 선택 창을 열었습니다.</InfoNotice> : null}
-      {/* 작업 목록 | 그룹 목록 (팀장님 2026-11-25). 그룹 목록은 보기만 한다 — 고르는 것은 작업 목록에서. */}
+      {/* 작업 목록 | 그룹 목록 (팀장님 2026-11-25). 그룹 목록에서도 고른다 — 그룹을 고르면 그 그룹의 작업 전부 (2026-11-26). */}
       <div className={ui.hoTabs} role="tablist">
         {(
           [
@@ -216,7 +216,7 @@ function PickJobs(props: {
           </button>
         ))}
       </div>
-      {view === 'groups' ? <GroupList jobs={jobs} /> : null}
+      {view === 'groups' ? <GroupList jobs={jobs} draft={draft} checked={checked} setChecked={setChecked} /> : null}
       <p className={ui.hint} style={{ marginTop: 0, display: view === 'jobs' ? undefined : 'none' }}>
         인계할 작업을 고르세요. 이 창에서 고친 값은 <strong>확인</strong>을 누를 때 작업에 저장됩니다.
       </p>
@@ -425,7 +425,7 @@ function HandoverInfo(props: {
         PM 이 받으면 아래 내용이 그 PM 의 나의 업무 <strong>비고</strong> 칸에 들어갑니다.
       </p>
 
-      <div className={ui.field}>
+      <div className={`${ui.field} ${ui.hoBlock}`}>
         <label className={`${ui.label} ${ui.required}`}>편집포맷</label>
         <div className={ui.checkGrid}>
           {HANDOVER_FORMATS.map((option) => (
@@ -440,7 +440,7 @@ function HandoverInfo(props: {
         <input className={`${ui.input} ${ui.hoCustom}`} placeholder="직접 입력" aria-label="편집포맷 직접 입력" value={formatText} maxLength={200} onChange={(e) => setFormatText(e.target.value)} disabled={busy} />
       </div>
 
-      <div className={ui.field}>
+      <div className={`${ui.field} ${ui.hoBlock}`}>
         <label className={`${ui.label} ${ui.required}`}>레이아웃</label>
         <div className={ui.checkGrid}>
           {HANDOVER_LAYOUTS.map((option) => (
@@ -455,7 +455,7 @@ function HandoverInfo(props: {
         <input className={`${ui.input} ${ui.hoCustom}`} placeholder="직접 입력" aria-label="레이아웃 직접 입력" value={layoutText} maxLength={200} onChange={(e) => setLayoutText(e.target.value)} disabled={busy} />
       </div>
 
-      <div className={ui.field}>
+      <div className={`${ui.field} ${ui.hoBlock}`}>
         <label className={ui.label} htmlFor="ho-path">경로</label>
         <input
           id="ho-path"
@@ -472,7 +472,7 @@ function HandoverInfo(props: {
         <p className={ui.hint}>인계 메일의 경로 칸과, PM 이 받으면 나의 업무 시트 <strong>경로</strong> 칸에 들어갑니다. 여기서 고쳐도 프로젝트 경로는 바뀌지 않습니다.</p>
       </div>
 
-      <div className={ui.field}>
+      <div className={`${ui.field} ${ui.hoBlock}`}>
         <label className={ui.label} htmlFor="ho-note">기타요청</label>
         <textarea
           id="ho-note"
@@ -486,7 +486,7 @@ function HandoverInfo(props: {
         />
       </div>
 
-      <div className={ui.field}>
+      <div className={`${ui.field} ${ui.hoBlock}`}>
         <label className={ui.label} htmlFor="ho-cc">메일 참조</label>
         <EmailChips id="ho-cc" value={cc} onChange={setCc} disabled={busy} placeholder="이름 <주소> 또는 주소 — 쉼표·Enter 로 구분" />
         {ccBad ? <p className={`${ui.hint} ${ui.hintWarn}`}>메일 주소가 아닌 항목(빨간색)이 있습니다. 고치거나 지워 주세요.</p> : null}
@@ -498,9 +498,9 @@ function HandoverInfo(props: {
         {useStored ? ' 내 정보에 저장한 계정으로 보냅니다.' : ' 입력한 ID 와 비밀번호는 발송에 한 번 쓰이고 저장되지 않습니다.'}
       </InfoNotice>
       {useStored ? (
-        <div className={ui.filterNote}>
+        <div className={`${ui.filterNote} ${ui.hoAccount}`}>
           저장된 계정: <strong>{credential.data?.hiworksIdHint ?? '-'}</strong>
-          <button type="button" className={ui.btnLink} onClick={() => setManual(true)} disabled={busy}>
+          <button type="button" className={`${ui.btnLink} ${ui.hoAccountBtn}`} onClick={() => setManual(true)} disabled={busy}>
             직접 입력
           </button>
         </div>
@@ -532,28 +532,61 @@ function HandoverInfo(props: {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 그룹 목록 — 보기만 (팀장님 2026-11-25)                                       */
+/* 그룹 목록 (팀장님 2026-11-25, 고르기·펼치기 2026-11-26)                        */
 /* -------------------------------------------------------------------------- */
 
 const uniq = (xs: (string | null | undefined)[]) => [...new Set(xs.filter((x): x is string => !!x && x.trim() !== ''))]
 
-function GroupList(props: { jobs: readonly JobRow[] }) {
+/**
+ * 그룹마다 한 줄. 왼쪽 체크로 그룹을 고르면(여러 그룹도) 그 그룹의 작업이 **전부** 골라진다 — 작업 목록의
+ * 체크와 같은 선택이다. [+] 를 누르면 그 그룹의 작업이 들여 쓴 줄로 펼쳐진다(작업 목록과 같은 정보, 하나씩 고를 수도 있다).
+ * 값 고치기는 작업 목록에서 — 여기서는 작업 목록에서 고친 값(아직 저장 전)을 그대로 보여 준다.
+ */
+function GroupList(props: {
+  jobs: readonly JobRow[]
+  draft: (job: JobRow) => Draft
+  checked: Set<string>
+  setChecked: (next: Set<string>) => void
+}) {
+  const { jobs, draft, checked, setChecked } = props
   const workName = useCodeNames(CODE_DOMAIN.WORK)
+  const [open, setOpen] = useState<Set<string>>(new Set())
   const groups = new Map<string, JobRow[]>()
-  for (const j of props.jobs) {
+  for (const j of jobs) {
     const key = j.jobGroup ?? '-'
     groups.set(key, [...(groups.get(key) ?? []), j])
   }
   const keys = [...groups.keys()].sort((a, b) => groupNumber(a) - groupNumber(b))
+  const allOn = jobs.length > 0 && jobs.every((j) => checked.has(j.id))
+
+  const setMany = (ids: readonly string[], on: boolean) => {
+    const next = new Set(checked)
+    for (const id of ids) {
+      if (on) next.add(id)
+      else next.delete(id)
+    }
+    setChecked(next)
+  }
+  const toggleOpen = (key: string) => {
+    const next = new Set(open)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setOpen(next)
+  }
+  const due = (d: Draft) => (d.jobEday ? `${d.jobEday} ${d.jobEdayTime.slice(0, 5)}`.trim() : '')
+
   return (
     <div className={ui.tableWrap}>
       <table className={ui.hoTable}>
         <thead>
           <tr>
-            <th style={{ width: 90 }}>JOB 그룹</th>
+            <th style={{ width: 34 }}>
+              <input type="checkbox" aria-label="전체 선택" checked={allOn} onChange={() => setMany(jobs.map((j) => j.id), !allOn)} />
+            </th>
+            <th style={{ width: 110 }}>JOB 그룹</th>
             <th>작업명</th>
             <th style={{ width: 140 }}>작업종류</th>
-            <th style={{ width: 240 }}>언어</th>
+            <th style={{ width: 240 }}>언어 (출발어 → 도착어)</th>
             <th style={{ width: 150 }}>담당PM</th>
             <th style={{ width: 150 }}>납기</th>
           </tr>
@@ -561,31 +594,80 @@ function GroupList(props: { jobs: readonly JobRow[] }) {
         <tbody>
           {keys.length === 0 ? (
             <tr>
-              <td colSpan={6} className={ui.hint}>이 프로젝트에는 작업이 없습니다.</td>
+              <td colSpan={7} className={ui.hint}>이 프로젝트에는 작업이 없습니다.</td>
             </tr>
           ) : (
-            keys.map((key) => {
+            keys.flatMap((key) => {
               const list = groups.get(key) ?? []
-              const src = uniq(list.map((j) => j.jobSlang))
-              const tgt = uniq(list.map((j) => j.jobElang))
-              const due = list
-                .map((j) => (j.jobEday ? `${toDateInputValue(j.jobEday)} ${(j.jobEdayTime ?? '').slice(0, 5)}`.trim() : ''))
-                .filter(Boolean)
-                .sort()
-                .pop()
-              return (
-                <tr key={key}>
-                  <td className={ui.cellMono}>{key}</td>
+              const drafts = list.map((j) => draft(j))
+              const ids = list.map((j) => j.id)
+              const on = ids.filter((id) => checked.has(id)).length
+              const full = on === ids.length && ids.length > 0
+              const src = uniq(drafts.map((d) => d.jobSlang))
+              const tgt = uniq(drafts.map((d) => d.jobElang))
+              const last = drafts.map(due).filter(Boolean).sort().pop()
+              const expanded = open.has(key)
+              const head = (
+                <tr key={key} className={on === 0 ? ui.hoOff : ''}>
                   <td>
-                    {list[0]?.jobName ?? list[0]?.jobCode ?? '-'}
-                    {list.length > 1 ? <span className={ui.hint}> 외 {list.length - 1}건</span> : null}
+                    <input
+                      type="checkbox"
+                      aria-label={`그룹 ${key} 선택`}
+                      checked={full}
+                      ref={(el) => {
+                        if (el) el.indeterminate = on > 0 && !full
+                      }}
+                      onChange={() => setMany(ids, !full)}
+                    />
                   </td>
-                  <td>{uniq(list.map((j) => workName(j.workCode))).join(', ') || '-'}</td>
+                  <td className={ui.cellMono}>
+                    <button
+                      type="button"
+                      className={ui.hoExpand}
+                      aria-expanded={expanded}
+                      title={expanded ? '접기' : '이 그룹의 작업 펼치기'}
+                      onClick={() => toggleOpen(key)}
+                    >
+                      {expanded ? '−' : '+'}
+                    </button>
+                    {key}
+                  </td>
+                  <td>
+                    {drafts[0]?.jobName || list[0]?.jobCode || '-'}
+                    {list.length > 1 ? <span className={ui.hint}> 외 {list.length - 1}건</span> : null}
+                    {on > 0 && !full ? <span className={ui.hint}> · {on}건 고름</span> : null}
+                  </td>
+                  <td>{uniq(drafts.map((d) => workName(d.workCode))).join(', ') || '-'}</td>
                   <td>{src.length || tgt.length ? `${src.join(', ') || '-'} → ${tgt.join(', ') || '-'}` : '-'}</td>
-                  <td>{uniq(list.map((j) => j.jobPmName)).join(', ') || '-'}</td>
-                  <td>{due ?? '-'}</td>
+                  <td>{uniq(drafts.map((d) => d.pmName)).join(', ') || '-'}</td>
+                  <td>{last ?? '-'}</td>
                 </tr>
               )
+              if (!expanded) return [head]
+              return [
+                head,
+                ...list.map((job, i) => {
+                  const d = drafts[i]!
+                  const sel = checked.has(job.id)
+                  return (
+                    <tr key={`${key}:${job.id}`} className={`${ui.hoChild} ${sel ? '' : ui.hoOff}`}>
+                      <td>
+                        <input type="checkbox" aria-label={`${job.jobCode} 선택`} checked={sel} onChange={() => setMany([job.id], !sel)} />
+                      </td>
+                      <td />
+                      <td style={{ paddingLeft: 22 }}>
+                        <span className={ui.hoBranch}>└</span>
+                        {d.jobName || '-'}
+                        <div className={ui.hint} style={{ marginTop: 2, paddingLeft: 16 }}>{job.jobCode}</div>
+                      </td>
+                      <td>{workName(d.workCode) || '-'}</td>
+                      <td>{isLinguistic(job.jobType) ? `${d.jobSlang || '-'} → ${d.jobElang || '-'}` : '-'}</td>
+                      <td>{d.pmName || '-'}</td>
+                      <td>{due(d) || '-'}</td>
+                    </tr>
+                  )
+                }),
+              ]
             })
           )}
         </tbody>
