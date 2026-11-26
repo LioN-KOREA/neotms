@@ -29,6 +29,7 @@ import ui from '@/shared/ui/ui.module.css'
 import { toDateInputValue } from '@/shared/utils/format'
 import { PmPickCell } from '@/features/jobs/TargetLanguages'
 import { DateTextInput } from '@/shared/ui/DateField'
+import { CcFavorites } from './CcFavorites'
 
 type Draft = {
   jobName: string
@@ -490,6 +491,7 @@ function HandoverInfo(props: {
         <label className={ui.label} htmlFor="ho-cc">메일 참조</label>
         <EmailChips id="ho-cc" value={cc} onChange={setCc} disabled={busy} placeholder="이름 <주소> 또는 주소 — 쉼표·Enter 로 구분" />
         {ccBad ? <p className={`${ui.hint} ${ui.hintWarn}`}>메일 주소가 아닌 항목(빨간색)이 있습니다. 고치거나 지워 주세요.</p> : null}
+        <CcFavorites value={cc} onChange={setCc} disabled={busy} />
         <p className={ui.hint}>받는 사람은 고른 작업의 담당PM 이메일로 정해집니다. PM 이 여럿이어도 메일은 한 통이고, 모든 PM 이 함께 받습니다.</p>
       </div>
 

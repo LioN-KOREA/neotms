@@ -35,3 +35,14 @@ export function parseEmailList(text: string): EmailChip[] {
   return parts.map(parseEmailChip).filter((c): c is EmailChip => c !== null)
 }
 
+
+/**
+ * 자주쓰는 참조 메일 단추의 기본 이름 (팀장님 2026-11-26): `이름 <주소>` 면 그 이름, 주소만이면 @ 앞 글자,
+ * 여럿이면 첫 사람 뒤에 ' 외 n명'.
+ */
+export function ccFavName(chips: readonly Pick<EmailChip, 'name' | 'email'>[]): string {
+  const first = chips[0]
+  if (!first) return ''
+  const head = first.name?.trim() || first.email.split('@')[0] || first.email
+  return chips.length > 1 ? `${head} 외 ${String(chips.length - 1)}명` : head
+}

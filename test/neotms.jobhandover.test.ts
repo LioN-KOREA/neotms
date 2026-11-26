@@ -533,3 +533,16 @@ describe("handover group list: select groups and expand (2026-11-26)", () => {
     expect(f).toContain("className={`${ui.hoChild} ${sel ? '' : ui.hoOff}`}");
   });
 });
+
+describe("자주쓰는 참조 메일 (2026-11-26)", () => {
+  it("default button names", async () => {
+    const { ccFavName } = await import("../frontend/src/shared/ui/emailChipParse");
+    expect(ccFavName([{ name: "홍길동", email: "hong@x.com" }])).toBe("홍길동");
+    expect(ccFavName([{ name: null, email: "work@lion-korea.com" }])).toBe("work");
+    expect(ccFavName([{ name: null, email: "a@x.com" }, { name: "B", email: "b@x.com" }, { name: null, email: "c@x.com" }])).toBe("a 외 2명");
+  });
+  it("sits under the cc field and is personal (prefs.view.ccFav)", () => {
+    expect(read("frontend/src/features/projects/JobHandoverFlow.tsx")).toContain("<CcFavorites value={cc} onChange={setCc} disabled={busy} />");
+    expect(read("frontend/src/apis/pmsheet.api.ts")).toContain("await writePmPref(undefined, 'view', { ...(fresh.view ?? {}), ccFav })");
+  });
+});

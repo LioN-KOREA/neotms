@@ -105,6 +105,18 @@ export interface PmViewPref {
   zoom?: number
   /** 작업 등록 창의 언어 즐겨찾기 (나만 적용). */
   langFav?: LangFav
+  /** 인계정보 입력의 자주쓰는 참조 메일 (나만 적용, 팀장님 2026-11-26). */
+  ccFav?: CcFavorite[]
+}
+
+export interface CcFavorite {
+  id: string
+  /** 우클릭으로 바꾼 이름. 없으면 `auto`. */
+  label?: string | null
+  /** 만들 때의 이름 — 이름 / @ 앞 글자, 여럿이면 '… 외 n명'. */
+  auto: string
+  /** `이름 <주소>` 또는 `주소`. */
+  mails: string[]
 }
 
 /**
@@ -367,6 +379,21 @@ export function useSaveLangFav() {
     },
     onMutate: (langFav) => {
       qc.setQueryData<PmPrefs>(myPrefsKey, (old) => ({ ...(old ?? {}), view: { ...(old?.view ?? {}), langFav } }))
+    },
+    onSettled: () => void qc.invalidateQueries({ queryKey: pmKeys.all }),
+  })
+}
+
+/** 자주쓰는 참조 메일 저장 — 언어 즐겨찾기와 같은 방식(최신 `view` 를 다시 읽고 그 안의 이 값만 바꾼다). */
+export function useSaveCcFav() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (ccFav: CcFavorite[]) => {
+      const fresh = await fetchMyPmPrefs()
+      await writePmPref(undefined, 'view', { ...(fresh.view ?? {}), ccFav })
+    },
+    onMutate: (ccFav) => {
+      qc.setQueryData<PmPrefs>(myPrefsKey, (old) => ({ ...(old ?? {}), view: { ...(old?.view ?? {}), ccFav } }))
     },
     onSettled: () => void qc.invalidateQueries({ queryKey: pmKeys.all }),
   })

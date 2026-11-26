@@ -43,7 +43,8 @@ export function EmailChips(props: {
           className={`${ui.mailChip} ${c.valid ? '' : ui.mailChipBad}`}
           title={c.valid ? (c.name ? `${c.name} <${c.email}>` : c.email) : `메일 주소가 아닙니다: ${c.raw}`}
         >
-          {c.valid ? (c.name ?? c.email) : c.raw}
+          {/* 이름 <주소> 로, 이름이 없으면 주소만 (팀장님 2026-11-26). */}
+          {c.valid ? (c.name ? `${c.name} <${c.email}>` : c.email) : c.raw}
           {!props.disabled ? (
             <button
               type="button"
