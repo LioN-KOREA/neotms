@@ -559,7 +559,7 @@ describe("sheet: PO window over the sheet, IME first key, free-row PRCODE link (
   });
   it("Korean IME: key 229 opens an empty editor before composition starts", () => {
     const c = read("frontend/src/features/pmsheet/sheetCells.tsx");
-    expect(c).toContain("keyCode === 229 && !ctrl && !alt && !cell.choices");
+    expect(c).not.toContain("keyCode === 229 && !ctrl"); expect(read("frontend/src/features/pmsheet/imeTyping.ts")).toContain("root.addEventListener('compositionstart', onStart, true)");
   });
   it("free rows: PRCODE text links to the project found by that code", () => {
     const s = read("frontend/src/features/pmsheet/PmSheet.tsx");
@@ -625,5 +625,42 @@ describe("sheet: copy button on path cells (2026-11-26)", () => {
     const s = read("frontend/src/features/pmsheet/PmSheet.tsx");
     expect(s).toContain("onCopyText: column.key === 'path' && v.shown.trim() ? () => copyText(v.shown.trim()) : undefined");
     expect(s).toContain("void navigator.clipboard.writeText(text)");
+  });
+});
+
+describe("sheet: state cell cycles on click, caret opens the list; editor closes back to the grid (2026-11-26)", () => {
+  const read = (rel: string) => require("fs").readFileSync(require("path").join(__dirname, "..", rel), "utf8") as string;
+  it("cycle order skips the two 별도 관리 states and wraps to the first", () => {
+    const s = read("frontend/src/features/pmsheet/PmSheet.tsx");
+    expect(s).toContain("!d.hidden && !d.name.startsWith('별도 관리')");
+    expect(s).toContain("(at + dir + order.length) % order.length");
+    expect(s).toContain("onPrev: () => cycleState(row, -1), onNext: () => cycleState(row, 1)");
+    expect(s).toContain("onCaret: column.key === 'pmState' && editable");
+    const c = read("frontend/src/features/pmsheet/sheetCells.tsx");
+    expect(c).toContain("className={css.caretBtn}");
+  });
+  it("translator editor gives focus back to the grid so Ctrl+Z works", () => {
+    const c = read("frontend/src/features/pmsheet/sheetCells.tsx");
+    expect(c).toContain("document.querySelector<HTMLInputElement>('.rg-hidden-element')?.focus({ preventScroll: true })");
+  });
+  it("unmerge is undoable", () => {
+    const s = read("frontend/src/features/pmsheet/PmSheet.tsx");
+    expect(s).toContain("label: '통합 해제'");
+  });
+});
+
+describe("sheet: multi-cell Delete clears every selected cell (2026-11-26)", () => {
+  it("Delete over a range goes through one applyValues/writeFree", () => {
+    const s = require("fs").readFileSync(require("path").join(__dirname, "..", "frontend/src/features/pmsheet/PmSheet.tsx"), "utf8") as string;
+    expect(s).toContain("if (clearSelection()) {");
+    expect(s).toContain("if (list.length + free.length <= 1) return false");
+  });
+});
+
+describe("sheet: < > on translation/review arrival dates (2026-11-26)", () => {
+  it("trEday/rvEday get step buttons, empty cells start from today", () => {
+    const s = require("fs").readFileSync(require("path").join(__dirname, "..", "frontend/src/features/pmsheet/PmSheet.tsx"), "utf8") as string;
+    expect(s).toContain("(column.key === 'trEday' || column.key === 'rvEday') && editable");
+    expect(s).toContain("shiftYmd(cur || emptyBase || '', days)");
   });
 });

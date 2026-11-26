@@ -112,6 +112,7 @@ import {
 } from './freeRows'
 import css from './PmSheet.module.css'
 import { SheetPoModal } from './SheetPoModal'
+import { useImeTyping } from './imeTyping'
 import { fetchProjects } from '@/apis/neotms.api'
 
 /** 칸 글자 기본 크기(px) — 글자 크기 `− 13 +` 의 기준. */
@@ -587,6 +588,20 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
     )
   }
 
+  /**
+   * 진행 상태 ‹ › — 목록 순서대로 이전·다음 상태 (팀장님 2026-11-26). 별도 관리 두 상태는 건너뛰고,
+   * 끝에서 › 는 처음(인계 수령)으로, 처음에서 ‹ 는 끝으로. 실행취소는 보통 값 수정과 같다.
+   */
+  const cycleState = (row: PmSheetRow, dir: 1 | -1) => {
+    const column = columnOf('pmState')
+    if (!column) return
+    const order = stateDefs.filter((d) => !d.hidden && !d.name.startsWith('별도 관리')).map((d) => d.name)
+    if (order.length === 0) return
+    const at = order.indexOf(currentRaw(row, column))
+    const next = order[at < 0 ? (dir === 1 ? 0 : order.length - 1) : (at + dir + order.length) % order.length]!
+    void applyValues([{ row, column, text: next }])
+  }
+
   const [sheetPo, setSheetPo] = useState<{ action: PoAction; projectId: string } | null>(null)
   const openPoFor = (row: PmSheetRow, group: PoGroup) => {
     const action = personAction(row, group)
@@ -1012,8 +1027,68 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
     }
   }
 
+  /* 칸에서 바로 한글 치기 — imeTyping.ts 머리말 (팀장님 2026-11-26). */
+  const imeActive = useImeTyping(gridBox, {
+    canStart: () => {
+      if (!cellAt) return false
+      if (isFreeRowId(cellAt.rowId)) return true
+      const row = rowById.get(cellAt.rowId)
+      const column = columnOf(cellAt.colKey)
+      if (!row || !column || column.key === 'pmState') return false
+      return APPEND_KEYS.has(column.key) || isEditable(column, row)
+    },
+    commit: (text) => {
+      if (!cellAt) return
+      if (isFreeRowId(cellAt.rowId)) {
+        writeFree([{ pos: freePosOf(cellAt.rowId), colKey: cellAt.colKey, text }])
+        return
+      }
+      const row = rowById.get(cellAt.rowId)
+      const column = columnOf(cellAt.colKey)
+      if (row && column) void applyValues([{ row, column, text }])
+    },
+  })
+
+  /** 고른 범위의 칸을 모두 지운다 — 한 번의 실행취소로 돌아간다 (팀장님 2026-11-26: 첫 칸만 지워지던 문제). */
+  const clearSelection = (): boolean => {
+    const list: { row: PmSheetRow; column: SheetColumn; text: string }[] = []
+    const free: { pos: number; colKey: string; text: string }[] = []
+    const seen = new Set<string>()
+    for (const range of selection.ranges) {
+      for (const r of range.rows) {
+        const rowId = String(r.rowId)
+        for (const c of range.columns) {
+          const colKey = String(c.columnId)
+          if (colKey === RH || seen.has(`${rowId}|${colKey}`)) continue
+          seen.add(`${rowId}|${colKey}`)
+          if (isFreeRowId(rowId)) {
+            free.push({ pos: freePosOf(rowId), colKey, text: '' })
+            continue
+          }
+          const row = rowById.get(rowId)
+          const column = columnOf(colKey)
+          if (!row || !column) continue
+          if (column.spec.source === 'readonly' && !APPEND_KEYS.has(column.key)) continue
+          list.push({ row, column, text: '' })
+        }
+      }
+    }
+    if (list.length + free.length <= 1) return false
+    if (list.length > 0) void applyValues(list)
+    if (free.length > 0) writeFree(free)
+    return true
+  }
+
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
     const t = e.target as HTMLElement
+    if (imeActive.current) return
+    if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.altKey && t.classList.contains('rg-hidden-element')) {
+      if (clearSelection()) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+    }
     // ReactGrid 는 칸을 고를 때 포커스를 숨은 <input class="rg-hidden-element"> 에 둔다. 그 입력칸까지
     // '글자 입력 중' 으로 보고 건너뛰어서 Ctrl+Z 같은 단축키가 시트에서 먹지 않았다 (2026-11-25).
     // 진짜로 글자를 고치는 칸(칸 편집기·대화상자 입력칸)에서만 건너뛴다 — 거기서 Ctrl+Z 는 글자 되돌리기다.
@@ -1316,6 +1391,7 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           nonEditable: !editable,
           choices: column.key === 'pmState' ? stateNames : undefined,
           // 진행 상태·업무는 한 번 눌러 바로 목록을 연다 (팀장님 2026-11-25, 업무 2026-11-26). 업무를 더블클릭하면 직접 입력.
+          onCaret: column.key === 'pmState' && editable ? (x: number, y: number) => setStateMenu({ jobId: row.jobId, x, y }) : undefined,
           onQuickPick:
             column.key === 'pmState' && editable
               ? (x: number, y: number) => setStateMenu({ jobId: row.jobId, x, y })
@@ -1347,7 +1423,12 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           step:
             column.key === 'jobEday' && editable && v.raw
               ? { title: '납품일', onPrev: () => void shiftDay(row, entry.merged, column, -1), onNext: () => void shiftDay(row, entry.merged, column, 1) }
-              : undefined,
+              : column.key === 'pmState' && editable
+                ? { title: '진행 상태', prevTitle: '이전 상태로', nextTitle: '다음 상태로', onPrev: () => cycleState(row, -1), onNext: () => cycleState(row, 1) }
+              : (column.key === 'trEday' || column.key === 'rvEday') && editable
+                ? // 번역본·감수본 도착일도 ‹ › (팀장님 2026-11-26). 비어 있으면 오늘을 기준으로 하루 앞·뒤.
+                  { title: column.label, onPrev: () => void shiftDay(row, [], column, -1, today), onNext: () => void shiftDay(row, [], column, 1, today) }
+                : undefined,
           stepShown: focus?.jobId === row.jobId && focus.colKey === column.key,
         }
       }),
@@ -1463,16 +1544,30 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   const unmergeHeads = async (headIds: string[]) => {
     const heads = headIds.filter((id) => sheet.rows.some((r) => r.mergedInto === id))
     if (heads.length === 0) return onError('통합된 행을 골라 주세요.')
-    try {
-      let order = slotsOf(layout.posOf, freeRows)
-      for (const head of heads) {
-        const members = sheet.rows.filter((r) => r.mergedInto === head)
-        for (const r of members) await patchPmRow({ staffId: ownerId, jobId: r.jobId, mergedInto: null })
-        order = placeAfter(order, head, members.map((r) => r.jobId))
-      }
-      await saveSlots(order, freeRows)
+    const before = slotsOf(layout.posOf, freeRows)
+    const baseFree = freeRows
+    const groups = heads.map((head) => ({ head, members: sheet.rows.filter((r) => r.mergedInto === head).map((r) => r.jobId) }))
+    let order = before
+    for (const g of groups) order = placeAfter(order, g.head, g.members)
+    const after = order
+    const unmerge = async () => {
+      for (const g of groups) for (const id of g.members) await patchPmRow({ staffId: ownerId, jobId: id, mergedInto: null })
+      await saveSlots(after, baseFree, true)
       refresh()
+    }
+    try {
+      await unmerge()
       onNotice('통합을 풀었습니다. 풀린 행은 통합 행 바로 아래에 들어갔습니다.')
+      // 통합 해제도 실행취소 (팀장님 2026-11-26) — 다시 통합하고 자리를 풀기 전으로.
+      pushHistory({
+        label: '통합 해제',
+        undo: async () => {
+          for (const g of groups) for (const id of g.members) await patchPmRow({ staffId: ownerId, jobId: id, mergedInto: g.head })
+          await saveSlots(before, baseFree, true)
+          refresh()
+        },
+        redo: unmerge,
+      })
     } catch (err) {
       onError(messageOf(err))
     }
@@ -1559,8 +1654,9 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
   }
 
   /** 납품일 ‹ › — 실제 작업 납기를 하루씩 (통합 행이면 합쳐진 작업도 같이 — 통합은 납기가 같아야 하므로). */
-  const shiftDay = async (row: PmSheetRow, merged: PmSheetRow[], column: SheetColumn, days: number) => {
-    const next = shiftYmd(currentRaw(row, column), days)
+  const shiftDay = async (row: PmSheetRow, merged: PmSheetRow[], column: SheetColumn, days: number, emptyBase?: string) => {
+    const cur = currentRaw(row, column)
+    const next = shiftYmd(cur || emptyBase || '', days)
     if (!next) return
     await applyValues([row, ...merged].map((r) => ({ row: r, column, text: next })))
   }

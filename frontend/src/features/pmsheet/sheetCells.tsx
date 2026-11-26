@@ -51,12 +51,14 @@ export interface SheetCell extends Cell {
   wrap?: 'wrap' | 'clip' | null
   /** 한 번 클릭으로 목록 열기(진행 상태). 칸의 화면 좌표를 넘긴다. */
   onQuickPick?: (x: number, y: number) => void
+  /** 진행 상태: 오른쪽 ▾ 를 누르면 목록. */
+  onCaret?: (x: number, y: number) => void
   /** 우클릭 메뉴 (이 열로 정렬 · 이 값으로 필터). */
   onMenu?: (x: number, y: number) => void
   /** 글자 앞의 작은 단추 (통합 행의 'M'). */
   badge?: { text: string; title: string; onClick?: () => void }
   /** 마우스를 올리면 보이는 ‹ › (납품일 하루씩). */
-  step?: { onPrev: () => void; onNext: () => void; title: string }
+  step?: { onPrev: () => void; onNext: () => void; title: string; prevTitle?: string; nextTitle?: string }
   /** 고른 칸이면 ‹ › 를 늘 보인다 — 마우스를 옮기는 사이에 사라지지 않게 (팀장님 2026-11-26). */
   stepShown?: boolean
   /** 번역가·감수자 칸: 더블클릭하면 찾기 입력기 (팀장님 2026-11-26). */
@@ -73,6 +75,18 @@ export interface SheetCell extends Cell {
 let quickTimer = 0
 
 let datalistSeq = 0
+
+/**
+ * 입력기를 닫은 뒤 시트(숨은 칸)로 포커스를 돌려 놓는다 (2026-11-26). 번역가 입력기를 닫으면 포커스가
+ * 페이지(body)로 빠져 Ctrl+Z 같은 시트 단축키가 먹지 않았다.
+ */
+function refocusGrid() {
+  window.requestAnimationFrame(() => {
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    document.querySelector<HTMLInputElement>('.rg-hidden-element')?.focus({ preventScroll: true })
+  })
+}
 
 export class SheetCellTemplate implements CellTemplate<SheetCell> {
   getCompatibleCell(uncertain: Uncertain<SheetCell>): Compatible<SheetCell> {
@@ -98,11 +112,6 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
     capsLock?: boolean,
   ): { cell: Compatible<SheetCell>; enableEditMode: boolean } {
     if (cell.nonEditable) return { cell, enableEditMode: false }
-    if (keyCode === 229 && !ctrl && !alt && !cell.choices) {
-      // 한글 입력(IME) 첫 키 (팀장님 2026-11-26) — 조합이 시작되기 전에 빈 입력칸을 열어 둔다. 그래야 조합이
-      // 숨은 칸이 아니라 입력칸에서 일어나 'ㄱ' 부터 글자가 보인다(전에는 한 글자가 끝나야 보였다).
-      return { cell: this.getCompatibleCell({ ...cell, text: '', raw: '' }), enableEditMode: true }
-    }
     if (!ctrl && !alt && isAlphaNumericKey(keyCode) && !(shift && keyCode === keyCodes.SPACE) && !cell.choices) {
       // 글자를 치면 그 글자로 새로 쓰기 시작 — 엑셀과 같다.
       const char = getCharFromKey(key ?? '', shift, capsLock)
@@ -191,7 +200,7 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
             <button
               type="button"
               className={`${css.stepBtn} ${cell.stepShown ? css.stepOn : ''}`}
-              title={`${cell.step.title} 하루 앞으로`}
+              title={cell.step.prevTitle ?? `${cell.step.title} 하루 앞으로`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation()
@@ -221,7 +230,7 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
             <button
               type="button"
               className={`${css.stepBtn} ${css.stepNext} ${cell.stepShown ? css.stepOn : ''}`}
-              title={`${cell.step.title} 하루 뒤로`}
+              title={cell.step.nextTitle ?? `${cell.step.title} 하루 뒤로`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation()
@@ -262,7 +271,24 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
               {cell.openLabel ?? '변경'}
             </button>
           ) : null}
-          {cell.choices && !cell.nonEditable ? <span className={css.caret}>▾</span> : null}
+          {cell.onCaret && !cell.nonEditable ? (
+            <button
+              type="button"
+              className={css.caretBtn}
+              title="목록에서 고르기"
+              aria-label="진행 상태 목록"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                const r = e.currentTarget.closest(`.${css.cellInner}`)?.getBoundingClientRect() ?? e.currentTarget.getBoundingClientRect()
+                cell.onCaret?.(r.left, r.bottom)
+              }}
+            >
+              ▾
+            </button>
+          ) : cell.choices && !cell.nonEditable ? (
+            <span className={css.caret}>▾</span>
+          ) : null}
           {cell.note ? <span className={css.noteMark} /> : null}
         </div>
       )
@@ -275,8 +301,14 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
           initial={initial}
           jobId={cell.person.jobId}
           which={cell.person.which}
-          onCommit={(name, id) => onCellChanged(this.getCompatibleCell({ ...cell, text: name, raw: name, pickedId: id }), true)}
-          onCancel={() => onCellChanged(cell, false)}
+          onCommit={(name, id) => {
+            onCellChanged(this.getCompatibleCell({ ...cell, text: name, raw: name, pickedId: id }), true)
+            refocusGrid()
+          }}
+          onCancel={() => {
+            onCellChanged(cell, false)
+            refocusGrid()
+          }}
         />
       )
     }
