@@ -286,7 +286,7 @@ export class SheetCellTemplate implements CellTemplate<SheetCell> {
             >
               ▾
             </button>
-          ) : cell.choices && !cell.nonEditable ? (
+          ) : cell.choices && !cell.nonEditable && !cell.step ? (
             <span className={css.caret}>▾</span>
           ) : null}
           {cell.note ? <span className={css.noteMark} /> : null}

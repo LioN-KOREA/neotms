@@ -1110,7 +1110,30 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
 
   useEffect(() => {
     latest.current = { applyValues, writeFree, rowById, columnOf }
+    keyRunner.current = (e: KeyboardEvent) => {
+      const combo = comboOf(e)
+      if (!combo) return
+      const action = Object.entries(shortcuts).find(([, c]) => c === combo)?.[0]
+      if (!action) return
+      e.preventDefault()
+      runAction(action)
+    }
   })
+  /*
+   * 우클릭 메뉴·목록을 누르고 나면 그 메뉴가 사라지며 포커스가 페이지(body)로 빠져, Ctrl+Z 같은 시트
+   * 단축키가 먹지 않았다 (2026-11-26 점검에서 발견: 행 추가 뒤 Ctrl+Z). 포커스가 아무 데도 없을 때만
+   * 시트 단축키로 받는다 — 입력칸·다른 창에 있을 때는 건드리지 않는다.
+   */
+  const keyRunner = useRef<((e: KeyboardEvent) => void) | null>(null)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (document.activeElement && document.activeElement !== document.body) return
+      if (document.querySelector('[role="dialog"]')) return
+      keyRunner.current?.(e)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const onCellsChanged = (changes: CellChange<GridCell>[]) => {
     const list: { row: PmSheetRow; column: SheetColumn; text: string; tid?: string | null }[] = []
@@ -1391,7 +1414,6 @@ export function PmSheet({ sheet, ownerId, onNotice, onError, toolbarStart, botto
           nonEditable: !editable,
           choices: column.key === 'pmState' ? stateNames : undefined,
           // 진행 상태·업무는 한 번 눌러 바로 목록을 연다 (팀장님 2026-11-25, 업무 2026-11-26). 업무를 더블클릭하면 직접 입력.
-          onCaret: column.key === 'pmState' && editable ? (x: number, y: number) => setStateMenu({ jobId: row.jobId, x, y }) : undefined,
           onQuickPick:
             column.key === 'pmState' && editable
               ? (x: number, y: number) => setStateMenu({ jobId: row.jobId, x, y })

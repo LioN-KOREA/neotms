@@ -635,7 +635,8 @@ describe("sheet: state cell cycles on click, caret opens the list; editor closes
     expect(s).toContain("!d.hidden && !d.name.startsWith('별도 관리')");
     expect(s).toContain("(at + dir + order.length) % order.length");
     expect(s).toContain("onPrev: () => cycleState(row, -1), onNext: () => cycleState(row, 1)");
-    expect(s).toContain("onCaret: column.key === 'pmState' && editable");
+    expect(s).not.toContain("onCaret: column.key === 'pmState'");
+    expect(s).toContain("window.addEventListener('keydown', onKey)");
     const c = read("frontend/src/features/pmsheet/sheetCells.tsx");
     expect(c).toContain("className={css.caretBtn}");
   });
